@@ -696,15 +696,17 @@ class TrayApp:
             self.events.put({"event": "log", "message": f"复制失败: {e}"})
 
     def switch_preset(self, preset_name: str) -> None:
-        """切换文字优化 preset"""
+        """切换文字优化 preset（热切换，不重启后端）"""
         config = load_runtime_config(self.config_path)
         config["refine_preset"] = preset_name
         save_runtime_config(self.config_path, config)
 
-        # 重启后端使配置生效
-        if self.state.backend_running:
-            self.restart_backend()
-            self.events.put({"event": "log", "message": f"已切换到 {preset_name} preset，后端已重启"})
+        # 热切换：只更新配置文件，后端下次录音时会读取新配置
+        # 不需要重启后端，避免重新加载模型
+        self.events.put({"event": "log", "message": f"已切换到 {preset_name} preset（热切换）"})
+
+        # 更新托盘菜单以反映新的选中状态
+        self._update_tray_menu()
 
 
     def _read_stream(self, stream, is_stderr: bool) -> None:  # noqa: ANN001
@@ -1137,11 +1139,15 @@ class TrayApp:
         presets = ["default", "formal", "meeting", "summary", "technical"]
         current_preset = config.get("refine_preset", "default")
 
+        # Create radio group for presets
+        radio_group = None
         for preset in presets:
-            preset_item = Gtk.RadioMenuItem(label=preset)
+            preset_item = Gtk.RadioMenuItem(group=radio_group, label=preset)
+            if radio_group is None:
+                radio_group = preset_item
             if preset == current_preset:
                 preset_item.set_active(True)
-            preset_item.connect("activate", lambda item, p=preset: self.root.after(0, lambda: self.switch_preset(p)))
+            preset_item.connect("activate", lambda item, p=preset: self.root.after(0, lambda: self.switch_preset(p)) if item.get_active() else None)
             preset_submenu.append(preset_item)
 
         preset_menu_item.set_submenu(preset_submenu)
