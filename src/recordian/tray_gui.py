@@ -202,7 +202,7 @@ void main() {
         float baseSpeed = 0.1 + fi * 0.03;  // Even slower base speed
 
         // Volume increases speed moderately
-        float volumeSpeed = vol * 3.0;  // Reduced from 8.0 to 3.0 for gentler acceleration
+        float volumeSpeed = vol * 1.8;  // Further reduced for even gentler acceleration
         float totalSpeed = baseSpeed + volumeSpeed;
 
         float t = u_time * totalSpeed;
