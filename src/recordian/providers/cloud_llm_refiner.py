@@ -4,7 +4,12 @@ from pathlib import Path
 
 
 class CloudLLMRefiner:
-    """云端 LLM 文本精炼器：通过 API 调用外部 LLM 服务"""
+    """云端 LLM 文本精炼器：通过 API 调用外部 LLM 服务
+
+    支持两种 API 格式：
+    - Anthropic API (MiniMax 等)
+    - OpenAI API (Groq, DeepSeek 等)
+    """
 
     def __init__(
         self,
@@ -15,6 +20,7 @@ class CloudLLMRefiner:
         max_tokens: int = 512,
         temperature: float = 0.1,
         prompt_template: str | None = None,
+        api_format: str = "auto",  # "auto", "anthropic", "openai"
     ) -> None:
         self.api_base = api_base.rstrip("/")
         self.api_key = api_key
@@ -22,6 +28,15 @@ class CloudLLMRefiner:
         self.max_tokens = max_tokens
         self.temperature = temperature
         self.prompt_template = prompt_template
+
+        # 自动检测 API 格式
+        if api_format == "auto":
+            if "groq.com" in api_base.lower() or "openai.com" in api_base.lower() or "deepseek.com" in api_base.lower():
+                self.api_format = "openai"
+            else:
+                self.api_format = "anthropic"
+        else:
+            self.api_format = api_format
 
     @property
     def provider_name(self) -> str:
@@ -39,6 +54,13 @@ class CloudLLMRefiner:
         if not text.strip():
             return ""
 
+        if self.api_format == "openai":
+            return self._refine_openai(text)
+        else:
+            return self._refine_anthropic(text)
+
+    def _refine_anthropic(self, text: str) -> str:
+        """使用 Anthropic API 格式"""
         prompt = self._build_prompt(text)
 
         try:
@@ -87,6 +109,56 @@ class CloudLLMRefiner:
             for item in content:
                 if isinstance(item, dict) and item.get("type") == "text":
                     return item.get("text", "").strip()
+
+        return ""
+
+    def _refine_openai(self, text: str) -> str:
+        """使用 OpenAI API 格式（Groq, DeepSeek 等）"""
+        prompt = self._build_prompt(text)
+
+        try:
+            import requests
+        except ModuleNotFoundError as exc:
+            raise RuntimeError(
+                "requests 未安装。请执行: pip install requests"
+            ) from exc
+
+        # 调用 OpenAI-compatible API
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {self.api_key}",
+        }
+
+        payload = {
+            "model": self.model,
+            "max_tokens": self.max_tokens,
+            "temperature": self.temperature,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": prompt,
+                }
+            ],
+        }
+
+        response = requests.post(
+            f"{self.api_base}/chat/completions",
+            headers=headers,
+            json=payload,
+            timeout=30,
+        )
+
+        if response.status_code != 200:
+            raise RuntimeError(
+                f"API 调用失败: {response.status_code} {response.text}"
+            )
+
+        result = response.json()
+        choices = result.get("choices", [])
+
+        if choices and len(choices) > 0:
+            message = choices[0].get("message", {})
+            return message.get("content", "").strip()
 
         return ""
 
