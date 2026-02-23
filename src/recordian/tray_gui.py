@@ -198,12 +198,14 @@ void main() {
     for(int i = 0; i < 4; i++) {
         float fi = float(i);
 
-        // Base time always moves forward
-        float baseTime = u_time * (0.8 + fi * 0.2);
+        // Very slow base speed when no volume
+        float baseSpeed = 0.1 + fi * 0.03;  // Even slower base speed
 
-        // Volume adds extra rotation speed (always positive, never subtracts)
-        float speedBoost = vol * 5.0;  // Linear response, stronger multiplier
-        float t = baseTime + u_time * speedBoost;
+        // Volume increases speed moderately
+        float volumeSpeed = vol * 3.0;  // Reduced from 8.0 to 3.0 for gentler acceleration
+        float totalSpeed = baseSpeed + volumeSpeed;
+
+        float t = u_time * totalSpeed;
 
         // Calculate irregular motion trajectory - FIXED amplitude
         vec2 offset = vec2(
@@ -438,8 +440,8 @@ void main() {
                 elif cmd == "level":
                     level = max(0.0, min(1.0, float(payload)))  # type: ignore[arg-type]
                     # Gate ambient noise: only pass through signal above threshold.
-                    # Increased threshold to filter out more background noise
-                    self.level_boost = max(0.0, level - 0.15)
+                    # Higher threshold to filter out more background noise
+                    self.level_boost = max(0.0, level - 0.25)  # Increased from 0.15 to 0.25
 
             target = self.target_amplitude
             if self.state == "recording":
