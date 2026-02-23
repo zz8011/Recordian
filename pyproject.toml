@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "recordian"
+version = "0.1.0"
+description = "Linux-first voice input engine with pass2 correction policy"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [
+  { name = "Recordian" }
+]
+dependencies = []
+
+[project.optional-dependencies]
+qwen-asr = ["qwen-asr>=0.0.6", "torch>=2.0.0"]
+hotkey = ["pynput>=1.7.7"]
+gui = ["pystray>=0.19.5", "pillow>=10.0.0", "pynput>=1.7.7", "pyglet>=2.0.10", "sounddevice>=0.4.6", "numpy>=1.20.0"]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+recordian = "recordian.cli:main"
+recordian-linux-dictate = "recordian.linux_dictate:main"
+recordian-hotkey-dictate = "recordian.hotkey_dictate:main"
+recordian-tray = "recordian.tray_gui:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

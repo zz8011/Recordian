@@ -1,0 +1,29 @@
+<svg width="200" height="200" viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <!-- 发光效果 -->
+    <filter id="successGlow">
+      <feGaussianBlur stdDeviation="4" result="coloredBlur"/>
+      <feMerge>
+        <feMergeNode in="coloredBlur"/>
+        <feMergeNode in="coloredBlur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <!-- 彩色椭圆层 - 绿色调 -->
+  <!-- 翠绿色椭圆 -->
+  <ellipse cx="85" cy="90" rx="56" ry="46" fill="rgba(50, 230, 150, 0.9)" filter="url(#successGlow)"/>
+
+  <!-- 青绿色椭圆 -->
+  <ellipse cx="115" cy="110" rx="53" ry="43" fill="rgba(80, 200, 180, 0.85)" filter="url(#successGlow)"/>
+
+  <!-- 浅绿色椭圆 -->
+  <ellipse cx="100" cy="75" rx="50" ry="40" fill="rgba(100, 255, 180, 0.9)" filter="url(#successGlow)"/>
+
+  <!-- 薄荷绿椭圆 -->
+  <ellipse cx="105" cy="125" rx="54" ry="44" fill="rgba(120, 220, 200, 0.85)" filter="url(#successGlow)"/>
+
+  <!-- 中心高光 -->
+  <ellipse cx="100" cy="100" rx="22" ry="16" fill="rgba(200, 255, 230, 0.7)" filter="url(#successGlow)"/>
+</svg>

@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.venv-*/
+dist/
+build/
+
+# 临时文件
+=*
+*.tmp
+*.log
+
+# 本地配置
+.claude/settings.local.json
+.recordian/hotkey.json
+
+# 测试缓存
+.pytest_cache/
+
+# 第三方
+third_party/
+
+# 本地模型文件（太大，不提交）
+models/
+
+# 归档文件
+archive/
+
+# 临时脚本
+recordian-launch.sh
+
+# Playwright
+.playwright-mcp/
+
+# IDE
+.vscode/
+.idea/
+
