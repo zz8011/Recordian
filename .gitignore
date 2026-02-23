@@ -13,8 +13,7 @@ build/
 *.log
 
 # 本地配置
-.claude/settings.local.json
-.recordian/hotkey.json
+~/.config/recordian/hotkey.json
 
 # 测试缓存
 .pytest_cache/
@@ -37,4 +36,11 @@ recordian-launch.sh
 # IDE
 .vscode/
 .idea/
+
+# Claude Code 开发文件
+.claude/
+CLAUDE.md
+
+# 参考图片
+reference-image.png
 
