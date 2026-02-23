@@ -198,8 +198,8 @@ void main() {
     for(int i = 0; i < 4; i++) {
         float fi = float(i);
 
-        // Very slow base speed when no volume
-        float baseSpeed = 0.1 + fi * 0.03;  // Even slower base speed
+        // Slow base speed when no volume
+        float baseSpeed = 0.15 + fi * 0.03;  // Slightly faster base speed
 
         // Volume increases speed moderately
         float volumeSpeed = vol * 1.8;  // Further reduced for even gentler acceleration
