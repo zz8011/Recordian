@@ -671,16 +671,17 @@ class TrayApp:
         self.start_backend()
 
     def toggle_quick_mode(self, enabled: bool) -> None:
-        """切换快速模式（跳过文字优化）"""
+        """切换快速模式（跳过文字优化）- 热切换"""
         config = load_runtime_config(self.config_path)
         config["enable_text_refine"] = not enabled  # enabled=True 表示快速模式，即不启用文字优化
         save_runtime_config(self.config_path, config)
 
-        # 重启后端使配置生效
-        if self.state.backend_running:
-            self.restart_backend()
-            mode_text = "快速模式" if enabled else "质量模式"
-            self.events.put({"event": "log", "message": f"已切换到{mode_text}，后端已重启"})
+        # 热切换：只更新配置文件，不重启后端
+        mode_text = "快速模式" if enabled else "质量模式"
+        self.events.put({"event": "log", "message": f"已切换到{mode_text}（热切换）"})
+
+        # 更新托盘菜单以反映新状态
+        self._update_tray_menu()
 
     def copy_last_text(self) -> None:
         """复制最后识别的文本到剪贴板"""
