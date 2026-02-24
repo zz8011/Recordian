@@ -18,31 +18,6 @@ from typing import Any
 DEFAULT_CONFIG_PATH = "~/.config/recordian/hotkey.json"
 
 
-def load_svg_as_image(svg_path: Path, size: tuple[int, int] = (64, 64)):
-    """Load SVG file and convert to PIL Image."""
-    try:
-        from PIL import Image
-        import cairosvg
-        import io
-
-        png_data = cairosvg.svg2png(url=str(svg_path), output_width=size[0], output_height=size[1])
-        return Image.open(io.BytesIO(png_data))
-    except ImportError:
-        # Fallback: use PIL to create a simple colored circle
-        from PIL import Image, ImageDraw
-        img = Image.new("RGBA", size, (0, 0, 0, 0))
-        draw = ImageDraw.Draw(img)
-        draw.ellipse((5, 5, size[0]-5, size[1]-5), fill=(110, 231, 183, 255))
-        return img
-    except Exception:
-        # Fallback to simple circle
-        from PIL import Image, ImageDraw
-        img = Image.new("RGBA", size, (0, 0, 0, 0))
-        draw = ImageDraw.Draw(img)
-        draw.ellipse((5, 5, size[0]-5, size[1]-5), fill=(110, 231, 183, 255))
-        return img
-
-
 def parse_backend_event_line(line: str) -> dict[str, object] | None:
     line = line.strip()
     if not line:
@@ -98,22 +73,22 @@ def get_logo_path(status: str) -> Path:
     assets_dir = project_root / "assets"
 
     logo_map = {
-        "idle": "logo.svg",
-        "recording": "logo-recording.svg",
-        "processing": "logo-recording.svg",
-        "error": "logo-error.svg",
-        "stopped": "logo.svg",
-        "starting": "logo-warming.svg",
-        "warming": "logo-warming.svg",
-        "busy": "logo-warming.svg",
+        "idle": "logo.png",
+        "recording": "logo-recording.png",
+        "processing": "logo-recording.png",
+        "error": "logo-error.png",
+        "stopped": "logo.png",
+        "starting": "logo-warming.png",
+        "warming": "logo-warming.png",
+        "busy": "logo-warming.png",
     }
 
-    logo_file = logo_map.get(status, "logo.svg")
+    logo_file = logo_map.get(status, "logo.png")
     logo_path = assets_dir / logo_file
 
     if not logo_path.exists():
         # Fallback to default logo
-        logo_path = assets_dir / "logo.svg"
+        logo_path = assets_dir / "logo.png"
 
     return logo_path
 
@@ -887,21 +862,16 @@ class TrayApp:
         self._gtk = Gtk
         self._glib = GLib
 
-        # Resolve icon: try PNG conversion first, fall back to system theme icon
+        # Use PNG icon directly
         logo_path = get_logo_path("idle")
         icon_path = str(logo_path.absolute())
         self._appindicator_png_cache: dict[str, str] = {}
-        try:
-            import cairosvg, tempfile, os
-            fd, png_path = tempfile.mkstemp(suffix=".png")
-            os.close(fd)
-            png = Path(png_path)
-            cairosvg.svg2png(url=icon_path, write_to=str(png), output_width=22, output_height=22)
-            icon_path = str(png)
+
+        if logo_path.exists():
             self._appindicator_png_cache["idle"] = icon_path
             print(f"AppIndicator3 icon (PNG): {icon_path}", file=sys.stderr)
-        except Exception as e:
-            print(f"SVG→PNG conversion failed ({e}), using system icon", file=sys.stderr)
+        else:
+            print(f"Logo not found at {icon_path}, using system icon", file=sys.stderr)
             icon_path = "audio-input-microphone"
 
         # Create indicator
@@ -1020,15 +990,11 @@ class TrayApp:
             if status not in cache:
                 logo_path = get_logo_path(status)
                 icon_path = str(logo_path.absolute())
-                try:
-                    import cairosvg, tempfile, os
-                    fd, png_path = tempfile.mkstemp(suffix=".png")
-                    os.close(fd)
-                    png = Path(png_path)
-                    cairosvg.svg2png(url=icon_path, write_to=str(png), output_width=22, output_height=22)
-                    cache[status] = str(png)
-                except Exception:
+                if logo_path.exists():
                     cache[status] = icon_path
+                else:
+                    # Fallback to idle logo
+                    cache[status] = cache.get("idle", icon_path)
             icon_path = cache[status]
 
             # Gtk operations must run on the Gtk thread — use GLib.idle_add

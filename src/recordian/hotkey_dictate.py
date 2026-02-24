@@ -261,6 +261,7 @@ def build_ptt_hotkey_handlers(
                 max_tokens=getattr(args, "refine_max_tokens", 512),
                 temperature=0.1,
                 prompt_template=custom_prompt if custom_prompt else None,
+                enable_thinking=getattr(args, "enable_thinking", False),
             )
             on_state({"event": "log", "message": f"使用云端 LLM: {refiner.model}"})
         elif refine_provider == "llamacpp":
@@ -275,6 +276,7 @@ def build_ptt_hotkey_handlers(
                 max_new_tokens=getattr(args, "refine_max_tokens", 512),
                 temperature=0.1,
                 prompt_template=custom_prompt if custom_prompt else None,
+                enable_thinking=getattr(args, "enable_thinking", False),
             )
             on_state({"event": "log", "message": f"使用 llama.cpp: {refiner.provider_name}"})
         else:
@@ -284,7 +286,7 @@ def build_ptt_hotkey_handlers(
                 device=getattr(args, "refine_device", "cuda"),
                 max_new_tokens=getattr(args, "refine_max_tokens", 512),
                 prompt_template=custom_prompt if custom_prompt else None,
-                enable_thinking=getattr(args, "refine_enable_thinking", False),
+                enable_thinking=getattr(args, "enable_thinking", False),
             )
             on_state({"event": "log", "message": f"使用本地模型: {refiner.model_name}"})
 

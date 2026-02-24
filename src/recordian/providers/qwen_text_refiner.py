@@ -112,11 +112,25 @@ class Qwen3TextRefiner:
         prompt = self._build_prompt(text)
         messages = [{"role": "user", "content": prompt}]
 
-        text_input = self._tokenizer.apply_chat_template(
-            messages,
-            tokenize=False,
-            add_generation_prompt=True,
-        )
+        # 根据 enable_thinking 参数控制是否启用思考模式
+        chat_template_kwargs = {
+            "tokenize": False,
+            "add_generation_prompt": True,
+        }
+
+        # 如果 tokenizer 支持 enable_thinking 参数，则传递
+        try:
+            text_input = self._tokenizer.apply_chat_template(
+                messages,
+                enable_thinking=self.enable_thinking,
+                **chat_template_kwargs,
+            )
+        except TypeError:
+            # 如果不支持 enable_thinking 参数，使用默认方式
+            text_input = self._tokenizer.apply_chat_template(
+                messages,
+                **chat_template_kwargs,
+            )
 
         model_inputs = self._tokenizer([text_input], return_tensors="pt").to(self.device)
 
@@ -148,7 +162,7 @@ class Qwen3TextRefiner:
 
         response = self._tokenizer.batch_decode(generated_ids, skip_special_tokens=True)[0]
 
-        # Remove <think> tags and extract only the final result
+        # 始终移除 <think> 标签，只保留最终结果
         result = response.strip()
 
         # Method 1: Remove everything between <think> and </think>
@@ -187,11 +201,25 @@ class Qwen3TextRefiner:
         prompt = self._build_prompt(text)
         messages = [{"role": "user", "content": prompt}]
 
-        text_input = self._tokenizer.apply_chat_template(
-            messages,
-            tokenize=False,
-            add_generation_prompt=True,
-        )
+        # 根据 enable_thinking 参数控制是否启用思考模式
+        chat_template_kwargs = {
+            "tokenize": False,
+            "add_generation_prompt": True,
+        }
+
+        # 如果 tokenizer 支持 enable_thinking 参数，则传递
+        try:
+            text_input = self._tokenizer.apply_chat_template(
+                messages,
+                enable_thinking=self.enable_thinking,
+                **chat_template_kwargs,
+            )
+        except TypeError:
+            # 如果不支持 enable_thinking 参数，使用默认方式
+            text_input = self._tokenizer.apply_chat_template(
+                messages,
+                **chat_template_kwargs,
+            )
 
         model_inputs = self._tokenizer([text_input], return_tensors="pt").to(self.device)
 
@@ -222,7 +250,7 @@ class Qwen3TextRefiner:
         thread = threading.Thread(target=self._model.generate, kwargs=generate_kwargs)
         thread.start()
 
-        # 流式输出，过滤 <think> 标签
+        # 始终过滤 <think> 标签，只输出最终结果
         in_think_block = False
         buffer = ""
 

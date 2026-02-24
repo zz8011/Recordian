@@ -2,7 +2,7 @@
 
 <div align="center">
 
-<img src="assets/logo.svg" width="150" height="150" alt="Recordian Logo"/>
+<img src="assets/logo.png" width="150" height="150" alt="Recordian Logo"/>
 
 ### 🎙️ Linux 优先的智能语音输入助手
 
@@ -386,10 +386,12 @@ Recordian/
 │       ├── qwen_text_refiner.py # 本地文本精炼
 │       └── cloud_llm_refiner.py # 云端文本精炼
 ├── assets/                     # 资源文件
-│   ├── logo.svg                # 托盘图标（空闲）
-│   ├── logo-recording.svg      # 托盘图标（录音）
-│   ├── logo-error.svg          # 托盘图标（错误）
-│   └── logo-warming.svg        # 托盘图标（预热）
+│   ├── logo.png                # 主 Logo (1024x1024)
+│   ├── logo-16.png             # 多尺寸 Logo (16-512px)
+│   ├── logo-recording.png      # 托盘图标（录音中）
+│   ├── logo-error.png          # 托盘图标（错误）
+│   ├── logo-warming.png        # 托盘图标（预热中）
+│   └── logo-success.png        # 托盘图标（成功）
 ├── presets/                    # 预设文件
 │   ├── default.md              # 日常预设
 │   ├── formal.md               # 正式预设

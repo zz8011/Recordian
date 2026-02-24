@@ -23,6 +23,7 @@ class LlamaCppTextRefiner:
         max_new_tokens: int = 512,
         temperature: float = 0.1,
         prompt_template: str | None = None,
+        enable_thinking: bool = False,
     ) -> None:
         try:
             from llama_cpp import Llama
@@ -36,6 +37,7 @@ class LlamaCppTextRefiner:
         self.max_new_tokens = max_new_tokens
         self.temperature = temperature
         self.prompt_template = prompt_template
+        self.enable_thinking = enable_thinking
 
         # 初始化 llama.cpp 模型
         self.llm = Llama(
@@ -97,6 +99,9 @@ class LlamaCppTextRefiner:
         if result and "choices" in result and len(result["choices"]) > 0:
             generated = result["choices"][0]["text"].strip()
 
+            # 移除 <think> 标签
+            generated = self._remove_think_tags(generated)
+
             # 移除可能的前缀
             for prefix in ["输出：", "书面语：", "纪要：", "文档："]:
                 if generated.startswith(prefix):
@@ -113,6 +118,31 @@ class LlamaCppTextRefiner:
             return generated
 
         return ""
+
+    def _remove_think_tags(self, text: str) -> str:
+        """移除文本中的 <think> 标签及其内容"""
+        if not text:
+            return ""
+
+        import re
+
+        # Method 1: Remove everything between <think> and </think>
+        result = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL)
+        result = result.strip()
+
+        # Method 2: If still contains <think>, try to extract after </think>
+        if '<think>' in result:
+            parts = result.split('</think>')
+            if len(parts) > 1:
+                result = parts[-1].strip()
+            else:
+                # No closing tag, remove everything after <think>
+                result = result.split('<think>')[0].strip()
+
+        # Method 3: Remove any remaining <think> or </think> tags
+        result = result.replace('<think>', '').replace('</think>', '').strip()
+
+        return result
 
     def _build_fewshot_prompt(self, text: str) -> str:
         """根据 prompt_template 动态构建 Few-shot prompt

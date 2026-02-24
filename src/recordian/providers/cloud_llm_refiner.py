@@ -21,6 +21,7 @@ class CloudLLMRefiner:
         temperature: float = 0.1,
         prompt_template: str | None = None,
         api_format: str = "auto",  # "auto", "anthropic", "openai"
+        enable_thinking: bool = False,
     ) -> None:
         self.api_base = api_base.rstrip("/")
         self.api_key = api_key
@@ -28,10 +29,14 @@ class CloudLLMRefiner:
         self.max_tokens = max_tokens
         self.temperature = temperature
         self.prompt_template = prompt_template
+        self.enable_thinking = enable_thinking
 
         # 自动检测 API 格式
         if api_format == "auto":
-            if "groq.com" in api_base.lower() or "openai.com" in api_base.lower() or "deepseek.com" in api_base.lower() or ":11434" in api_base:
+            if ":11434" in api_base:
+                # Ollama 原生 API
+                self.api_format = "ollama"
+            elif "groq.com" in api_base.lower() or "openai.com" in api_base.lower() or "deepseek.com" in api_base.lower():
                 self.api_format = "openai"
             else:
                 self.api_format = "anthropic"
@@ -69,7 +74,9 @@ class CloudLLMRefiner:
         if not text.strip():
             return ""
 
-        if self.api_format == "openai":
+        if self.api_format == "ollama":
+            return self._refine_ollama(text)
+        elif self.api_format == "openai":
             return self._refine_openai(text)
         else:
             return self._refine_anthropic(text)
@@ -120,12 +127,15 @@ class CloudLLMRefiner:
         content = result.get("content", [])
 
         # 查找 type="text" 的内容
+        output = ""
         if content and isinstance(content, list):
             for item in content:
                 if isinstance(item, dict) and item.get("type") == "text":
-                    return item.get("text", "").strip()
+                    output = item.get("text", "").strip()
+                    break
 
-        return ""
+        # 移除 <think> 标签
+        return self._remove_think_tags(output)
 
     def _refine_openai(self, text: str) -> str:
         """使用 OpenAI API 格式（Groq, DeepSeek 等）"""
@@ -171,11 +181,92 @@ class CloudLLMRefiner:
         result = response.json()
         choices = result.get("choices", [])
 
+        output = ""
         if choices and len(choices) > 0:
             message = choices[0].get("message", {})
-            return message.get("content", "").strip()
+            output = message.get("content", "").strip()
 
-        return ""
+        # 移除 <think> 标签
+        return self._remove_think_tags(output)
+
+    def _refine_ollama(self, text: str) -> str:
+        """使用 Ollama 原生 API 格式"""
+        prompt = self._build_prompt(text)
+
+        # 根据 enable_thinking 参数决定是否添加 /no_think 标记
+        if not self.enable_thinking and "/no_think" not in prompt:
+            prompt = prompt + " /no_think"
+
+        try:
+            import requests
+        except ModuleNotFoundError as exc:
+            raise RuntimeError(
+                "requests 未安装。请执行: pip install requests"
+            ) from exc
+
+        # 调用 Ollama 原生 API
+        headers = {
+            "Content-Type": "application/json",
+        }
+
+        payload = {
+            "model": self.model,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": prompt,
+                }
+            ],
+            "stream": False,
+            "options": {
+                "num_predict": self.max_tokens,
+                "temperature": self.temperature,
+            }
+        }
+
+        response = requests.post(
+            f"{self.api_base}/api/chat",
+            headers=headers,
+            json=payload,
+            timeout=120,
+        )
+
+        if response.status_code != 200:
+            raise RuntimeError(
+                f"API 调用失败: {response.status_code} {response.text}"
+            )
+
+        result = response.json()
+        message = result.get("message", {})
+        output = message.get("content", "").strip()
+
+        # 移除 <think> 标签
+        return self._remove_think_tags(output)
+
+    def _remove_think_tags(self, text: str) -> str:
+        """移除文本中的 <think> 标签及其内容"""
+        if not text:
+            return ""
+
+        import re
+
+        # Method 1: Remove everything between <think> and </think>
+        result = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL)
+        result = result.strip()
+
+        # Method 2: If still contains <think>, try to extract after </think>
+        if '<think>' in result:
+            parts = result.split('</think>')
+            if len(parts) > 1:
+                result = parts[-1].strip()
+            else:
+                # No closing tag, remove everything after <think>
+                result = result.split('<think>')[0].strip()
+
+        # Method 3: Remove any remaining <think> or </think> tags
+        result = result.replace('<think>', '').replace('</think>', '').strip()
+
+        return result
 
     def _build_prompt(self, text: str) -> str:
         """构建文本精炼 prompt"""
