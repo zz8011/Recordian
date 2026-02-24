@@ -13,7 +13,7 @@ import time
 from typing import Any
 
 from .linux_commit import CommitError, resolve_committer
-from .providers import QwenASRProvider
+from .providers import QwenASRProvider, HttpCloudProvider, ASRProvider
 from .runtime_deps import ensure_ffmpeg_available
 
 
@@ -48,7 +48,7 @@ def add_dictate_args(parser: argparse.ArgumentParser) -> None:
 
     parser.add_argument(
         "--asr-provider",
-        choices=["qwen-asr"],
+        choices=["qwen-asr", "http-cloud"],
         default="qwen-asr",
         help="ASR provider backend",
     )
@@ -74,6 +74,17 @@ def add_dictate_args(parser: argparse.ArgumentParser) -> None:
         type=int,
         default=1024,
         help="Max tokens for Qwen3-ASR generation. Higher = handles longer utterances.",
+    )
+    parser.add_argument(
+        "--asr-endpoint",
+        default="http://localhost:8000/transcribe",
+        help="HTTP endpoint for http-cloud ASR provider",
+    )
+    parser.add_argument(
+        "--asr-timeout-s",
+        type=float,
+        default=30.0,
+        help="Timeout in seconds for http-cloud ASR requests",
     )
 
 
@@ -173,7 +184,16 @@ def choose_record_backend(requested_backend: str, ffmpeg_bin: str | None) -> str
     raise RuntimeError("no recorder available: need ffmpeg(pulse) or arecord")
 
 
-def create_provider(args: argparse.Namespace) -> QwenASRProvider:
+def create_provider(args: argparse.Namespace) -> ASRProvider:
+    asr_provider = getattr(args, "asr_provider", "qwen-asr")
+
+    if asr_provider == "http-cloud":
+        # Use HTTP cloud provider
+        endpoint = getattr(args, "asr_endpoint", "http://localhost:8000/transcribe")
+        timeout_s = getattr(args, "asr_timeout_s", 30)
+        return HttpCloudProvider(endpoint=endpoint, timeout_s=timeout_s)
+
+    # Default to Qwen ASR provider
     # --qwen-model takes priority; fall back to --model; last resort: default
     qwen_model_override = getattr(args, "qwen_model", "")
     if qwen_model_override:

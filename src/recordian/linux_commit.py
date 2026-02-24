@@ -248,6 +248,19 @@ def _is_ibus_running() -> bool:
         return False
 
 
+def _resolve_paste_shortcut() -> str:
+    """Resolve the paste shortcut from environment variable or use default.
+
+    Returns the paste shortcut (e.g., "ctrl+v", "shift+insert").
+    Can be overridden via RECORDIAN_PASTE_SHORTCUT environment variable.
+    """
+    env_shortcut = os.environ.get("RECORDIAN_PASTE_SHORTCUT")
+    if env_shortcut:
+        return env_shortcut.strip().lower()
+    # Default to ctrl+v
+    return "ctrl+v"
+
+
 def _set_clipboard_text(text: str) -> None:
     if which("wl-copy"):
         _run_command_with_input(["wl-copy", "--type", "text/plain;charset=utf-8"], text)

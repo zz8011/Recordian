@@ -31,7 +31,7 @@ class CloudLLMRefiner:
 
         # 自动检测 API 格式
         if api_format == "auto":
-            if "groq.com" in api_base.lower() or "openai.com" in api_base.lower() or "deepseek.com" in api_base.lower():
+            if "groq.com" in api_base.lower() or "openai.com" in api_base.lower() or "deepseek.com" in api_base.lower() or ":11434" in api_base:
                 self.api_format = "openai"
             else:
                 self.api_format = "anthropic"
@@ -108,7 +108,7 @@ class CloudLLMRefiner:
             f"{self.api_base}/v1/messages",
             headers=headers,
             json=payload,
-            timeout=30,
+            timeout=120,
         )
 
         if response.status_code != 200:
@@ -160,7 +160,7 @@ class CloudLLMRefiner:
             f"{self.api_base}/chat/completions",
             headers=headers,
             json=payload,
-            timeout=30,
+            timeout=120,
         )
 
         if response.status_code != 200:

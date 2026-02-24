@@ -3,7 +3,6 @@ from __future__ import annotations
 import base64
 import json
 from pathlib import Path
-from urllib import request
 
 from .base import ASRProvider, _estimate_english_ratio
 from ..models import ASRResult
@@ -43,6 +42,11 @@ class HttpCloudProvider(ASRProvider):
         if not wav_path.exists():
             raise FileNotFoundError(wav_path)
 
+        try:
+            import requests
+        except ImportError:
+            raise ImportError("requests library is required for HttpCloudProvider. Install with: pip install requests")
+
         audio_data = wav_path.read_bytes()
         payload = {
             "audio_base64": base64.b64encode(audio_data).decode("ascii"),
@@ -55,15 +59,14 @@ class HttpCloudProvider(ASRProvider):
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
 
-        req = request.Request(
+        response = requests.post(
             self.endpoint,
-            data=json.dumps(payload).encode("utf-8"),
+            json=payload,
             headers=headers,
-            method="POST",
+            timeout=self.timeout_s
         )
-
-        with request.urlopen(req, timeout=self.timeout_s) as resp:
-            body = json.loads(resp.read().decode("utf-8"))
+        response.raise_for_status()
+        body = response.json()
 
         text = str(body.get("text", "")).strip()
         confidence = body.get("confidence")

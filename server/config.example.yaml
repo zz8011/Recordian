@@ -1,0 +1,34 @@
+# Recordian 客户端配置示例
+# 使用局域网服务器 (192.168.5.225) 的 ASR 和 LLM 服务
+
+# ASR 配置 - 使用服务器的 Qwen3-ASR
+asr:
+  provider: http-cloud
+  endpoint: http://192.168.5.225:8000/transcribe
+  timeout_s: 30
+
+# 文本精炼配置 - 使用服务器的 Ollama
+text_refine:
+  provider: cloud-llm
+  api_base: http://192.168.5.225:11434/v1
+  api_key: dummy  # Ollama 不需要真实 API key
+  model: qwen2.5:7b
+  api_format: openai
+  temperature: 0.1
+  max_tokens: 512
+
+# 热键配置
+hotkey:
+  mode: ptt  # 或 toggle, hybrid
+  ptt_key: "<ctrl>+<alt>+space"
+  toggle_key: "<ctrl>+<alt>+t"
+
+# 文本上屏配置
+commit:
+  backend: auto  # 自动选择 xdotool-clipboard 或 wtype
+
+# Preset 配置
+refine_preset: default  # 可选: default, formal, meeting, summary, technical
+
+# 是否启用文本精炼
+enable_text_refine: true  # false 为快速模式（跳过文本优化）

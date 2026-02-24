@@ -1,0 +1,15 @@
+[Unit]
+Description=Recordian ASR HTTP Server
+After=network.target
+
+[Service]
+Type=simple
+User=YOUR_USERNAME
+WorkingDirectory=/path/to/Recordian
+Environment="PATH=/path/to/Recordian/.venv/bin:/usr/local/bin:/usr/bin:/bin"
+ExecStart=/path/to/Recordian/.venv/bin/python /path/to/Recordian/server/asr_server.py --host 0.0.0.0 --port 8000 --model /path/to/Recordian/models/Qwen3-ASR-1.7B
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
