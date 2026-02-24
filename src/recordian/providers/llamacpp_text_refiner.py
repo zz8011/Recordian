@@ -68,18 +68,24 @@ class LlamaCppTextRefiner:
         # 调用 llama.cpp 推理
         result = self.llm(
             prompt,
-            max_tokens=self.max_new_tokens,
+            max_tokens=min(self.max_new_tokens, len(text) * 3),  # 限制输出长度
             temperature=self.temperature,
-            stop=["原文：", "\n\n原文", "用户："],  # 停止词
+            stop=["原文：", "\n\n", "整理以下", "注意：", "<|im_end|>", "<|endoftext|>"],  # 更多停止词
             echo=False,
         )
 
         # 提取生成的文本
         if result and "choices" in result and len(result["choices"]) > 0:
             generated = result["choices"][0].get("text", "").strip()
+
             # 移除可能的前缀
             if generated.startswith("整理后："):
                 generated = generated[5:].strip()
+
+            # 只取第一行（避免多余输出）
+            if "\n" in generated:
+                generated = generated.split("\n")[0].strip()
+
             return generated
 
         return ""
