@@ -491,9 +491,7 @@ class TrayApp:
         self.root.title("Recordian Tray")
 
         self.overlay = WaveOverlay(self.root)
-        self.icon = None
         self.indicator = None
-        self._tray_thread: threading.Thread | None = None
 
         self.backend_proc: subprocess.Popen[str] | None = None
         self.backend_threads: list[threading.Thread] = []
@@ -867,182 +865,19 @@ class TrayApp:
         canvas.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
 
-    def open_quick_menu(self) -> None:
-        # Create a temporary visible window for menu popup
-        popup_win = tk.Toplevel(self.root)
-        popup_win.withdraw()
-        popup_win.overrideredirect(True)
-        popup_win.geometry("1x1+0+0")
-        popup_win.deiconify()
-        popup_win.lift()
-        popup_win.focus_force()
-
-        menu = tk.Menu(popup_win, tearoff=0)
-        menu.add_command(label=f"Status: {self.state.status}", state="disabled")
-
-        # Last text display
-        last_text = self.state.last_text[:50] + "..." if len(self.state.last_text) > 50 else self.state.last_text
-        last_text_label = f"Last: {last_text}" if last_text else "Last: (无)"
-        menu.add_command(label=last_text_label, state="disabled")
-
-        # Performance stats display
-        if self.state.last_total_ms > 0:
-            perf_label = f"Perf: {self.state.last_total_ms:.0f}ms (录:{self.state.last_record_ms:.0f} 识:{self.state.last_transcribe_ms:.0f} 优:{self.state.last_refine_ms:.0f})"
-        else:
-            perf_label = "Perf: (无数据)"
-        menu.add_command(label=perf_label, state="disabled")
-
-        menu.add_separator()
-        menu.add_command(label="Start Backend", command=self.start_backend)
-        menu.add_command(label="Stop Backend", command=self.stop_backend)
-        menu.add_separator()
-
-        # Quick mode toggle
-        config = load_runtime_config(self.config_path)
-        quick_mode_enabled = not config.get("enable_text_refine", True)
-        quick_mode_label = "✓ 快速模式（跳过文字优化）" if quick_mode_enabled else "  快速模式（跳过文字优化）"
-        menu.add_command(label=quick_mode_label, command=lambda: self.toggle_quick_mode(not quick_mode_enabled))
-
-        # Copy last text
-        copy_state = "normal" if self.state.last_text else "disabled"
-        menu.add_command(label="复制最后识别的文本", command=self.copy_last_text, state=copy_state)
-
-        # Preset submenu
-        preset_menu = tk.Menu(menu, tearoff=0)
-        presets = ["default", "formal", "meeting", "summary", "technical"]
-        current_preset = config.get("refine_preset", "default")
-
-        for preset in presets:
-            preset_label = f"✓ {preset}" if preset == current_preset else f"  {preset}"
-            preset_menu.add_command(label=preset_label, command=lambda p=preset: self.switch_preset(p))
-
-        menu.add_cascade(label="切换 Preset", menu=preset_menu)
-
-        menu.add_command(label="Settings...", command=self.open_settings)
-        menu.add_separator()
-        menu.add_command(label="Quit", command=self.quit)
-
-        # Get cursor position
-        try:
-            x = popup_win.winfo_pointerx()
-            y = popup_win.winfo_pointery()
-        except Exception as e:
-            print(f"Failed to get pointer position: {e}", file=sys.stderr, flush=True)
-            x, y = 100, 100
-
-        try:
-            menu.tk_popup(x, y)
-        except Exception as e:
-            pass  # popup failed, ignore
-        finally:
-            menu.grab_release()
-            popup_win.after(100, popup_win.destroy)
-
-    def _tray_callback(self, fn) -> Any:  # noqa: ANN401
-        def _handler(icon=None, item=None):  # noqa: ANN001, ANN202
-            del icon, item
-            self.root.after(0, fn)
-
-        return _handler
-
     def _start_tray(self) -> None:
-        # Try AppIndicator3 first (native GNOME support)
+        # Use AppIndicator3 (GNOME native) - Ubuntu only
         try:
             import gi
             gi.require_version('AppIndicator3', '0.1')
             gi.require_version('Gtk', '3.0')
             from gi.repository import AppIndicator3, Gtk
             self._start_appindicator(AppIndicator3, Gtk)
-            return
         except (ImportError, ValueError) as e:
-            print(f"AppIndicator3 not available: {e}", file=sys.stderr)
-            print("Falling back to pystray", file=sys.stderr)
-
-        # Fallback to pystray
-        try:
-            import pystray
-            from PIL import Image
-        except ModuleNotFoundError as exc:
-            raise RuntimeError("GUI deps missing. Run: pip install -e '.[gui]'") from exc
-
-        def _status_text(_: Any) -> str:
-            return f"Status: {self.state.status}"
-
-        # Try to use native menu first, fallback to tkinter popup menu
-        has_menu = bool(getattr(pystray.Icon, "HAS_MENU", True))
-
-        # Load initial logo
-        logo_path = get_logo_path("idle")
-        image = load_svg_as_image(logo_path, size=(64, 64))
-
-        if has_menu:
-            # Use native pystray menu
-            def _quick_mode_checked(_: Any) -> bool:
-                config = load_runtime_config(self.config_path)
-                return not config.get("enable_text_refine", True)
-
-            def _toggle_quick_mode_pystray(icon, item):
-                self.root.after(0, lambda: self.toggle_quick_mode(not item.checked))
-
-            def _last_text_label(_: Any) -> str:
-                last_text = self.state.last_text[:50] + "..." if len(self.state.last_text) > 50 else self.state.last_text
-                return f"Last: {last_text}" if last_text else "Last: (无)"
-
-            def _perf_label(_: Any) -> str:
-                if self.state.last_total_ms > 0:
-                    return f"Perf: {self.state.last_total_ms:.0f}ms (录:{self.state.last_record_ms:.0f} 识:{self.state.last_transcribe_ms:.0f} 优:{self.state.last_refine_ms:.0f})"
-                return "Perf: (无数据)"
-
-            def _preset_checked(preset_name: str):
-                def _check(_: Any) -> bool:
-                    config = load_runtime_config(self.config_path)
-                    return config.get("refine_preset", "default") == preset_name
-                return _check
-
-            def _switch_preset_pystray(preset_name: str):
-                def _handler(icon, item):
-                    self.root.after(0, lambda: self.switch_preset(preset_name))
-                return _handler
-
-            presets = ["default", "formal", "meeting", "summary", "technical"]
-            preset_items = [
-                pystray.MenuItem(preset, _switch_preset_pystray(preset), checked=_preset_checked(preset), radio=True)
-                for preset in presets
-            ]
-
-            menu = pystray.Menu(
-                pystray.MenuItem(_status_text, self._tray_callback(lambda: None), enabled=False),
-                pystray.MenuItem(_last_text_label, self._tray_callback(lambda: None), enabled=False),
-                pystray.MenuItem(_perf_label, self._tray_callback(lambda: None), enabled=False),
-                pystray.Menu.SEPARATOR,
-                pystray.MenuItem("Start Backend", self._tray_callback(self.start_backend)),
-                pystray.MenuItem("Stop Backend", self._tray_callback(self.stop_backend)),
-                pystray.Menu.SEPARATOR,
-                pystray.MenuItem("快速模式（跳过文字优化）", _toggle_quick_mode_pystray, checked=_quick_mode_checked),
-                pystray.MenuItem("复制最后识别的文本", self._tray_callback(self.copy_last_text), enabled=lambda _: bool(self.state.last_text)),
-                pystray.MenuItem("切换 Preset", pystray.Menu(*preset_items)),
-                pystray.MenuItem("Settings...", self._tray_callback(self.open_settings), default=True),
-                pystray.MenuItem("Quit", self._tray_callback(self.quit)),
-            )
-            icon = pystray.Icon("recordian", image, "Recordian", menu)
-        else:
-            # Use tkinter popup menu fallback
-            print("Native tray menu not supported, using tkinter popup menu fallback", file=sys.stderr, flush=True)
-            print("Click the tray icon to open menu", file=sys.stderr, flush=True)
-
-            def _on_activate(icon, item):
-                print(f"Tray icon activated: icon={icon}, item={item}", file=sys.stderr, flush=True)
-                self.root.after(0, self.open_quick_menu)
-
-            # Create a simple menu with one item that opens the full menu
-            menu = pystray.Menu(
-                pystray.MenuItem("Open Menu", self._tray_callback(self.open_quick_menu), default=True),
-            )
-            icon = pystray.Icon("recordian", image, "Recordian", menu, on_activate=_on_activate)
-
-        self.icon = icon
-        self._tray_thread = threading.Thread(target=icon.run, daemon=True)
-        self._tray_thread.start()
+            raise RuntimeError(
+                f"AppIndicator3 not available: {e}\n"
+                "Please install: sudo apt install gir1.2-appindicator3-0.1"
+            ) from e
 
     def _start_appindicator(self, AppIndicator3, Gtk) -> None:
         """Start tray using AppIndicator3 (GNOME native)."""
@@ -1177,20 +1012,8 @@ class TrayApp:
         self._gtk_thread.start()
         print("Gtk main loop started", file=sys.stderr)
 
-    def _update_tray_icon(self, status: str) -> None:
-        """Update tray icon based on status."""
-        if self.icon is None:
-            return
-
-        logo_path = get_logo_path(status)
-        try:
-            image = load_svg_as_image(logo_path, size=(64, 64))
-            self.icon.icon = image
-        except Exception:
-            pass
-
     def _update_tray_menu(self) -> None:
-        # Update AppIndicator status if using AppIndicator3
+        # Update AppIndicator status
         if hasattr(self, 'indicator') and self.indicator is not None:
             status = self.state.status
             cache = getattr(self, '_appindicator_png_cache', {})
@@ -1241,24 +1064,12 @@ class TrayApp:
                         pass
 
                 self._glib.idle_add(_gtk_update)
-            return
-
-        # Update pystray icon
-        if self.icon is not None:
-            try:
-                detail = _truncate(self.state.detail or self.state.status, 36)
-                self.icon.title = f"Recordian | {self.state.status} | {detail}"
-                self.icon.update_menu()
-                # Update icon based on status
-                self._update_tray_icon(self.state.status)
-            except Exception:
-                pass
 
     def quit(self) -> None:
         self.stop_backend()
         self.overlay.shutdown()
 
-        # Stop AppIndicator if using it
+        # Stop AppIndicator
         if hasattr(self, 'indicator') and self.indicator is not None:
             try:
                 import gi
@@ -1273,13 +1084,6 @@ class TrayApp:
                     self._glib.idle_add(self._gtk.main_quit)
                 except Exception:
                     pass
-
-        # Stop pystray icon if using it
-        if self.icon is not None:
-            try:
-                self.icon.stop()
-            except Exception:
-                pass
 
         self.root.quit()
         self.root.destroy()

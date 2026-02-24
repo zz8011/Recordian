@@ -519,11 +519,13 @@ sudo dnf install libappindicator-gtk3
 - **显存**：8GB+（使用 1.7B 模型）
 - **内存**：16GB+
 
-### 依赖软件
+### 依赖软件（Ubuntu 原生）
 - **Wayland**：wtype
 - **X11**：xdotool, xsel/xclip
-- **托盘**：libappindicator-gtk3
-- **通知**：libnotify
+- **托盘**：gir1.2-appindicator3-0.1（GNOME 原生）
+- **通知**：libnotify（notify-send）
+
+**注意**：Recordian 只使用 Ubuntu 原生程序，不依赖第三方 Python 库（如 pystray、pynput）。
 
 ---
 

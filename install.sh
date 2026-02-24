@@ -15,6 +15,52 @@ fi
 PYTHON_VERSION=$(python3 -c 'import sys; print(".".join(map(str, sys.version_info[:2])))')
 echo "检测到 Python 版本: $PYTHON_VERSION"
 
+# 检查系统依赖
+echo ""
+echo "检查系统依赖..."
+
+MISSING_DEPS=()
+
+# 检查 AppIndicator3（托盘图标）
+if ! python3 -c "import gi; gi.require_version('AppIndicator3', '0.1')" 2>/dev/null; then
+    MISSING_DEPS+=("gir1.2-appindicator3-0.1")
+fi
+
+# 检查 xdotool（X11 文本上屏）
+if ! command -v xdotool &> /dev/null; then
+    MISSING_DEPS+=("xdotool")
+fi
+
+# 检查 xclip（X11 剪贴板）
+if ! command -v xclip &> /dev/null && ! command -v xsel &> /dev/null; then
+    MISSING_DEPS+=("xclip")
+fi
+
+# 检查 notify-send（通知）
+if ! command -v notify-send &> /dev/null; then
+    MISSING_DEPS+=("libnotify-bin")
+fi
+
+# 如果有缺失的依赖，提示安装
+if [ ${#MISSING_DEPS[@]} -gt 0 ]; then
+    echo ""
+    echo "⚠️  缺少以下系统依赖："
+    for dep in "${MISSING_DEPS[@]}"; do
+        echo "  - $dep"
+    done
+    echo ""
+    echo "请运行以下命令安装："
+    echo "  sudo apt install ${MISSING_DEPS[*]}"
+    echo ""
+    read -p "是否继续安装 Recordian？(y/n) " -n 1 -r
+    echo
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        exit 1
+    fi
+else
+    echo "✅ 所有系统依赖已安装"
+fi
+
 # 获取脚本所在目录
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 cd "$SCRIPT_DIR"

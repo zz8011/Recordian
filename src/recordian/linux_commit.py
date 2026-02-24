@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-import importlib.util
 import logging
 import os
 from shutil import which
@@ -44,35 +43,6 @@ class StdoutCommitter(TextCommitter):
     def commit(self, text: str) -> CommitResult:
         print(text, file=sys.stderr)
         return CommitResult(backend=self.backend_name, committed=False, detail="printed_to_stderr")
-
-
-class PynputCommitter(TextCommitter):
-    backend_name = "pynput"
-
-    def commit(self, text: str) -> CommitResult:
-        try:
-            from pynput.keyboard import Controller, Key
-        except ModuleNotFoundError as exc:
-            raise CommitError("pynput not installed") from exc
-
-        keyboard = Controller()
-        try:
-            _set_clipboard_text(text)
-            # Give the target app a short moment to consume clipboard ownership.
-            time.sleep(0.02)
-            shortcut = _resolve_paste_shortcut()
-            detail = _send_paste_shortcut(keyboard, Key, shortcut)
-            logger.debug(
-                "diag finalize commit_backend=%s text_len=%d committed=True detail=%s",
-                self.backend_name, len(text), detail,
-            )
-            return CommitResult(backend=self.backend_name, committed=True, detail=detail)
-        except Exception as exc:  # noqa: BLE001
-            logger.debug(
-                "diag finalize commit_backend=%s text_len=%d committed=False detail=%s",
-                self.backend_name, len(text), f"{type(exc).__name__}: {exc}",
-            )
-            raise CommitError(f"pynput paste failed: {type(exc).__name__}: {exc}") from exc
 
 
 class WTypeCommitter(TextCommitter):
@@ -170,8 +140,6 @@ def resolve_committer(backend: str, *, target_window_id: int | None = None) -> T
         return NoopCommitter()
     if normalized == "stdout":
         return StdoutCommitter()
-    if normalized == "pynput":
-        return PynputCommitter()
     if normalized == "wtype":
         return WTypeCommitter()
     if normalized == "xdotool":
@@ -194,9 +162,11 @@ def resolve_committer(backend: str, *, target_window_id: int | None = None) -> T
             return WTypeCommitter()
         if which("xdotool"):
             return XDoToolCommitter()
-        if _has_pynput():
-            return PynputCommitter()
-        return StdoutCommitter()
+        raise CommitError(
+            "No text commit backend available. Please install xdotool+xclip or wtype:\n"
+            "  sudo apt install xdotool xclip  # for X11\n"
+            "  sudo apt install wtype          # for Wayland"
+        )
     raise ValueError(f"unsupported commit backend: {backend}")
 
 
@@ -265,10 +235,6 @@ def _run_command(cmd: list[str]) -> None:
         raise CommitError(f"command failed: {exc}") from exc
 
 
-def _has_pynput() -> bool:
-    return importlib.util.find_spec("pynput") is not None
-
-
 def _is_ibus_running() -> bool:
     """Check if ibus-daemon is running."""
     try:
@@ -280,28 +246,6 @@ def _is_ibus_running() -> bool:
         return result.returncode == 0
     except FileNotFoundError:
         return False
-
-
-def _detect_paste_shortcut() -> str:
-    """Auto-detect the best paste shortcut for the current session.
-
-    On X11 with xdotool available, ctrl+v works reliably for most apps
-    including terminals (which typically remap it to ctrl+shift+v internally)
-    and Electron apps like Obsidian.
-    """
-    session_type = os.environ.get("XDG_SESSION_TYPE", "").lower()
-    if session_type == "x11":
-        return "ctrl+v"
-    # Wayland
-    return "ctrl+v"
-
-
-def _resolve_paste_shortcut() -> str:
-    """Return the paste shortcut to use, respecting manual override."""
-    override = os.environ.get("RECORDIAN_PASTE_SHORTCUT", "").strip().lower()
-    if override:
-        return override
-    return _detect_paste_shortcut()
 
 
 def _set_clipboard_text(text: str) -> None:
@@ -363,29 +307,3 @@ def _run_command_with_input(cmd: list[str], text: str) -> None:
     except subprocess.CalledProcessError as exc:
         detail = (exc.stderr or exc.stdout or "").strip()
         raise CommitError(f"command failed: {cmd} {detail}") from exc
-
-
-def _send_paste_shortcut(keyboard, key_mod, shortcut: str) -> str:  # noqa: ANN001
-    token = shortcut.replace("_", "+").replace(" ", "")
-    if token in {"shift+insert", "shift+ins"}:
-        keyboard.press(key_mod.shift)
-        keyboard.press(key_mod.insert)
-        keyboard.release(key_mod.insert)
-        keyboard.release(key_mod.shift)
-        return "pasted_from_clipboard_shift_insert"
-
-    if token in {"ctrl+shift+v", "control+shift+v"}:
-        keyboard.press(key_mod.ctrl)
-        keyboard.press(key_mod.shift)
-        keyboard.press("v")
-        keyboard.release("v")
-        keyboard.release(key_mod.shift)
-        keyboard.release(key_mod.ctrl)
-        return "pasted_from_clipboard_ctrl_shift_v"
-
-    # Default: ctrl+v
-    keyboard.press(key_mod.ctrl)
-    keyboard.press("v")
-    keyboard.release("v")
-    keyboard.release(key_mod.ctrl)
-    return "pasted_from_clipboard_ctrl_v"
