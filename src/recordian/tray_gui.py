@@ -781,10 +781,11 @@ class TrayApp:
 
             # 文本精炼设置
             ("enable_text_refine", "启用文本精炼", current.get("enable_text_refine", False)),
-            ("refine_provider", "精炼 Provider (local/cloud)", current.get("refine_provider", "local")),
+            ("refine_provider", "精炼 Provider (local/cloud/llamacpp)", current.get("refine_provider", "local")),
             ("refine_preset", "精炼预设", current.get("refine_preset", "default")),
-            ("refine_model", "本地精炼模型路径", current.get("refine_model", "")),
+            ("refine_model", "本地精炼模型路径（local=HF路径，llamacpp=GGUF路径）", current.get("refine_model", "")),
             ("refine_device", "精炼设备 (cpu/cuda)", current.get("refine_device", "cuda")),
+            ("refine_n_gpu_layers", "llama.cpp GPU 层数 (-1=全部)", str(current.get("refine_n_gpu_layers", -1))),
             ("refine_max_tokens", "精炼 Max Tokens", str(current.get("refine_max_tokens", 512))),
             ("refine_enable_thinking", "启用 Thinking 模式", current.get("refine_enable_thinking", False)),
             ("refine_api_base", "云端 API Base", current.get("refine_api_base", "")),
@@ -842,6 +843,7 @@ class TrayApp:
                 "refine_preset": entries["refine_preset"].get().strip() or "default",
                 "refine_model": entries["refine_model"].get().strip(),
                 "refine_device": entries["refine_device"].get().strip() or "cuda",
+                "refine_n_gpu_layers": int(entries["refine_n_gpu_layers"].get().strip() or "-1"),
                 "refine_max_tokens": int(entries["refine_max_tokens"].get().strip() or "512"),
                 "refine_enable_thinking": _parse_bool(entries["refine_enable_thinking"].get(), default=False),
                 "refine_api_base": entries["refine_api_base"].get().strip(),

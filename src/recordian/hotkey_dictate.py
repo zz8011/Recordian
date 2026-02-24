@@ -245,7 +245,7 @@ def build_ptt_hotkey_handlers(
                 on_state({"event": "log", "message": f"预设加载失败: {e}"})
                 custom_prompt = None
 
-        # 选择 provider：local 或 cloud
+        # 选择 provider：local, cloud, llamacpp
         refine_provider = getattr(args, "refine_provider", "local")
 
         if refine_provider == "cloud":
@@ -263,6 +263,20 @@ def build_ptt_hotkey_handlers(
                 prompt_template=custom_prompt if custom_prompt else None,
             )
             on_state({"event": "log", "message": f"使用云端 LLM: {refiner.model}"})
+        elif refine_provider == "llamacpp":
+            from .providers import LlamaCppTextRefiner
+            model_path = getattr(args, "refine_model", "")
+            if not model_path:
+                raise RuntimeError("使用 llamacpp provider 需要设置 --refine-model 为 GGUF 模型路径")
+
+            refiner = LlamaCppTextRefiner(
+                model_path=model_path,
+                n_gpu_layers=getattr(args, "refine_n_gpu_layers", -1),
+                max_new_tokens=getattr(args, "refine_max_tokens", 512),
+                temperature=0.1,
+                prompt_template=custom_prompt if custom_prompt else None,
+            )
+            on_state({"event": "log", "message": f"使用 llama.cpp: {refiner.provider_name}"})
         else:
             from .providers import Qwen3TextRefiner
             refiner = Qwen3TextRefiner(
