@@ -42,6 +42,21 @@ class CloudLLMRefiner:
     def provider_name(self) -> str:
         return f"cloud-llm:{self.model}"
 
+    def update_preset(self, preset_name: str) -> None:
+        """动态更新 preset（热切换）
+
+        Args:
+            preset_name: preset 名称（如 "default", "formal" 等）
+        """
+        from recordian.preset_manager import PresetManager
+
+        preset_mgr = PresetManager()
+        try:
+            self.prompt_template = preset_mgr.load_preset(preset_name)
+        except Exception:
+            # 如果加载失败，保持当前 preset
+            pass
+
     def refine(self, text: str) -> str:
         """精炼文本：调用云端 API
 

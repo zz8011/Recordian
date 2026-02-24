@@ -439,7 +439,30 @@ def build_ptt_hotkey_handlers(
                 # Apply text refinement if enabled
                 refine_latency_ms = 0.0
                 if refiner and text.strip():
+                    # 检查配置是否变化，动态更新 preset（热切换）
+                    if hasattr(refiner, 'update_preset'):
+                        try:
+                            # 重新读取配置文件
+                            import json
+                            config_path = getattr(args, 'config_path', None)
+                            if config_path and Path(config_path).exists():
+                                with open(config_path, 'r', encoding='utf-8') as f:
+                                    current_config = json.load(f)
+                                new_preset = current_config.get('refine_preset', 'default')
+                                old_preset = getattr(args, 'refine_preset', 'default')
+
+                                # 如果 preset 变化，更新 refiner
+                                if new_preset != old_preset:
+                                    refiner.update_preset(new_preset)
+                                    args.refine_preset = new_preset  # 更新 args 中的值
+                                    on_state({"event": "log", "message": f"已切换到 {new_preset} preset"})
+                        except Exception as e:
+                            on_state({"event": "log", "message": f"preset 热切换失败: {e}"})
+
                     t1 = time.perf_counter()
+
+                    # 调试：输出 ASR 原始文本
+                    on_state({"event": "log", "message": f"ASR 原始输出: {text}"})
 
                     # 使用流式输出或非流式输出
                     if getattr(args, "enable_streaming_refine", False):
@@ -456,6 +479,9 @@ def build_ptt_hotkey_handlers(
                     else:
                         # 非流式输出：一次性返回
                         refined_text = refiner.refine(text)
+
+                    # 调试：输出精炼后文本
+                    on_state({"event": "log", "message": f"精炼后输出: {refined_text}"})
 
                     refine_latency_ms = (time.perf_counter() - t1) * 1000
                     if refined_text.strip():
