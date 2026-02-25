@@ -11,6 +11,7 @@ from typing import Any, Callable
 
 from recordian.config import ConfigManager
 
+from .audio import read_wav_mono_f32
 from .linux_commit import CommitError, get_focused_window_id, resolve_committer
 from .linux_notify import Notification, resolve_notifier
 from .linux_dictate import (
@@ -435,6 +436,13 @@ def build_ptt_hotkey_handlers(
 
         def _worker() -> None:
             try:
+                import numpy as np
+                samples = read_wav_mono_f32(audio_path)
+                rms = float(np.sqrt(np.mean(samples ** 2)))
+                if rms < 0.01:
+                    on_state({"event": "log", "message": f"静音跳过 ASR (rms={rms:.4f})"})
+                    return
+
                 t0 = time.perf_counter()
                 asr = provider.transcribe_file(audio_path, hotwords=args.hotword)
                 transcribe_latency_ms = (time.perf_counter() - t0) * 1000
