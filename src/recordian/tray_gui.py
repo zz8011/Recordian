@@ -14,6 +14,8 @@ import tkinter as tk
 from tkinter import ttk
 from typing import Any
 
+from recordian.config import ConfigManager
+
 
 DEFAULT_CONFIG_PATH = "~/.config/recordian/hotkey.json"
 
@@ -29,21 +31,6 @@ def parse_backend_event_line(line: str) -> dict[str, object] | None:
     if isinstance(obj, dict) and "event" in obj:
         return obj
     return None
-
-
-def load_runtime_config(path: Path) -> dict[str, object]:
-    if not path.exists():
-        return {}
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except Exception:  # noqa: BLE001
-        return {}
-    return data if isinstance(data, dict) else {}
-
-
-def save_runtime_config(path: Path, payload: dict[str, object]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -645,9 +632,9 @@ class TrayApp:
 
     def toggle_quick_mode(self, enabled: bool) -> None:
         """切换快速模式（跳过文字优化）- 热切换"""
-        config = load_runtime_config(self.config_path)
+        config = ConfigManager.load(self.config_path)
         config["enable_text_refine"] = not enabled  # enabled=True 表示快速模式，即不启用文字优化
-        save_runtime_config(self.config_path, config)
+        ConfigManager.save(self.config_path, config)
 
         # 热切换：只更新配置文件，不重启后端
         mode_text = "快速模式" if enabled else "质量模式"
@@ -671,9 +658,9 @@ class TrayApp:
 
     def switch_preset(self, preset_name: str) -> None:
         """切换文字优化 preset（热切换，不重启后端）"""
-        config = load_runtime_config(self.config_path)
+        config = ConfigManager.load(self.config_path)
         config["refine_preset"] = preset_name
-        save_runtime_config(self.config_path, config)
+        ConfigManager.save(self.config_path, config)
 
         # 热切换：只更新配置文件，后端下次录音时会读取新配置
         # 不需要重启后端，避免重新加载模型
@@ -706,7 +693,7 @@ class TrayApp:
             self._settings_window.lift()
             return
 
-        current = load_runtime_config(self.config_path)
+        current = ConfigManager.load(self.config_path)
         win = tk.Toplevel(self.root)
         win.title("Recordian Settings")
         win.geometry("600x700")
@@ -828,7 +815,7 @@ class TrayApp:
                 "remote_code": current.get("remote_code", ""),
                 "hotword": current.get("hotword", []),
             }
-            save_runtime_config(self.config_path, payload)
+            ConfigManager.save(self.config_path, payload)
             status_var.set(f"已保存并重启后端 ({self.config_path})")
             self.restart_backend()
 
@@ -926,7 +913,7 @@ class TrayApp:
 
         # Quick Mode toggle
         quick_mode_item = Gtk.CheckMenuItem(label="快速模式（跳过文字优化）")
-        config = load_runtime_config(self.config_path)
+        config = ConfigManager.load(self.config_path)
         quick_mode_enabled = not config.get("enable_text_refine", True)
         quick_mode_item.set_active(quick_mode_enabled)
         quick_mode_item.connect("toggled", lambda item: self.root.after(0, lambda: self.toggle_quick_mode(item.get_active())))
