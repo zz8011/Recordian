@@ -439,7 +439,7 @@ def build_ptt_hotkey_handlers(
                 import numpy as np
                 samples = read_wav_mono_f32(audio_path)
                 rms = float(np.sqrt(np.mean(samples ** 2)))
-                if rms < 0.01:
+                if rms < 0.003:
                     on_state({"event": "log", "message": f"静音跳过 ASR (rms={rms:.4f})"})
                     return
 
