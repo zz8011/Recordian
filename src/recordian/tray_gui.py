@@ -14,36 +14,12 @@ import tkinter as tk
 from tkinter import ttk
 from typing import Any
 
+from recordian.config import ConfigManager
+from recordian.backend_manager import BackendManager, parse_backend_event_line
+from recordian.waveform_renderer import WaveformRenderer
+
 
 DEFAULT_CONFIG_PATH = "~/.config/recordian/hotkey.json"
-
-
-def parse_backend_event_line(line: str) -> dict[str, object] | None:
-    line = line.strip()
-    if not line:
-        return None
-    try:
-        obj = json.loads(line)
-    except json.JSONDecodeError:
-        return None
-    if isinstance(obj, dict) and "event" in obj:
-        return obj
-    return None
-
-
-def load_runtime_config(path: Path) -> dict[str, object]:
-    if not path.exists():
-        return {}
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except Exception:  # noqa: BLE001
-        return {}
-    return data if isinstance(data, dict) else {}
-
-
-def save_runtime_config(path: Path, payload: dict[str, object]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -93,365 +69,6 @@ def get_logo_path(status: str) -> Path:
     return logo_path
 
 
-class WaveOverlay:
-    def __init__(self, root: tk.Tk) -> None:
-        self.root = root
-        self.state = "idle"
-        self.amplitude = 0.0
-        self.target_amplitude = 0.0
-        self.level_boost = 0.0
-        self.base_mode = 0.0
-        self.detail = ""
-        self.hide_deadline: float | None = None
-        self.smooth_audio = 0.0  # Smoothed audio level for scaling
-        self._cmd_queue: queue.SimpleQueue[tuple[str, object]] = queue.SimpleQueue()
-        self._ready = threading.Event()
-        self._init_error: Exception | None = None
-        self._thread = threading.Thread(target=self._run_shader_loop, daemon=True)
-        self._thread.start()
-        self._ready.wait(timeout=3.0)
-        if self._init_error is not None:
-            raise RuntimeError(f"shader overlay init failed: {self._init_error}") from self._init_error
-
-    def _run_shader_loop(self) -> None:
-        try:
-            import pyglet
-            from pyglet import gl
-            from pyglet.graphics.shader import Shader, ShaderProgram
-        except Exception as exc:  # noqa: BLE001
-            self._init_error = exc
-            self._ready.set()
-            return
-
-        vertex_src = """
-#version 330 core
-in vec2 position;
-out vec2 v_uv;
-void main() {
-    v_uv = position * 0.5 + 0.5;
-    gl_Position = vec4(position, 0.0, 1.0);
-}
-"""
-        fragment_src = """
-#version 330 core
-in vec2 v_uv;
-out vec4 fragColor;
-uniform vec2 u_resolution;
-uniform float u_audio;
-uniform float u_motion;
-uniform float u_time;
-
-float SoftEllipse(vec2 uv, float width, float height, float blur) {
-    float d = length(uv / vec2(width, height));
-    return smoothstep(1.0, 1.0 - blur, d);
-}
-
-void main() {
-    vec2 uv = (v_uv - 0.5) * 2.0;
-    uv.x *= u_resolution.x / u_resolution.y;
-
-    // Simulate audio volume
-    float vol = u_audio * u_motion;
-
-    // Sphere projection distortion
-    float len = length(uv * 1.8);
-    vec2 distortedUV = uv;
-    if(len < 1.0) {
-        float as = tan(asin(len));
-        distortedUV *= as * 0.4;
-    }
-
-    vec3 finalColor = vec3(0.0);
-
-    // Define four vibrant colors
-    vec3 c1 = vec3(0.1, 0.5, 1.0);  // Bright blue
-    vec3 c2 = vec3(0.8, 0.2, 0.9);  // Violet
-    vec3 c3 = vec3(0.1, 0.9, 0.7);  // Aurora green
-    vec3 c4 = vec3(1.0, 0.4, 0.4);  // Coral red
-
-    // Draw multiple dynamic ellipse layers
-    for(int i = 0; i < 4; i++) {
-        float fi = float(i);
-
-        // Slow base speed when no volume
-        float baseSpeed = 0.15 + fi * 0.03;  // Slightly faster base speed
-
-        // Volume increases speed moderately
-        float volumeSpeed = vol * 1.8;  // Further reduced for even gentler acceleration
-        float totalSpeed = baseSpeed + volumeSpeed;
-
-        float t = u_time * totalSpeed;
-
-        // Calculate irregular motion trajectory - FIXED amplitude
-        vec2 offset = vec2(
-            sin(t + fi * 1.5) * 0.18,  // Fixed amplitude
-            cos(t * 0.7 + fi * 2.0) * 0.12  // Fixed amplitude
-        );
-
-        // Size changes slightly with volume
-        float size = 0.28 + vol * 0.5 + sin(t * 0.5) * 0.06;
-        float mask = SoftEllipse(distortedUV + offset, size, size * 0.7, 0.8);
-
-        // Color blending
-        vec3 col = c1;
-        if(i==1) col = c2;
-        if(i==2) col = c3;
-        if(i==3) col = c4;
-
-        finalColor += col * mask * 0.7;
-    }
-
-    // Core highlight - much softer and less visible
-    float core = SoftEllipse(distortedUV, 0.08 + vol * 0.08, 0.04, 0.95);
-    finalColor += vec3(1.0, 1.0, 1.0) * core * 0.2;  // Reduced from 0.5 to 0.2
-
-    // Background glow
-    vec3 bg = vec3(0.02, 0.03, 0.08) * (1.0 - length(uv));
-
-    // Create circular mask
-    float distFromCenter = length(uv);
-    float scale = 1.0 + vol * 0.5;
-    float circularMask = smoothstep(0.55 / scale, 0.50 / scale, distFromCenter);
-
-    fragColor = vec4(finalColor + bg, circularMask * 0.95);
-}
-"""
-        try:
-            config = gl.Config(double_buffer=True, alpha_size=8)
-            overlay_style = getattr(
-                pyglet.window.Window,
-                "WINDOW_STYLE_OVERLAY",
-                pyglet.window.Window.WINDOW_STYLE_BORDERLESS,
-            )
-            window = pyglet.window.Window(
-                width=352,
-                height=352,
-                caption="Recordian Overlay",
-                style=overlay_style,
-                resizable=False,
-                visible=False,
-                config=config,
-            )
-        except Exception:
-            overlay_style = getattr(
-                pyglet.window.Window,
-                "WINDOW_STYLE_OVERLAY",
-                pyglet.window.Window.WINDOW_STYLE_BORDERLESS,
-            )
-            window = pyglet.window.Window(
-                width=352,
-                height=352,
-                caption="Recordian Overlay",
-                style=overlay_style,
-                resizable=False,
-                visible=False,
-            )
-        window.set_vsync(False)
-        gl.glClearColor(0.0, 0.0, 0.0, 0.0)
-        gl.glEnable(gl.GL_BLEND)
-        gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
-        try:
-            # Keep overlay visible but non-interactive to avoid stealing input focus.
-            window.set_mouse_passthrough(True)
-        except Exception:
-            pass
-
-        # Find the screen containing the mouse cursor for multi-monitor support
-        display = window.display
-        try:
-            # Get mouse position using X11
-            import ctypes
-            from pyglet.libs.x11 import xlib
-
-            x_display = getattr(window, "_x_display", None)
-            if x_display is not None:
-                root = xlib.XDefaultRootWindow(x_display)
-                root_return = xlib.Window()
-                child_return = xlib.Window()
-                root_x = ctypes.c_int()
-                root_y = ctypes.c_int()
-                win_x = ctypes.c_int()
-                win_y = ctypes.c_int()
-                mask = ctypes.c_uint()
-
-                xlib.XQueryPointer(
-                    x_display, root,
-                    ctypes.byref(root_return), ctypes.byref(child_return),
-                    ctypes.byref(root_x), ctypes.byref(root_y),
-                    ctypes.byref(win_x), ctypes.byref(win_y),
-                    ctypes.byref(mask)
-                )
-
-                mouse_x, mouse_y = root_x.value, root_y.value
-
-                # Find which screen contains the mouse
-                target_screen = None
-                for screen in display.get_screens():
-                    if (screen.x <= mouse_x < screen.x + screen.width and
-                        screen.y <= mouse_y < screen.y + screen.height):
-                        target_screen = screen
-                        break
-
-                # Fallback to default screen if mouse position detection fails
-                if target_screen is None:
-                    target_screen = display.get_default_screen()
-            else:
-                target_screen = display.get_default_screen()
-        except Exception:
-            # Fallback to default screen on any error
-            target_screen = display.get_default_screen()
-
-        # Calculate position relative to the target screen
-        _pos_x = max(0, target_screen.x + (target_screen.width - window.width) // 2)
-        # set_location uses top-left screen coords (y=0 is top).
-        # Place window at bottom center of the target screen (with some margin).
-        _pos_y = max(0, target_screen.y + target_screen.height - window.height - 80)
-
-        try:
-            from pyglet.libs.x11 import xlib as x11
-
-            display = getattr(window, "_x_display", None)
-            xwin = getattr(window, "_window", None)
-            if display is not None and xwin is not None:
-                # Disable input focus
-                wm_hints = x11.XAllocWMHints()
-                if wm_hints:
-                    wm_hints.contents.flags = x11.InputHint
-                    wm_hints.contents.input = 0
-                    x11.XSetWMHints(display, xwin, wm_hints)
-                    x11.XFree(wm_hints)
-
-                # Set PPosition flag so WM respects our position on first map
-                sz_hints = x11.XAllocSizeHints()
-                if sz_hints:
-                    sz_hints.contents.flags = x11.PPosition | x11.USPosition
-                    sz_hints.contents.x = _pos_x
-                    sz_hints.contents.y = _pos_y
-                    x11.XSetWMNormalHints(display, xwin, sz_hints)
-                    x11.XFree(sz_hints)
-
-                x11.XFlush(display)
-        except Exception:
-            pass
-
-        window.set_location(_pos_x, _pos_y)
-
-        program = ShaderProgram(
-            Shader(vertex_src, "vertex"),
-            Shader(fragment_src, "fragment"),
-        )
-        quad = program.vertex_list(
-            4,
-            gl.GL_TRIANGLE_STRIP,
-            position=("f", [-1.0, -1.0, 1.0, -1.0, -1.0, 1.0, 1.0, 1.0]),
-        )
-        # Label removed - no text display on overlay
-        start_time = time.monotonic()
-        phase = 0.0
-
-        @window.event
-        def on_show() -> None:
-            # Window manager may ignore set_location before the window is mapped.
-            # Re-apply position every time the window becomes visible.
-            window.set_location(_pos_x, _pos_y)
-
-        @window.event
-        def on_draw() -> None:
-            window.clear()
-            program.use()
-            program["u_resolution"] = (float(window.width), float(window.height))
-            program["u_time"] = float(time.monotonic() - start_time + phase)
-            # Use smoothed audio level for scaling
-            program["u_audio"] = float(max(0.0, min(1.0, self.smooth_audio)))
-            motion = 0.0
-            if self.state == "recording":
-                motion = max(0.0, min(1.0, (self.amplitude - 0.10) / 0.62))
-            elif self.state == "processing":
-                motion = 0.0  # Completely still in processing state
-            program["u_motion"] = float(motion)
-            quad.draw(gl.GL_TRIANGLE_STRIP)
-            # Text label removed - no text display on overlay
-
-        def update(dt: float) -> None:
-            nonlocal phase
-            phase += dt
-            while True:
-                try:
-                    cmd, payload = self._cmd_queue.get_nowait()
-                except queue.Empty:
-                    break
-                if cmd == "quit":
-                    pyglet.app.exit()
-                    return
-                if cmd == "state":
-                    state, detail = payload  # type: ignore[misc]
-                    self.state = str(state)
-                    self.detail = str(detail)
-                    self.hide_deadline = None
-                    if self.state == "recording":
-                        self.target_amplitude = 0.0
-                        self.level_boost = 0.0
-                        self.amplitude = 0.0
-                        self.base_mode = 1.0
-                        window.set_location(_pos_x, _pos_y)
-                        window.set_visible(True)
-                    elif self.state == "processing":
-                        # Processing: return to idle state (original size and color)
-                        self.target_amplitude = 0.0
-                        self.amplitude = 0.0
-                        self.base_mode = 0.0
-                        self.level_boost = 0.0
-                        self.hide_deadline = time.time() + 0.50
-                    elif self.state == "error":
-                        self.target_amplitude = 0.50
-                        self.base_mode = 3.0
-                        window.set_location(_pos_x, _pos_y)
-                        window.set_visible(True)
-                        self.hide_deadline = time.time() + 1.55
-                    else:
-                        self.target_amplitude = 0.0
-                        self.base_mode = 0.0
-                        self.hide_deadline = time.time() + (1.1 if self.detail.strip() else 0.35)
-                elif cmd == "level":
-                    level = max(0.0, min(1.0, float(payload)))  # type: ignore[arg-type]
-                    # Gate ambient noise: only pass through signal above threshold.
-                    # Higher threshold to filter out more background noise
-                    self.level_boost = max(0.0, level - 0.25)  # Increased from 0.15 to 0.25
-
-            target = self.target_amplitude
-            if self.state == "recording":
-                target = min(1.0, target + self.level_boost * 0.6)
-                self.level_boost *= 0.60  # faster decay for smoother animation
-                # Smooth audio level for scaling - much faster response for real-time feel
-                self.smooth_audio += (self.amplitude - self.smooth_audio) * 0.45  # Increased from 0.25
-            elif self.state == "processing":
-                # Keep still - no animation in processing state
-                target = 0.0
-                # Smooth decrease back to 0
-                self.smooth_audio += (0.0 - self.smooth_audio) * 0.45
-            else:
-                # Other states: reset smoothly
-                self.smooth_audio += (0.0 - self.smooth_audio) * 0.45
-            self.amplitude += (target - self.amplitude) * 0.035  # increased from 0.018 for faster response
-
-            if self.hide_deadline is not None and time.time() >= self.hide_deadline:
-                window.set_visible(False)
-                self.hide_deadline = None
-
-        pyglet.clock.schedule_interval(update, 1.0 / 60.0)
-        self._ready.set()
-        pyglet.app.run()
-
-    def set_state(self, state: str, detail: str = "") -> None:
-        self._cmd_queue.put(("state", (state, detail)))
-
-    def set_level(self, level: float) -> None:
-        self._cmd_queue.put(("level", float(level)))
-
-    def shutdown(self) -> None:
-        self._cmd_queue.put(("quit", None))
-        self._thread.join(timeout=1.5)
-
 
 class TrayApp:
     def __init__(self, args: argparse.Namespace) -> None:
@@ -465,17 +82,26 @@ class TrayApp:
         self.root.withdraw()
         self.root.title("Recordian Tray")
 
-        self.overlay = WaveOverlay(self.root)
+        self.overlay = WaveformRenderer(self.root)
         self.indicator = None
 
-        self.backend_proc: subprocess.Popen[str] | None = None
-        self.backend_threads: list[threading.Thread] = []
+        self.backend = BackendManager(
+            self.config_path,
+            self.events,
+            on_state_change=self._on_backend_state_change,
+            on_menu_update=self._update_tray_menu,
+        )
         self._settings_window: tk.Toplevel | None = None
+
+    def _on_backend_state_change(self, running: bool, status: str, detail: str) -> None:
+        self.state.backend_running = running
+        self.state.status = status
+        self.state.detail = detail
 
     def run(self) -> None:
         self._start_tray()
         if not self.args.no_auto_start:
-            self.start_backend()
+            self.backend.start()
         self.root.after(80, self._poll_events)
         self.root.mainloop()
 
@@ -589,65 +215,11 @@ class TrayApp:
                     print(msg, file=sys.stderr, flush=True)
         self._update_tray_menu()
 
-    def _backend_cmd(self) -> list[str]:
-        return [
-            sys.executable,
-            "-m",
-            "recordian.hotkey_dictate",
-            "--config-path",
-            str(self.config_path),
-            "--notify-backend",
-            "none",
-        ]
-
-    def start_backend(self) -> None:
-        if self.backend_proc is not None and self.backend_proc.poll() is None:
-            return
-        cmd = self._backend_cmd()
-        self.backend_proc = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            bufsize=1,
-        )
-        self.state.backend_running = True
-        self.state.status = "starting"
-        self.state.detail = "Starting backend..."
-        self._update_tray_menu()
-
-        assert self.backend_proc.stdout is not None
-        assert self.backend_proc.stderr is not None
-        t_out = threading.Thread(target=self._read_stream, args=(self.backend_proc.stdout, False), daemon=True)
-        t_err = threading.Thread(target=self._read_stream, args=(self.backend_proc.stderr, True), daemon=True)
-        t_wait = threading.Thread(target=self._wait_backend, daemon=True)
-        self.backend_threads = [t_out, t_err, t_wait]
-        for t in self.backend_threads:
-            t.start()
-
-    def stop_backend(self) -> None:
-        proc = self.backend_proc
-        if proc is None:
-            return
-        if proc.poll() is None:
-            proc.terminate()
-            try:
-                proc.wait(timeout=2.0)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                proc.wait(timeout=2.0)
-        self.backend_proc = None
-        self.events.put({"event": "stopped"})
-
-    def restart_backend(self) -> None:
-        self.stop_backend()
-        self.start_backend()
-
     def toggle_quick_mode(self, enabled: bool) -> None:
         """切换快速模式（跳过文字优化）- 热切换"""
-        config = load_runtime_config(self.config_path)
+        config = ConfigManager.load(self.config_path)
         config["enable_text_refine"] = not enabled  # enabled=True 表示快速模式，即不启用文字优化
-        save_runtime_config(self.config_path, config)
+        ConfigManager.save(self.config_path, config)
 
         # 热切换：只更新配置文件，不重启后端
         mode_text = "快速模式" if enabled else "质量模式"
@@ -671,9 +243,9 @@ class TrayApp:
 
     def switch_preset(self, preset_name: str) -> None:
         """切换文字优化 preset（热切换，不重启后端）"""
-        config = load_runtime_config(self.config_path)
+        config = ConfigManager.load(self.config_path)
         config["refine_preset"] = preset_name
-        save_runtime_config(self.config_path, config)
+        ConfigManager.save(self.config_path, config)
 
         # 热切换：只更新配置文件，后端下次录音时会读取新配置
         # 不需要重启后端，避免重新加载模型
@@ -683,30 +255,12 @@ class TrayApp:
         self._update_tray_menu()
 
 
-    def _read_stream(self, stream, is_stderr: bool) -> None:  # noqa: ANN001
-        for raw in iter(stream.readline, ""):
-            event = parse_backend_event_line(raw)
-            if event is not None:
-                self.events.put(event)
-            elif is_stderr:
-                text = raw.strip()
-                if text:
-                    self.events.put({"event": "log", "message": text})
-        stream.close()
-
-    def _wait_backend(self) -> None:
-        proc = self.backend_proc
-        if proc is None:
-            return
-        code = proc.wait()
-        self.events.put({"event": "backend_exited", "code": code})
-
     def open_settings(self) -> None:
         if self._settings_window is not None and self._settings_window.winfo_exists():
             self._settings_window.lift()
             return
 
-        current = load_runtime_config(self.config_path)
+        current = ConfigManager.load(self.config_path)
         win = tk.Toplevel(self.root)
         win.title("Recordian Settings")
         win.geometry("600x700")
@@ -828,9 +382,9 @@ class TrayApp:
                 "remote_code": current.get("remote_code", ""),
                 "hotword": current.get("hotword", []),
             }
-            save_runtime_config(self.config_path, payload)
+            ConfigManager.save(self.config_path, payload)
             status_var.set(f"已保存并重启后端 ({self.config_path})")
-            self.restart_backend()
+            self.backend.restart()
 
         btns = ttk.Frame(frm)
         btns.grid(row=len(fields) + 1, column=0, columnspan=2, sticky="e", pady=10)
@@ -914,19 +468,19 @@ class TrayApp:
 
         # Start Backend
         start_item = Gtk.MenuItem(label="Start Backend")
-        start_item.connect("activate", lambda _: self.root.after(0, self.start_backend))
+        start_item.connect("activate", lambda _: self.root.after(0, self.backend.start))
         menu.append(start_item)
 
         # Stop Backend
         stop_item = Gtk.MenuItem(label="Stop Backend")
-        stop_item.connect("activate", lambda _: self.root.after(0, self.stop_backend))
+        stop_item.connect("activate", lambda _: self.root.after(0, self.backend.stop))
         menu.append(stop_item)
 
         menu.append(Gtk.SeparatorMenuItem())
 
         # Quick Mode toggle
         quick_mode_item = Gtk.CheckMenuItem(label="快速模式（跳过文字优化）")
-        config = load_runtime_config(self.config_path)
+        config = ConfigManager.load(self.config_path)
         quick_mode_enabled = not config.get("enable_text_refine", True)
         quick_mode_item.set_active(quick_mode_enabled)
         quick_mode_item.connect("toggled", lambda item: self.root.after(0, lambda: self.toggle_quick_mode(item.get_active())))
@@ -1032,7 +586,7 @@ class TrayApp:
                 self._glib.idle_add(_gtk_update)
 
     def quit(self) -> None:
-        self.stop_backend()
+        self.backend.stop()
         self.overlay.shutdown()
 
         # Stop AppIndicator

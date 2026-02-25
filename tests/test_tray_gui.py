@@ -6,10 +6,9 @@ from recordian.tray_gui import (
     _blend_hex,
     _hex_with_alpha,
     _truncate,
-    load_runtime_config,
-    parse_backend_event_line,
-    save_runtime_config,
 )
+from recordian.backend_manager import parse_backend_event_line
+from recordian.config import ConfigManager
 
 
 def test_parse_backend_event_line_json_only() -> None:
@@ -21,8 +20,8 @@ def test_parse_backend_event_line_json_only() -> None:
 def test_load_save_runtime_config(tmp_path: Path) -> None:
     path = tmp_path / "cfg.json"
     payload = {"hotkey": "<ctrl>+<alt>+v", "duration": 3}
-    save_runtime_config(path, payload)
-    loaded = load_runtime_config(path)
+    ConfigManager.save(path, payload)
+    loaded = ConfigManager.load(path)
     assert loaded == payload
 
 

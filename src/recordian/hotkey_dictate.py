@@ -9,6 +9,8 @@ from tempfile import TemporaryDirectory
 import time
 from typing import Any, Callable
 
+from recordian.config import ConfigManager
+
 from .linux_commit import CommitError, get_focused_window_id, resolve_committer
 from .linux_notify import Notification, resolve_notifier
 from .linux_dictate import (
@@ -540,10 +542,7 @@ def _parse_args_with_config(parser: argparse.ArgumentParser) -> argparse.Namespa
 
     config_path = Path(pre_args.config_path).expanduser()
     if not pre_args.no_load_config and config_path.exists():
-        try:
-            payload = json.loads(config_path.read_text(encoding="utf-8"))
-        except Exception:  # noqa: BLE001
-            payload = {}
+        payload = ConfigManager.load(config_path)
         if isinstance(payload, dict):
             allowed = {
                 action.dest
@@ -601,8 +600,7 @@ def _save_runtime_config(args: argparse.Namespace) -> None:
         "enable_streaming_refine": getattr(args, "enable_streaming_refine", False),
     }
     path = Path(args.config_path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    ConfigManager.save(path, payload)
 
 
 def parse_hotkey_spec(spec: str) -> set[str]:

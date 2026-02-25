@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from .base_text_refiner import BaseTextRefiner
 
-class LlamaCppTextRefiner:
+
+class LlamaCppTextRefiner(BaseTextRefiner):
     """基于 llama.cpp 的文本精炼器
 
     使用 llama-cpp-python 进行本地推理，支持：
@@ -25,6 +27,22 @@ class LlamaCppTextRefiner:
         prompt_template: str | None = None,
         enable_thinking: bool = False,
     ) -> None:
+        super().__init__(
+            max_tokens=max_new_tokens,
+            temperature=temperature,
+            prompt_template=prompt_template,
+            enable_thinking=enable_thinking,
+        )
+        self.model_path = model_path
+        self.max_new_tokens = max_new_tokens
+        self._n_gpu_layers = n_gpu_layers
+        self._n_ctx = n_ctx
+        self._n_threads = n_threads
+        self._llm = None
+
+    def _lazy_load(self) -> None:
+        if self._llm is not None:
+            return
         try:
             from llama_cpp import Llama
         except ModuleNotFoundError as exc:
@@ -32,42 +50,19 @@ class LlamaCppTextRefiner:
                 "llama-cpp-python 未安装。请执行:\n"
                 "CMAKE_ARGS=\"-DLLAMA_CUDA=on\" pip install llama-cpp-python"
             ) from exc
-
-        self.model_path = model_path
-        self.max_new_tokens = max_new_tokens
-        self.temperature = temperature
-        self.prompt_template = prompt_template
-        self.enable_thinking = enable_thinking
-
-        # 初始化 llama.cpp 模型
-        self.llm = Llama(
-            model_path=model_path,
-            n_gpu_layers=n_gpu_layers,
-            n_ctx=n_ctx,
-            n_threads=n_threads,
+        self._llm = Llama(
+            model_path=self.model_path,
+            n_gpu_layers=self._n_gpu_layers,
+            n_ctx=self._n_ctx,
+            n_threads=self._n_threads,
             verbose=False,
-            chat_format="chatml",  # Qwen 使用 ChatML 格式
+            chat_format="chatml",
         )
 
     @property
     def provider_name(self) -> str:
         model_name = Path(self.model_path).stem
         return f"llamacpp:{model_name}"
-
-    def update_preset(self, preset_name: str) -> None:
-        """动态更新 preset（热切换）
-
-        Args:
-            preset_name: preset 名称（如 "default", "formal" 等）
-        """
-        from recordian.preset_manager import PresetManager
-
-        preset_mgr = PresetManager()
-        try:
-            self.prompt_template = preset_mgr.load_preset(preset_name)
-        except Exception:
-            # 如果加载失败，保持当前 preset
-            pass
 
     def refine(self, text: str) -> str:
         """精炼文本
@@ -81,11 +76,13 @@ class LlamaCppTextRefiner:
         if not text.strip():
             return ""
 
+        self._lazy_load()
+
         # 根据 prompt_template 判断使用哪种 Few-shot
         prompt = self._build_fewshot_prompt(text)
 
         # 调用 llama.cpp 推理（使用原始 completion API）
-        result = self.llm(
+        result = self._llm(
             prompt,
             max_tokens=min(self.max_new_tokens, len(text) * 2 + 50),  # 增加 token 限制
             temperature=0.1,  # 稍微增加随机性，避免过于死板
@@ -118,31 +115,6 @@ class LlamaCppTextRefiner:
             return generated
 
         return ""
-
-    def _remove_think_tags(self, text: str) -> str:
-        """移除文本中的 <think> 标签及其内容"""
-        if not text:
-            return ""
-
-        import re
-
-        # Method 1: Remove everything between <think> and </think>
-        result = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL)
-        result = result.strip()
-
-        # Method 2: If still contains <think>, try to extract after </think>
-        if '<think>' in result:
-            parts = result.split('</think>')
-            if len(parts) > 1:
-                result = parts[-1].strip()
-            else:
-                # No closing tag, remove everything after <think>
-                result = result.split('<think>')[0].strip()
-
-        # Method 3: Remove any remaining <think> or </think> tags
-        result = result.replace('<think>', '').replace('</think>', '').strip()
-
-        return result
 
     def _build_fewshot_prompt(self, text: str) -> str:
         """根据 prompt_template 动态构建 Few-shot prompt
