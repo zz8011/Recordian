@@ -436,22 +436,26 @@ def build_ptt_hotkey_handlers(
 
         def _worker() -> None:
             try:
-                import numpy as np
-                samples = read_wav_mono_f32(audio_path)
-                rms = float(np.sqrt(np.mean(samples ** 2)))
-                if rms < 0.003:
-                    on_state({"event": "log", "message": f"静音跳过 ASR (rms={rms:.4f})"})
-                    on_result({"event": "result", "result": {
-                        "audio_path": str(audio_path),
-                        "record_backend": recorder_backend,
-                        "duration_s": 0.0,
-                        "record_latency_ms": 0.0,
-                        "transcribe_latency_ms": 0.0,
-                        "refine_latency_ms": 0.0,
-                        "text": "",
-                        "commit": {"backend": "none", "committed": False, "detail": "silence_skipped"},
-                    }})
-                    return
+                # 静音检测：仅对 WAV 格式有效，OGG 等格式跳过
+                try:
+                    import numpy as np
+                    samples = read_wav_mono_f32(audio_path)
+                    rms = float(np.sqrt(np.mean(samples ** 2)))
+                    if rms < 0.003:
+                        on_state({"event": "log", "message": f"静音跳过 ASR (rms={rms:.4f})"})
+                        on_result({"event": "result", "result": {
+                            "audio_path": str(audio_path),
+                            "record_backend": recorder_backend,
+                            "duration_s": 0.0,
+                            "record_latency_ms": 0.0,
+                            "transcribe_latency_ms": 0.0,
+                            "refine_latency_ms": 0.0,
+                            "text": "",
+                            "commit": {"backend": "none", "committed": False, "detail": "silence_skipped"},
+                        }})
+                        return
+                except Exception:
+                    pass  # 非 WAV 格式或读取失败，跳过静音检测继续正常流程
 
                 t0 = time.perf_counter()
                 asr = provider.transcribe_file(audio_path, hotwords=args.hotword)
