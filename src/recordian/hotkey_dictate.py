@@ -441,6 +441,16 @@ def build_ptt_hotkey_handlers(
                 rms = float(np.sqrt(np.mean(samples ** 2)))
                 if rms < 0.003:
                     on_state({"event": "log", "message": f"静音跳过 ASR (rms={rms:.4f})"})
+                    on_result({"event": "result", "result": {
+                        "audio_path": str(audio_path),
+                        "record_backend": recorder_backend,
+                        "duration_s": 0.0,
+                        "record_latency_ms": 0.0,
+                        "transcribe_latency_ms": 0.0,
+                        "refine_latency_ms": 0.0,
+                        "text": "",
+                        "commit": {"backend": "none", "committed": False, "detail": "silence_skipped"},
+                    }})
                     return
 
                 t0 = time.perf_counter()
