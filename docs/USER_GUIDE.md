@@ -211,3 +211,261 @@ export RECORDIAN_DEBUG=1              # 调试模式
 export RECORDIAN_CLIPBOARD_TIMEOUT_MS=500
 export RECORDIAN_PASTE_SHORTCUT="ctrl+v"
 ```
+
+---
+
+## 4. 文本精炼器
+
+Recordian 支持三种文本精炼后端，可按需选择。
+
+### 4.1 本地 Qwen3（transformers）
+
+使用 Qwen3-0.6B 模型，完全本地运行。
+
+**安装：**
+
+```bash
+pip install transformers torch
+modelscope download --model Qwen/Qwen3-0.6B --local_dir ./models/Qwen3-0.6B
+```
+
+**配置：**
+
+```json
+{
+  "refine_provider": "local",
+  "refine_model": "models/Qwen3-0.6B"
+}
+```
+
+**特点：** 速度约 3s，显存约 1.5GB，完全本地，免费。
+
+### 4.2 llama.cpp（GGUF 量化）
+
+使用 GGUF 量化模型，显存占用更低，速度更快。
+
+**安装 llama-cpp-python（带 CUDA）：**
+
+```bash
+CMAKE_ARGS="-DLLAMA_CUDA=on" pip install llama-cpp-python
+```
+
+**转换模型为 GGUF 格式：**
+
+```bash
+git clone https://github.com/ggerganov/llama.cpp
+cd llama.cpp && make
+
+# 转换为 FP16
+python convert_hf_to_gguf.py /path/to/Qwen3-0.6B --outtype f16
+
+# 量化为 Q4_K_M（推荐）
+./llama-quantize ggml-model-f16.gguf qwen3-0.6b-q4_k_m.gguf Q4_K_M
+```
+
+量化选项：
+- **Q4_K_M**：推荐，平衡速度和质量，约 400MB
+- **Q5_K_M**：质量更高，约 500MB
+- **Q8_0**：接近原始质量，约 800MB
+
+**配置：**
+
+```json
+{
+  "refine_provider": "llamacpp",
+  "refine_model": "/path/to/qwen3-0.6b-q4_k_m.gguf",
+  "refine_n_gpu_layers": -1
+}
+```
+
+`refine_n_gpu_layers` 说明：
+- `-1`：全部层放 GPU（推荐，显存充足时）
+- `0`：全部用 CPU
+- `10`：部分层放 GPU（显存不足时）
+
+**性能对比：**
+
+| 方案 | 速度 | 显存 | 推荐场景 |
+|------|------|------|---------|
+| transformers | ~3s | ~1.5GB | 质量优先 |
+| llama.cpp Q4 | ~1s | ~400MB | 速度/显存优先 |
+
+### 4.3 云端 LLM（OpenAI 兼容）
+
+支持任何 OpenAI 兼容的 API（Claude、GPT、MiniMax 等）。
+
+**配置：**
+
+```json
+{
+  "refine_provider": "cloud",
+  "refine_api_base": "https://api.example.com",
+  "refine_api_key": "your-api-key",
+  "refine_api_model": "claude-3-5-sonnet-20241022"
+}
+```
+
+**特点：** 质量最高，需要网络，按量付费。
+
+---
+
+## 5. Preset 系统
+
+### 内置 Preset
+
+| Preset | 用途 | 效果示例 |
+|--------|------|---------|
+| `default` | 日常口语整理 | 去除语气词、重复词，添加标点 |
+| `formal` | 正式书面语 | 口语 → 书面语转换 |
+| `summary` | 简洁总结 | 提炼核心内容 |
+| `meeting` | 会议纪要 | 整理为列表格式 |
+| `technical` | 技术文档 | 保留技术术语，结构清晰 |
+
+### 自定义 Preset
+
+在 `presets/` 目录下创建 `.md` 文件：
+
+```markdown
+# 我的自定义预设
+
+将以下口语整理为代码注释风格：
+- 简洁明了
+- 使用技术术语
+- 数字使用阿拉伯数字
+
+原文：{text}
+```
+
+保存为 `presets/my-preset.md`，然后在配置中使用：
+
+```json
+{
+  "refine_preset": "my-preset"
+}
+```
+
+**关键词触发机制（仅 llama.cpp 后端）：**
+
+Preset 文件中的关键词会影响 Few-shot 示例的生成：
+- `正式`、`书面语` → 正式书面语示例
+- `会议`、`纪要` → 会议纪要格式示例
+- `技术`、`文档` → 技术文档风格示例
+- `数字`、`阿拉伯` → 数字转换示例
+- `分段`、`换行` → 分段示例
+
+### 热切换 Preset
+
+右键托盘图标 → Preset → 选择，无需重启即可生效。
+
+---
+
+## 6. 热键配置
+
+### 触发模式
+
+| 模式 | 操作 | 适合场景 |
+|------|------|---------|
+| `ptt` | 按住录音，松开识别 | 快速短句输入 |
+| `toggle` | 按一次开始，再按停止 | 长时间录音 |
+| `oneshot` | 按一次录音固定时长 | 固定时长场景 |
+
+### 热键格式
+
+```json
+{
+  "hotkey": "<ctrl_r>",
+  "toggle_hotkey": "<ctrl>+<space>",
+  "exit_hotkey": "<ctrl>+<alt>+q",
+  "trigger_mode": "ptt"
+}
+```
+
+常用热键格式：
+- `<ctrl_r>`：右 Ctrl
+- `<ctrl_l>`：左 Ctrl
+- `<alt>+<space>`：Alt+Space
+- `<ctrl>+<alt>+r`：Ctrl+Alt+R
+
+### ASR Context（专业词汇）
+
+提高专业术语识别准确率：
+
+```json
+{
+  "asr_context": "Kubernetes, Docker, React, TypeScript, PostgreSQL"
+}
+```
+
+---
+
+## 7. 常见问题
+
+### 模型加载失败
+
+```bash
+# 检查 CUDA 是否可用
+python3 -c "import torch; print(torch.cuda.is_available())"
+
+# 检查显存
+nvidia-smi
+```
+
+显存不足时，改用 0.6B ASR 模型或 llama.cpp 精炼器。
+
+### 热键不响应
+
+1. 检查热键格式：`<ctrl_r>` 而不是 `Ctrl+R`
+2. 确认没有其他程序占用该热键
+3. 查看终端输出的错误信息
+
+### 上屏失败
+
+```bash
+# Wayland 用户
+sudo apt install wtype
+
+# X11 用户
+sudo apt install xdotool xsel
+
+# 检查当前显示服务器
+echo $XDG_SESSION_TYPE
+```
+
+### 托盘图标不显示
+
+```bash
+# Ubuntu/Debian
+sudo apt install gir1.2-appindicator3-0.1
+
+# Arch Linux
+sudo pacman -S libappindicator-gtk3
+
+# Fedora
+sudo dnf install libappindicator-gtk3
+```
+
+### llama.cpp 编译失败
+
+```bash
+# 确认 CUDA toolkit 已安装
+nvcc --version
+
+# 指定 CUDA 路径
+CMAKE_ARGS="-DLLAMA_CUDA=on -DCMAKE_CUDA_COMPILER=/usr/local/cuda/bin/nvcc" \
+  pip install llama-cpp-python
+
+# 或使用 CPU 版本（无 CUDA）
+pip install llama-cpp-python
+```
+
+### 动画卡顿
+
+1. 检查 GPU 驱动是否正确安装
+2. 关闭其他占用 GPU 的程序
+3. 确认 pyglet 版本兼容
+
+### 卸载
+
+```bash
+./uninstall.sh
+```
