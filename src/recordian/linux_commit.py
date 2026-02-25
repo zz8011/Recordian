@@ -303,10 +303,7 @@ def _xdotool_key(shortcut: str, *, window_id: int | None = None) -> None:
         except (FileNotFoundError, subprocess.CalledProcessError):
             pass
         time.sleep(0.15)  # Electron apps need more time to transfer focus to input field
-    cmd = ["xdotool", "key", "--clearmodifiers"]
-    if window_id is not None:
-        cmd += ["--window", str(window_id)]
-    cmd.append(xdotool_key)
+    cmd = ["xdotool", "key", "--clearmodifiers", xdotool_key]
     try:
         subprocess.run(cmd, check=True)
     except FileNotFoundError as exc:
