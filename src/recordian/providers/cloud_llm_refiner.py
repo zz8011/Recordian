@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from pathlib import Path
+from .base_text_refiner import BaseTextRefiner
 
 
-class CloudLLMRefiner:
+class CloudLLMRefiner(BaseTextRefiner):
     """云端 LLM 文本精炼器：通过 API 调用外部 LLM 服务
 
     支持两种 API 格式：
@@ -23,13 +23,15 @@ class CloudLLMRefiner:
         api_format: str = "auto",  # "auto", "anthropic", "openai"
         enable_thinking: bool = False,
     ) -> None:
+        super().__init__(
+            max_tokens=max_tokens,
+            temperature=temperature,
+            prompt_template=prompt_template,
+            enable_thinking=enable_thinking,
+        )
         self.api_base = api_base.rstrip("/")
         self.api_key = api_key
         self.model = model
-        self.max_tokens = max_tokens
-        self.temperature = temperature
-        self.prompt_template = prompt_template
-        self.enable_thinking = enable_thinking
 
         # 自动检测 API 格式
         if api_format == "auto":
@@ -46,21 +48,6 @@ class CloudLLMRefiner:
     @property
     def provider_name(self) -> str:
         return f"cloud-llm:{self.model}"
-
-    def update_preset(self, preset_name: str) -> None:
-        """动态更新 preset（热切换）
-
-        Args:
-            preset_name: preset 名称（如 "default", "formal" 等）
-        """
-        from recordian.preset_manager import PresetManager
-
-        preset_mgr = PresetManager()
-        try:
-            self.prompt_template = preset_mgr.load_preset(preset_name)
-        except Exception:
-            # 如果加载失败，保持当前 preset
-            pass
 
     def refine(self, text: str) -> str:
         """精炼文本：调用云端 API
@@ -242,31 +229,6 @@ class CloudLLMRefiner:
 
         # 移除 <think> 标签
         return self._remove_think_tags(output)
-
-    def _remove_think_tags(self, text: str) -> str:
-        """移除文本中的 <think> 标签及其内容"""
-        if not text:
-            return ""
-
-        import re
-
-        # Method 1: Remove everything between <think> and </think>
-        result = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL)
-        result = result.strip()
-
-        # Method 2: If still contains <think>, try to extract after </think>
-        if '<think>' in result:
-            parts = result.split('</think>')
-            if len(parts) > 1:
-                result = parts[-1].strip()
-            else:
-                # No closing tag, remove everything after <think>
-                result = result.split('<think>')[0].strip()
-
-        # Method 3: Remove any remaining <think> or </think> tags
-        result = result.replace('<think>', '').replace('</think>', '').strip()
-
-        return result
 
     def _build_prompt(self, text: str) -> str:
         """构建文本精炼 prompt"""
