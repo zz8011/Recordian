@@ -120,7 +120,7 @@ class XdotoolClipboardCommitter(TextCommitter):
             self._clear_timer.daemon = True
             self._clear_timer.start()
 
-        time.sleep(0.05)
+        time.sleep(0.10)
         shortcut = _resolve_paste_shortcut()
         # Terminals use Ctrl+Shift+V; override if target is a terminal.
         wid = self.target_window_id
@@ -302,8 +302,11 @@ def _xdotool_key(shortcut: str, *, window_id: int | None = None) -> None:
             )
         except (FileNotFoundError, subprocess.CalledProcessError):
             pass
-        time.sleep(0.05)
-    cmd = ["xdotool", "key", "--clearmodifiers", xdotool_key]
+        time.sleep(0.15)  # Electron apps need more time to transfer focus to input field
+    cmd = ["xdotool", "key", "--clearmodifiers"]
+    if window_id is not None:
+        cmd += ["--window", str(window_id)]
+    cmd.append(xdotool_key)
     try:
         subprocess.run(cmd, check=True)
     except FileNotFoundError as exc:
