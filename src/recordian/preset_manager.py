@@ -13,6 +13,7 @@ class PresetManager:
         if not self.presets_dir.is_absolute():
             # 相对于项目根目录
             self.presets_dir = Path(__file__).parent.parent.parent / self.presets_dir
+        self._cache: dict[str, str] = {}
 
     def list_presets(self) -> list[str]:
         """列出所有可用的预设名称"""
@@ -34,6 +35,9 @@ class PresetManager:
         Raises:
             FileNotFoundError: 预设文件不存在
         """
+        if name in self._cache:
+            return self._cache[name]
+
         if "/" in name or "\\" in name or name.startswith("."):
             raise ValueError(f"非法预设名称: {name!r}")
         preset_path = self.presets_dir / f"{name}.md"
@@ -50,7 +54,9 @@ class PresetManager:
         if lines and lines[0].startswith("#"):
             lines = lines[1:]
 
-        return "\n".join(lines).strip()
+        result = "\n".join(lines).strip()
+        self._cache[name] = result
+        return result
 
     def get_preset_path(self, name: str) -> Path:
         """获取预设文件的完整路径"""
@@ -59,3 +65,7 @@ class PresetManager:
     def preset_exists(self, name: str) -> bool:
         """检查预设是否存在"""
         return self.get_preset_path(name).exists()
+
+    def clear_cache(self) -> None:
+        """清除内存缓存"""
+        self._cache.clear()
