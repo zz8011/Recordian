@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from pathlib import Path
+from .base_text_refiner import BaseTextRefiner
 
 
-class Qwen3TextRefiner:
+class Qwen3TextRefiner(BaseTextRefiner):
     """Qwen3 文本精炼器：去重、去语气词、标点修复、总结。
 
     使用 transformers 后端加载 Qwen3 Instruct 模型。
@@ -22,34 +22,22 @@ class Qwen3TextRefiner:
         prompt_template: str | None = None,
         enable_thinking: bool = False,
     ) -> None:
+        super().__init__(
+            max_tokens=max_new_tokens,
+            temperature=temperature,
+            prompt_template=prompt_template,
+            enable_thinking=enable_thinking,
+        )
         self.model_name = model_name
         self.device = device
         self.dtype = dtype
         self.max_new_tokens = max_new_tokens
-        self.temperature = temperature
-        self.prompt_template = prompt_template
-        self.enable_thinking = enable_thinking
         self._model = None
         self._tokenizer = None
 
     @property
     def provider_name(self) -> str:
         return f"qwen3-refiner:{self.model_name}"
-
-    def update_preset(self, preset_name: str) -> None:
-        """动态更新 preset（热切换）
-
-        Args:
-            preset_name: preset 名称（如 "default", "formal" 等）
-        """
-        from recordian.preset_manager import PresetManager
-
-        preset_mgr = PresetManager()
-        try:
-            self.prompt_template = preset_mgr.load_preset(preset_name)
-        except Exception:
-            # 如果加载失败，保持当前 preset
-            pass
 
     def _lazy_load(self) -> None:
         if self._model is not None:
@@ -161,28 +149,7 @@ class Qwen3TextRefiner:
         ]
 
         response = self._tokenizer.batch_decode(generated_ids, skip_special_tokens=True)[0]
-
-        # 始终移除 <think> 标签，只保留最终结果
-        result = response.strip()
-
-        # Method 1: Remove everything between <think> and </think>
-        import re
-        result = re.sub(r'<think>.*?</think>', '', result, flags=re.DOTALL)
-        result = result.strip()
-
-        # Method 2: If still starts with <think>, try to extract after </think>
-        if '<think>' in result:
-            parts = result.split('</think>')
-            if len(parts) > 1:
-                result = parts[-1].strip()
-            else:
-                # No closing tag, remove everything after <think>
-                result = result.split('<think>')[0].strip()
-
-        # Method 3: Remove any remaining <think> or </think> tags
-        result = result.replace('<think>', '').replace('</think>', '').strip()
-
-        return result
+        return self._remove_think_tags(response)
 
     def refine_stream(self, text: str):
         """流式精炼文本：逐 token 生成输出。
