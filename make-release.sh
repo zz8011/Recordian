@@ -1,18 +1,41 @@
 #!/bin/bash
 # Recordian Release 打包脚本
 
-set -e
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR"
 
 echo "=== Recordian Release 打包 ==="
 echo ""
 
-# 获取版本号
-VERSION=$(grep 'version = ' pyproject.toml | head -1 | cut -d'"' -f2)
+VERSION=$(awk -F'"' '/^version = / {print $2; exit}' pyproject.toml)
+if [ -z "$VERSION" ]; then
+    echo "错误: 无法从 pyproject.toml 解析版本号"
+    exit 1
+fi
 echo "版本: $VERSION"
 
-# 创建 release 目录
 RELEASE_DIR="recordian-$VERSION"
-RELEASE_ARCHIVE="recordian-$VERSION.tar.gz"
+RELEASE_ARCHIVE="$RELEASE_DIR.tar.gz"
+
+copy_required() {
+    local path="$1"
+    if [ ! -e "$path" ]; then
+        echo "错误: 缺少必需文件/目录: $path"
+        exit 1
+    fi
+    cp -r "$path" "$RELEASE_DIR/"
+}
+
+copy_optional() {
+    local path="$1"
+    if [ -e "$path" ]; then
+        cp -r "$path" "$RELEASE_DIR/"
+        return
+    fi
+    echo "提示: 可选文件不存在，已跳过: $path"
+}
 
 echo "清理旧的 release 文件..."
 rm -rf "$RELEASE_DIR" "$RELEASE_ARCHIVE"
@@ -20,29 +43,41 @@ rm -rf "$RELEASE_DIR" "$RELEASE_ARCHIVE"
 echo "创建 release 目录..."
 mkdir -p "$RELEASE_DIR"
 
-# 复制必要文件
-echo "复制项目文件..."
-cp -r src "$RELEASE_DIR/"
-cp -r assets "$RELEASE_DIR/"
-cp -r presets "$RELEASE_DIR/"
-cp -r docs "$RELEASE_DIR/"
-cp -r tests "$RELEASE_DIR/"
-cp pyproject.toml "$RELEASE_DIR/"
-cp README.md "$RELEASE_DIR/"
-cp QUICKSTART.md "$RELEASE_DIR/"
-cp CHANGELOG.md "$RELEASE_DIR/"
-cp RELEASE_NOTES.md "$RELEASE_DIR/"
-cp LICENSE "$RELEASE_DIR/"
-cp INSTALL.md "$RELEASE_DIR/"
-cp install.sh "$RELEASE_DIR/"
-cp uninstall.sh "$RELEASE_DIR/"
+echo "复制核心文件..."
+required_paths=(
+    src
+    assets
+    presets
+    docs
+    server
+    tests
+    pyproject.toml
+    README.md
+    LICENSE
+    install.sh
+    uninstall.sh
+    recordian-launch.sh
+)
 
-# 复制配置示例
-if [ -d "config_examples" ]; then
-    cp -r config_examples "$RELEASE_DIR/"
-fi
+optional_paths=(
+    QUICK_REFERENCE.md
+    ANIMATION_FIX.md
+    uv.lock
+)
 
-# 创建 README
+for path in "${required_paths[@]}"; do
+    copy_required "$path"
+done
+
+for path in "${optional_paths[@]}"; do
+    copy_optional "$path"
+done
+
+echo "清理缓存和构建残留..."
+find "$RELEASE_DIR" -type d -name "__pycache__" -prune -exec rm -rf {} +
+find "$RELEASE_DIR" -type d -name "*.egg-info" -prune -exec rm -rf {} +
+find "$RELEASE_DIR" -type f \( -name "*.pyc" -o -name "*.pyo" \) -delete
+
 cat > "$RELEASE_DIR/README.txt" << 'EOF'
 Recordian - Linux 语音输入助手
 ================================
@@ -52,23 +87,25 @@ Recordian - Linux 语音输入助手
 2. 从应用菜单启动 Recordian
 3. 使用右 Ctrl 键触发语音输入
 
-详细说明请查看 INSTALL.md
+详细说明请查看：
+- README.md
+- docs/USER_GUIDE.md
 
 EOF
 
 echo "打包..."
 tar czf "$RELEASE_ARCHIVE" "$RELEASE_DIR"
 
-echo "清理临时文件..."
+echo "清理临时目录..."
 rm -rf "$RELEASE_DIR"
 
 echo ""
 echo "=== 打包完成！ ==="
 echo "Release 文件: $RELEASE_ARCHIVE"
-echo "大小: $(du -h $RELEASE_ARCHIVE | cut -f1)"
+echo "大小: $(du -h "$RELEASE_ARCHIVE" | cut -f1)"
 echo ""
 echo "发布步骤："
 echo "1. 上传 $RELEASE_ARCHIVE 到 GitHub Releases"
 echo "2. 用户下载后解压: tar xzf $RELEASE_ARCHIVE"
-echo "3. 用户运行: cd $RELEASE_DIR && ./install.sh"
+echo "3. 用户运行: cd recordian-$VERSION && ./install.sh"
 echo ""

@@ -135,32 +135,30 @@ sudo systemctl stop ollama
 
 ### 配置文件位置
 
-`~/.config/recordian/config.yaml`
+`~/.config/recordian/hotkey.json`
 
 ### 配置示例
 
-```yaml
-# ASR 配置（使用服务器）
-asr:
-  provider: http-cloud
-  endpoint: http://192.168.5.225:8000/transcribe
-  timeout_s: 30
+```json
+{
+  "asr_provider": "http-cloud",
+  "asr_endpoint": "http://192.168.5.225:8000/transcribe",
+  "asr_timeout_s": 30,
 
-# 文本精炼配置（使用服务器）
-text_refine:
-  provider: cloud-llm
-  api_base: http://192.168.5.225:11434/v1
-  api_key: dummy  # Ollama 不需要真实 key
-  model: qwen2.5:7b
-  api_format: openai
-  temperature: 0.1
-  max_tokens: 512
+  "enable_text_refine": true,
+  "refine_provider": "cloud",
+  "refine_api_base": "http://192.168.5.225:11434",
+  "refine_api_key": "dummy",
+  "refine_api_model": "qwen2.5:7b",
 
-# 其他配置保持不变
-hotkey:
-  mode: ptt
-  ptt_key: "<ctrl>+<alt>+space"
+  "hotkey": "<ctrl_r>",
+  "trigger_mode": "ptt"
+}
 ```
+
+说明：
+- `refine_api_base` 连接 Ollama 时请使用 `http://主机:11434`，不要加 `/v1`。
+- `refine_api_key` 对 Ollama 无实际校验，保留占位字符串即可。
 
 ### 测试连接
 

@@ -1,6 +1,6 @@
 # Presets 目录
 
-此目录包含文本精炼和 ASR Context 的 prompt 预设文件。
+此目录包含文本精炼 prompt 预设文件，并支持自定义 ASR Context 预设。
 
 ## 文本精炼预设（用于第二轮精炼）
 
@@ -23,11 +23,7 @@
 
 ## ASR Context 预设（用于 ASR 识别阶段）
 
-- `asr-default.md` - 默认：整理口语，去重去语气词
-- `asr-simple.md` - 简洁模式：一句话指令
-- `asr-formal.md` - 口语转书面语
-- `asr-meeting.md` - 会议记录格式
-- `asr-technical.md` - 技术文档风格
+当前仓库默认不包含内置 `asr-*.md` 预设文件；如需使用 ASR Context 预设，请按下方“创建自定义预设”步骤自行添加。
 
 ### 使用方法
 
@@ -35,7 +31,7 @@
 
 ```json
 {
-  "asr_context_preset": "default"
+  "asr_context_preset": "meeting"
 }
 ```
 
@@ -61,5 +57,5 @@
 - **ASR Context 预设**：用于 ASR 识别阶段，作为 System Prompt，不需要占位符
 
 详细文档：
-- 文本精炼：`docs/text-refine.md`
-- ASR Context：`docs/asr-context.md`
+- 使用文档：`docs/USER_GUIDE.md`
+- 故障排查：`docs/TROUBLESHOOTING.md`

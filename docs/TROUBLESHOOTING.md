@@ -227,14 +227,17 @@ cat ~/.config/recordian/hotkey.json | grep commit_backend
 ```
 
 **解决方案：**
+- 推荐先使用自动模式：
 ```json
 {
-  "commit_backend": "auto"  // 自动选择
-  // 或手动指定
-  "commit_backend": "xdotool"  // X11
-  "commit_backend": "wtype"    // Wayland
+  "commit_backend": "auto"
 }
 ```
+
+- 手动指定时可选值：
+  - X11: `xdotool` 或 `xdotool-clipboard`（Electron 应用优先推荐 `xdotool-clipboard`）
+  - Wayland: `wtype`
+  - 调试：`stdout`
 
 #### 2. Electron 应用兼容性
 **症状：**

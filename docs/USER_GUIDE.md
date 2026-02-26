@@ -138,25 +138,34 @@ recordian-hotkey-dictate \
   "asr_provider": "qwen-asr",
   "qwen_model": "models/Qwen3-ASR-1.7B",
   "asr_context": "",
+  "asr_context_preset": "",
+  "asr_endpoint": "http://localhost:8000/transcribe",
+  "asr_timeout_s": 30,
 
   "enable_text_refine": true,
   "refine_provider": "local",
   "refine_model": "models/Qwen3-0.6B",
   "refine_preset": "default",
+  "enable_thinking": false,
+  "refine_max_tokens": 512,
+  "refine_n_gpu_layers": -1,
 
   "refine_api_base": "https://api.example.com",
   "refine_api_key": "your-api-key",
   "refine_api_model": "claude-3-5-sonnet-20241022",
 
-  "refine_model_llamacpp": "/path/to/model.gguf",
-  "refine_n_gpu_layers": -1,
-
+  "commit_backend": "auto",
   "hotkey": "<ctrl_r>",
   "toggle_hotkey": "<ctrl>+<space>",
   "exit_hotkey": "<ctrl>+<alt>+q",
   "trigger_mode": "ptt"
 }
 ```
+
+常见可选值：
+- `asr_provider`: `qwen-asr` / `http-cloud`
+- `refine_provider`: `local` / `cloud` / `llamacpp`
+- `commit_backend`: `none` / `auto` / `wtype` / `xdotool` / `xdotool-clipboard` / `stdout`
 
 ### 推荐配置
 
@@ -290,9 +299,9 @@ python convert_hf_to_gguf.py /path/to/Qwen3-0.6B --outtype f16
 | transformers | ~3s | ~1.5GB | 质量优先 |
 | llama.cpp Q4 | ~1s | ~400MB | 速度/显存优先 |
 
-### 4.3 云端 LLM（OpenAI 兼容）
+### 4.3 云端 LLM（Anthropic/OpenAI/Ollama 兼容）
 
-支持任何 OpenAI 兼容的 API（Claude、GPT、MiniMax 等）。
+支持 Anthropic 兼容接口（如 MiniMax）、常见 OpenAI 兼容接口（如 OpenAI/Groq/DeepSeek），以及 Ollama 本地接口。
 
 **配置：**
 
@@ -304,6 +313,8 @@ python convert_hf_to_gguf.py /path/to/Qwen3-0.6B --outtype f16
   "refine_api_model": "claude-3-5-sonnet-20241022"
 }
 ```
+
+如果云端精炼接的是 Ollama，请将 `refine_api_base` 配置为 `http://主机:11434`（不要添加 `/v1`）。
 
 **特点：** 质量最高，需要网络，按量付费。
 
