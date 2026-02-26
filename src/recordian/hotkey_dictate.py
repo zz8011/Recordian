@@ -380,14 +380,41 @@ def build_ptt_hotkey_handlers(
                     import sounddevice as sd
                     import numpy as np
 
+                    # 自动检测设备支持的采样率
+                    device_name = args.input_device if args.input_device != "default" else None
+                    try:
+                        if device_name:
+                            # 尝试通过名称查找设备
+                            devices = sd.query_devices()
+                            device_id = None
+                            for i, dev in enumerate(devices):
+                                if device_name in dev['name'] and dev['max_input_channels'] > 0:
+                                    device_id = i
+                                    break
+                            if device_id is None:
+                                device_id = device_name  # 可能是数字 ID
+                        else:
+                            device_id = None  # 使用默认设备
+
+                        device_info = sd.query_devices(device_id, kind='input')
+                        sample_rate = int(device_info['default_samplerate'])
+                        if args.debug_diagnostics:
+                            on_state({"event": "log", "message": f"diag audio_level_monitoring device={device_info['name']} samplerate={sample_rate}"})
+                    except Exception:
+                        # 回退到 16000 Hz
+                        device_id = None
+                        sample_rate = 16000
+
                     def _cb(indata: Any, frames: int, t: Any, status: Any) -> None:
                         if stop.is_set():
                             raise sd.CallbackStop()
                         rms = float(np.sqrt(np.mean(indata ** 2)))
-                        # Lower sensitivity and higher noise gate
-                        on_state({"event": "audio_level", "level": min(1.0, max(0.0, rms * 1.8 - 0.02))})
+                        # 增强增益以适配低音量设备（如 DJI 无线麦克风）
+                        # 原始: rms * 1.8 - 0.02，适合内置麦克风
+                        # 增强: rms * 12.0 - 0.05，适配 USB 无线麦克风
+                        on_state({"event": "audio_level", "level": min(1.0, max(0.0, rms * 12.0 - 0.05))})
 
-                    with sd.InputStream(samplerate=16000, channels=1, blocksize=1024, callback=_cb):
+                    with sd.InputStream(device=device_id, samplerate=sample_rate, channels=1, blocksize=1024, callback=_cb):
                         stop.wait()
                 except ImportError:
                     # sounddevice not available, skip audio level monitoring
