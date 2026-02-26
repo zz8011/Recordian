@@ -20,7 +20,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--force-pass2", action="store_true", help="Always run pass2")
     parser.add_argument(
         "--commit-backend",
-        choices=["none", "auto", "wtype", "xdotool", "pynput", "stdout"],
+        choices=["none", "auto", "wtype", "xdotool", "xdotool-clipboard", "stdout"],
         default="none",
         help="Commit final text to focused app on Linux",
     )

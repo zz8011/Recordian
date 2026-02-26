@@ -100,9 +100,21 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--refine-provider",
-        choices=["local", "cloud"],
+        choices=["local", "cloud", "llamacpp"],
         default="local",
-        help="Text refinement provider: local (Qwen3-0.6B) or cloud (API)",
+        help="Text refinement provider: local (Qwen3-0.6B), cloud (API), or llamacpp (GGUF)",
+    )
+    parser.add_argument(
+        "--refine-n-gpu-layers",
+        type=int,
+        default=-1,
+        help="Number of GPU layers for llama.cpp refiner (-1 = all)",
+    )
+    parser.add_argument(
+        "--enable-thinking",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Enable reasoning mode in text refiner when provider supports it",
     )
     parser.add_argument(
         "--refine-api-base",
@@ -593,16 +605,48 @@ def _parse_args_with_config(parser: argparse.ArgumentParser) -> argparse.Namespa
     if not pre_args.no_load_config and config_path.exists():
         payload = ConfigManager.load(config_path)
         if isinstance(payload, dict):
+            # Backward-compat config normalization.
+            defaults_payload = dict(payload)
+            if "enable_thinking" not in defaults_payload and "refine_enable_thinking" in defaults_payload:
+                defaults_payload["enable_thinking"] = defaults_payload.get("refine_enable_thinking")
+            if not defaults_payload.get("refine_model") and defaults_payload.get("refine_model_llamacpp"):
+                defaults_payload["refine_model"] = defaults_payload.get("refine_model_llamacpp")
+            if defaults_payload.get("refine_provider") == "llama.cpp":
+                defaults_payload["refine_provider"] = "llamacpp"
+            if defaults_payload.get("record_backend") == "ffmpeg":
+                defaults_payload["record_backend"] = "ffmpeg-pulse"
+            if defaults_payload.get("record_format") == "mp3":
+                defaults_payload["record_format"] = "ogg"
+            if defaults_payload.get("commit_backend") == "pynput":
+                defaults_payload["commit_backend"] = "auto"
+
             allowed = {
                 action.dest
                 for action in parser._actions
                 if action.dest not in {"help", "save_config", "no_load_config"}
             }
-            defaults = {k: v for k, v in payload.items() if k in allowed}
+            defaults = {k: v for k, v in defaults_payload.items() if k in allowed}
             if defaults:
                 parser.set_defaults(**defaults)
 
     args = parser.parse_args()
+    # Guard against invalid legacy values that may slip through argparse defaults.
+    if getattr(args, "refine_provider", "local") == "llama.cpp":
+        args.refine_provider = "llamacpp"
+    if getattr(args, "refine_provider", "local") not in {"local", "cloud", "llamacpp"}:
+        args.refine_provider = "local"
+    if getattr(args, "record_backend", "auto") == "ffmpeg":
+        args.record_backend = "ffmpeg-pulse"
+    if getattr(args, "record_backend", "auto") not in {"auto", "ffmpeg-pulse", "arecord"}:
+        args.record_backend = "auto"
+    if getattr(args, "record_format", "ogg") == "mp3":
+        args.record_format = "ogg"
+    if getattr(args, "record_format", "ogg") not in {"ogg", "wav"}:
+        args.record_format = "ogg"
+    if getattr(args, "commit_backend", "auto") == "pynput":
+        args.commit_backend = "auto"
+    if getattr(args, "commit_backend", "auto") not in {"none", "auto", "wtype", "xdotool", "xdotool-clipboard", "stdout"}:
+        args.commit_backend = "auto"
     args.config_path = str(Path(args.config_path).expanduser())
     return args
 
@@ -640,7 +684,9 @@ def _save_runtime_config(args: argparse.Namespace) -> None:
         "refine_provider": getattr(args, "refine_provider", "local"),
         "refine_model": getattr(args, "refine_model", "Qwen/Qwen3-0.6B"),
         "refine_device": getattr(args, "refine_device", "cuda"),
+        "refine_n_gpu_layers": getattr(args, "refine_n_gpu_layers", -1),
         "refine_max_tokens": getattr(args, "refine_max_tokens", 512),
+        "enable_thinking": getattr(args, "enable_thinking", False),
         "refine_prompt": getattr(args, "refine_prompt", ""),
         "refine_preset": getattr(args, "refine_preset", "default"),
         "refine_api_base": getattr(args, "refine_api_base", "https://api.minimaxi.com/anthropic"),

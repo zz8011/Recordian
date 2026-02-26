@@ -1,4 +1,6 @@
 import argparse
+import json
+from pathlib import Path
 import time
 
 from recordian.hotkey_dictate import (
@@ -158,6 +160,44 @@ def test_parse_hotkey_spec_empty_vk_prefix() -> None:
     from recordian.hotkey_dictate import parse_hotkey_spec
     result = parse_hotkey_spec("vk:")
     assert "vk:" not in result, f"空 vk: 不应出现在结果中，实际: {result}"
+
+
+def test_build_parser_accepts_llamacpp_refine_provider() -> None:
+    from recordian.hotkey_dictate import build_parser
+
+    parser = build_parser()
+    args = parser.parse_args(["--refine-provider", "llamacpp"])
+    assert args.refine_provider == "llamacpp"
+
+
+def test_parse_args_with_config_normalizes_legacy_values(tmp_path: Path, monkeypatch) -> None:
+    from recordian.hotkey_dictate import _parse_args_with_config, build_parser
+
+    cfg = tmp_path / "hotkey.json"
+    cfg.write_text(
+        json.dumps(
+            {
+                "refine_enable_thinking": True,
+                "refine_provider": "llama.cpp",
+                "refine_model_llamacpp": "/tmp/qwen.gguf",
+                "record_backend": "ffmpeg",
+                "record_format": "mp3",
+                "commit_backend": "pynput",
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr("sys.argv", ["recordian-hotkey-dictate", "--config-path", str(cfg)])
+    args = _parse_args_with_config(build_parser())
+
+    assert args.enable_thinking is True
+    assert args.refine_provider == "llamacpp"
+    assert args.refine_model == "/tmp/qwen.gguf"
+    assert args.record_backend == "ffmpeg-pulse"
+    assert args.record_format == "ogg"
+    assert args.commit_backend == "auto"
 
 
 def test_ptt_and_toggle_concurrent_trigger_no_conflict(monkeypatch) -> None:

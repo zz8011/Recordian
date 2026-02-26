@@ -261,6 +261,31 @@ class TrayApp:
             return
 
         current = ConfigManager.load(self.config_path)
+        current_record_backend = str(current.get("record_backend", "auto"))
+        if current_record_backend == "ffmpeg":
+            current_record_backend = "ffmpeg-pulse"
+        if current_record_backend not in {"auto", "ffmpeg-pulse", "arecord"}:
+            current_record_backend = "auto"
+
+        current_record_format = str(current.get("record_format", "ogg")).lower()
+        if current_record_format == "mp3":
+            current_record_format = "ogg"
+        if current_record_format not in {"ogg", "wav"}:
+            current_record_format = "ogg"
+
+        current_refine_provider = str(current.get("refine_provider", "local"))
+        if current_refine_provider == "llama.cpp":
+            current_refine_provider = "llamacpp"
+        if current_refine_provider not in {"local", "cloud", "llamacpp"}:
+            current_refine_provider = "local"
+
+        current_commit_backend = str(current.get("commit_backend", "auto"))
+        if current_commit_backend == "pynput":
+            current_commit_backend = "auto"
+        if current_commit_backend not in {"none", "auto", "wtype", "xdotool", "xdotool-clipboard", "stdout"}:
+            current_commit_backend = "auto"
+
+        current_enable_thinking = current.get("enable_thinking", current.get("refine_enable_thinking", False))
         win = tk.Toplevel(self.root)
         win.title("Recordian Settings")
         win.geometry("600x700")
@@ -291,8 +316,8 @@ class TrayApp:
 
             # 录音设置
             ("duration", "录音时长 (s)", str(current.get("duration", 4.0))),
-            ("record_backend", "录音后端 (auto/ffmpeg/arecord)", current.get("record_backend", "auto")),
-            ("record_format", "录音格式 (ogg/wav/mp3)", current.get("record_format", "ogg")),
+            ("record_backend", "录音后端 (auto/ffmpeg-pulse/arecord)", current_record_backend),
+            ("record_format", "录音格式 (ogg/wav)", current_record_format),
             ("sample_rate", "采样率", str(current.get("sample_rate", 16000))),
             ("channels", "声道数", str(current.get("channels", 1))),
             ("input_device", "输入设备", current.get("input_device", "default")),
@@ -308,19 +333,19 @@ class TrayApp:
 
             # 文本精炼设置
             ("enable_text_refine", "启用文本精炼", current.get("enable_text_refine", False)),
-            ("refine_provider", "精炼 Provider (local/cloud/llamacpp)", current.get("refine_provider", "local")),
+            ("refine_provider", "精炼 Provider (local/cloud/llamacpp)", current_refine_provider),
             ("refine_preset", "精炼预设", current.get("refine_preset", "default")),
             ("refine_model", "本地精炼模型路径（local=HF路径，llamacpp=GGUF路径）", current.get("refine_model", "")),
             ("refine_device", "精炼设备 (cpu/cuda)", current.get("refine_device", "cuda")),
             ("refine_n_gpu_layers", "llama.cpp GPU 层数 (-1=全部)", str(current.get("refine_n_gpu_layers", -1))),
             ("refine_max_tokens", "精炼 Max Tokens", str(current.get("refine_max_tokens", 512))),
-            ("refine_enable_thinking", "启用 Thinking 模式", current.get("refine_enable_thinking", False)),
+            ("enable_thinking", "启用 Thinking 模式", current_enable_thinking),
             ("refine_api_base", "云端 API Base", current.get("refine_api_base", "")),
             ("refine_api_key", "云端 API Key", current.get("refine_api_key", "")),
             ("refine_api_model", "云端 API 模型", current.get("refine_api_model", "")),
 
             # 上屏设置
-            ("commit_backend", "上屏后端 (auto/wtype/xdotool/pynput)", current.get("commit_backend", "auto")),
+            ("commit_backend", "上屏后端 (auto/wtype/xdotool/xdotool-clipboard)", current_commit_backend),
 
             # 其他设置
             ("warmup", "启动时预热", current.get("warmup", True)),
@@ -343,6 +368,30 @@ class TrayApp:
         ttk.Label(frm, textvariable=status_var).grid(row=len(fields), column=0, columnspan=2, sticky="w", pady=10)
 
         def _save() -> None:
+            record_format = entries["record_format"].get().strip().lower() or "ogg"
+            if record_format == "mp3":
+                record_format = "ogg"
+            if record_format not in {"ogg", "wav"}:
+                record_format = "ogg"
+
+            record_backend = entries["record_backend"].get().strip() or "auto"
+            if record_backend == "ffmpeg":
+                record_backend = "ffmpeg-pulse"
+            if record_backend not in {"auto", "ffmpeg-pulse", "arecord"}:
+                record_backend = "auto"
+
+            refine_provider = entries["refine_provider"].get().strip() or "local"
+            if refine_provider == "llama.cpp":
+                refine_provider = "llamacpp"
+            if refine_provider not in {"local", "cloud", "llamacpp"}:
+                refine_provider = "local"
+
+            commit_backend = entries["commit_backend"].get().strip() or "auto"
+            if commit_backend == "pynput":
+                commit_backend = "auto"
+            if commit_backend not in {"none", "auto", "wtype", "xdotool", "xdotool-clipboard", "stdout"}:
+                commit_backend = "auto"
+
             payload = {
                 "hotkey": entries["hotkey"].get().strip(),
                 "stop_hotkey": entries["stop_hotkey"].get().strip(),
@@ -355,9 +404,9 @@ class TrayApp:
                 "sample_rate": int(entries["sample_rate"].get().strip() or "16000"),
                 "channels": int(entries["channels"].get().strip() or "1"),
                 "input_device": entries["input_device"].get().strip() or "default",
-                "record_format": entries["record_format"].get().strip() or "ogg",
-                "record_backend": entries["record_backend"].get().strip() or "auto",
-                "commit_backend": entries["commit_backend"].get().strip() or "auto",
+                "record_format": record_format,
+                "record_backend": record_backend,
+                "commit_backend": commit_backend,
                 "asr_provider": entries["asr_provider"].get().strip() or "qwen-asr",
                 "qwen_model": entries["qwen_model"].get().strip(),
                 "qwen_language": entries["qwen_language"].get().strip() or "Chinese",
@@ -366,13 +415,13 @@ class TrayApp:
                 "asr_context": entries["asr_context"].get().strip(),
                 "device": entries["device"].get().strip() or "cuda",
                 "enable_text_refine": _parse_bool(entries["enable_text_refine"].get(), default=False),
-                "refine_provider": entries["refine_provider"].get().strip() or "local",
+                "refine_provider": refine_provider,
                 "refine_preset": entries["refine_preset"].get().strip() or "default",
                 "refine_model": entries["refine_model"].get().strip(),
                 "refine_device": entries["refine_device"].get().strip() or "cuda",
                 "refine_n_gpu_layers": int(entries["refine_n_gpu_layers"].get().strip() or "-1"),
                 "refine_max_tokens": int(entries["refine_max_tokens"].get().strip() or "512"),
-                "refine_enable_thinking": _parse_bool(entries["refine_enable_thinking"].get(), default=False),
+                "enable_thinking": _parse_bool(entries["enable_thinking"].get(), default=False),
                 "refine_api_base": entries["refine_api_base"].get().strip(),
                 "refine_api_key": entries["refine_api_key"].get().strip(),
                 "refine_api_model": entries["refine_api_model"].get().strip(),

@@ -1,6 +1,8 @@
 from pathlib import Path
 
-from recordian.linux_dictate import build_arecord_cmd, build_ffmpeg_record_cmd, choose_record_backend
+import pytest
+
+from recordian.linux_dictate import build_arecord_cmd, build_ffmpeg_record_cmd, build_parser, choose_record_backend
 
 
 def test_build_ffmpeg_record_cmd_ogg() -> None:
@@ -56,6 +58,12 @@ def test_choose_record_backend_auto_fallback_arecord(monkeypatch) -> None:
     monkeypatch.setattr("recordian.linux_dictate._ffmpeg_supports_pulse", lambda _: False)
     monkeypatch.setattr("recordian.linux_dictate.which", lambda cmd: "/usr/bin/arecord" if cmd == "arecord" else None)
     assert choose_record_backend("auto", "/tmp/ffmpeg") == "arecord"
+
+
+def test_commit_backend_rejects_unsupported_pynput_choice() -> None:
+    parser = build_parser()
+    with pytest.raises(SystemExit):
+        parser.parse_args(["--commit-backend", "pynput"])
 
 
 def test_stop_record_process_ffmpeg_uses_sigint() -> None:

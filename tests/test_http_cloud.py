@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from unittest.mock import patch
 
@@ -12,14 +11,13 @@ class _FakeResponse:
     def __init__(self, payload: dict[str, object]) -> None:
         self._payload = payload
 
-    def read(self) -> bytes:
-        return json.dumps(self._payload).encode("utf-8")
+    status_code = 200
 
-    def __enter__(self) -> "_FakeResponse":
-        return self
-
-    def __exit__(self, exc_type, exc, tb) -> None:  # noqa: ANN001
+    def raise_for_status(self) -> None:
         return None
+
+    def json(self) -> dict[str, object]:
+        return self._payload
 
 
 def test_http_cloud_provider_transcribe(tmp_path: Path) -> None:
@@ -28,7 +26,7 @@ def test_http_cloud_provider_transcribe(tmp_path: Path) -> None:
     provider = HttpCloudProvider("http://localhost:9999/asr", api_key="k")
 
     payload = {"text": "你好 world", "confidence": 0.92, "model": "cloud-asr-v1"}
-    with patch("urllib.request.urlopen", return_value=_FakeResponse(payload)):
+    with patch("requests.post", return_value=_FakeResponse(payload)):
         result = provider.transcribe_file(wav_path, hotwords=["你好"])
 
     assert result.text == "你好 world"

@@ -98,12 +98,13 @@ def test_xdotool_clipboard_multiple_commits_cancel_previous_timer(monkeypatch):
     monkeypatch.setattr("recordian.linux_commit._xdotool_key", _fake_xdotool_key)
     monkeypatch.setattr("recordian.linux_commit.which", lambda x: "/usr/bin/" + x)
 
-    committer = XdotoolClipboardCommitter(clipboard_timeout_ms=100)
+    # timeout 大于单次 commit 内部的粘贴延时（0.1s），确保第二次 commit 有机会取消第一次定时器
+    committer = XdotoolClipboardCommitter(clipboard_timeout_ms=500)
     committer.commit("文本1")
     time.sleep(0.02)
     committer.commit("文本2")
 
-    time.sleep(0.15)
+    time.sleep(0.55)
 
     # 应该只有 3 次调用：set:文本1, set:文本2, set:（最后一次清空）
     assert len(clipboard_calls) == 3
