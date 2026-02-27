@@ -1,482 +1,446 @@
-# Recordian 使用文档
+# Recordian 用户手册
 
 ## 目录
 
-1. [安装](#1-安装)
-2. [快速开始](#2-快速开始)
-3. [配置详解](#3-配置详解)
-4. [文本精炼器](#4-文本精炼器)
-5. [Preset 系统](#5-preset-系统)
-6. [热键配置](#6-热键配置)
-7. [常见问题](#7-常见问题)
+1. [简介](#简介)
+2. [安装](#安装)
+3. [快速开始](#快速开始)
+4. [配置](#配置)
+5. [功能介绍](#功能介绍)
+6. [故障排查](#故障排查)
+7. [常见问题](#常见问题)
 
 ---
 
-## 1. 安装
+## 简介
+
+Recordian 是一个智能语音输入工具，提供：
+
+- 🎤 **语音识别（ASR）**: 将语音转换为文本
+- ✨ **文本精炼**: 使用 LLM 优化识别结果
+- ⚡ **快捷键支持**: 快速启动语音输入
+- 🔧 **灵活配置**: 支持多种 ASR 和 LLM 提供商
+
+---
+
+## 安装
 
 ### 系统要求
 
-**最低要求：**
-- 操作系统：Linux（X11 或 Wayland）
-- Python：3.10+
-- 显存：4GB+（使用 0.6B 模型）
-- 内存：8GB+
-
-**推荐配置：**
-- 操作系统：Ubuntu 22.04+ / Arch Linux
-- Python：3.11+
-- GPU：NVIDIA（6GB+ 显存）
-- 显存：8GB+（使用 1.7B 模型）
-- 内存：16GB+
-
-**依赖软件：**
-- Wayland：`wtype`
-- X11：`xdotool`、`xsel` 或 `xclip`
-- 托盘：`gir1.2-appindicator3-0.1`（Ubuntu/Debian）或 `libappindicator-gtk3`（Arch）
-- 通知：`libnotify`（`notify-send`）
+- **操作系统**: Linux (Ubuntu 20.04+)
+- **Python**: 3.10+
+- **依赖**: PortAudio, GTK3
 
 ### 安装步骤
 
-#### 方式 1：一键安装（推荐）
+#### 1. 安装系统依赖
+
+```bash
+# Ubuntu/Debian
+sudo apt-get update
+sudo apt-get install -y \
+    python3-dev \
+    portaudio19-dev \
+    libgtk-3-dev \
+    libappindicator3-dev
+```
+
+#### 2. 克隆仓库
 
 ```bash
 git clone https://github.com/zz8011/Recordian.git
 cd Recordian
-./install.sh
 ```
 
-安装完成后，从应用菜单搜索 "Recordian" 启动，或运行 `recordian-launch.sh`。
-
-#### 方式 2：手动安装
+#### 3. 创建虚拟环境
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -e .[qwen-asr,hotkey,gui]
 ```
 
-### 下载模型
-
-**ASR 模型（必需，约 3.5GB）：**
+#### 4. 安装 Python 依赖
 
 ```bash
-pip install modelscope
-modelscope download --model Qwen/Qwen3-ASR-1.7B --local_dir ./models/Qwen3-ASR-1.7B
+pip install -e .
 ```
 
-也可使用更小的 0.6B 模型（约 1.5GB，速度更快但准确率略低）：
+#### 5. 验证安装
 
 ```bash
-modelscope download --model Qwen/Qwen3-ASR-0.6B --local_dir ./models/Qwen3-ASR-0.6B
-```
-
-**文本精炼模型（可选）：**
-
-本地 transformers 模型（约 1.2GB）：
-
-```bash
-modelscope download --model Qwen/Qwen3-0.6B --local_dir ./models/Qwen3-0.6B
-```
-
-### 验证安装
-
-```bash
-recordian-tray --help
+recordian --version
 ```
 
 ---
 
-## 2. 快速开始
+## 快速开始
 
-### 首次启动
+### 1. 创建配置文件
 
 ```bash
-# 启动托盘 GUI（推荐）
+mkdir -p ~/.config/recordian
+cat > ~/.config/recordian/config.json << EOF
+{
+  "version": "1.0",
+  "policy": {
+    "confidence_threshold": 0.88,
+    "english_ratio_threshold": 0.15,
+    "pass2_timeout_ms_local": 900,
+    "pass2_timeout_ms_cloud": 1500
+  }
+}
+EOF
+```
+
+### 2. 启动托盘应用
+
+```bash
 recordian-tray
-
-# 或命令行模式（首次配置时使用）
-recordian-hotkey-dictate \
-  --asr-provider qwen-asr \
-  --qwen-model ./models/Qwen3-ASR-1.7B \
-  --enable-text-refine \
-  --refine-model ./models/Qwen3-0.6B \
-  --save-config
 ```
 
-首次启动时模型加载需要 5-10 秒，请耐心等待。
+### 3. 使用快捷键
 
-### 基本录音操作
-
-1. 按住**右 Ctrl** 开始录音（托盘出现动画）
-2. 说话（椭圆随音量旋转）
-3. 松开热键，自动识别并上屏
-4. 按 **Ctrl+Alt+Q** 退出程序
-
-### 切换 Preset
-
-右键托盘图标 → Preset → 选择：
-- **Default**：日常口语整理
-- **Formal**：正式书面语
-- **Summary**：简洁总结
-- **Meeting**：会议纪要
-- **Technical**：技术文档
+- **默认快捷键**: `Ctrl+Alt+V`
+- 按下快捷键开始录音
+- 再次按下停止录音
+- 识别结果自动输入到当前应用
 
 ---
 
-## 3. 配置详解
+## 配置
 
 ### 配置文件位置
 
-```
-~/.config/recordian/hotkey.json
-```
+默认配置文件：`~/.config/recordian/config.json`
 
-### 完整配置项说明
+### 配置结构
 
 ```json
 {
-  "asr_provider": "qwen-asr",
-  "qwen_model": "models/Qwen3-ASR-1.7B",
-  "asr_context": "",
-  "asr_context_preset": "",
-  "asr_endpoint": "http://localhost:8000/transcribe",
-  "asr_timeout_s": 30,
-
-  "enable_text_refine": true,
-  "refine_provider": "local",
-  "refine_model": "models/Qwen3-0.6B",
-  "refine_preset": "default",
-  "enable_thinking": false,
-  "refine_max_tokens": 512,
-  "refine_n_gpu_layers": -1,
-
-  "refine_api_base": "https://api.example.com",
-  "refine_api_key": "your-api-key",
-  "refine_api_model": "claude-3-5-sonnet-20241022",
-
-  "commit_backend": "auto",
-  "hotkey": "<ctrl_r>",
-  "toggle_hotkey": "<ctrl>+<space>",
-  "exit_hotkey": "<ctrl>+<alt>+q",
-  "trigger_mode": "ptt"
+  "version": "1.0",
+  "policy": {
+    "confidence_threshold": 0.88,
+    "english_ratio_threshold": 0.15,
+    "pass2_timeout_ms_local": 900,
+    "pass2_timeout_ms_cloud": 1500
+  },
+  "hotkey": "<ctrl>+<alt>+v",
+  "asr_provider": "qwen",
+  "refiner_provider": "qwen"
 }
 ```
 
-常见可选值：
-- `asr_provider`: `qwen-asr` / `http-cloud`
-- `refine_provider`: `local` / `cloud` / `llamacpp`
-- `commit_backend`: `none` / `auto` / `wtype` / `xdotool` / `xdotool-clipboard` / `stdout`
+### 配置选项说明
 
-### 推荐配置
+#### policy 配置
 
-**日常使用（本地模型，快速免费）：**
+| 选项 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `confidence_threshold` | float | 0.88 | 置信度阈值（0.0-1.0） |
+| `english_ratio_threshold` | float | 0.15 | 英文比例阈值（0.0-1.0） |
+| `pass2_timeout_ms_local` | int | 900 | 本地精炼超时（毫秒） |
+| `pass2_timeout_ms_cloud` | int | 1500 | 云端精炼超时（毫秒） |
 
-```json
-{
-  "asr_provider": "qwen-asr",
-  "qwen_model": "models/Qwen3-ASR-1.7B",
-  "enable_text_refine": true,
-  "refine_provider": "local",
-  "refine_model": "models/Qwen3-0.6B",
-  "refine_preset": "default",
-  "hotkey": "<ctrl_r>",
-  "trigger_mode": "ptt"
-}
-```
+#### 其他配置
 
-**重要场合（云端 API，高质量）：**
+| 选项 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `hotkey` | string | `<ctrl>+<alt>+v` | 快捷键 |
+| `asr_provider` | string | `qwen` | ASR 提供商 |
+| `refiner_provider` | string | `qwen` | 精炼器提供商 |
 
-```json
-{
-  "asr_provider": "qwen-asr",
-  "qwen_model": "models/Qwen3-ASR-1.7B",
-  "enable_text_refine": true,
-  "refine_provider": "cloud",
-  "refine_api_base": "https://api.minimaxi.com/anthropic",
-  "refine_api_key": "your-api-key",
-  "refine_api_model": "claude-3-5-sonnet-20241022",
-  "refine_preset": "meeting"
-}
-```
+### 修改配置
 
-**低显存（llama.cpp，约 400MB 显存）：**
-
-```json
-{
-  "asr_provider": "qwen-asr",
-  "qwen_model": "models/Qwen3-ASR-1.7B",
-  "enable_text_refine": true,
-  "refine_provider": "llamacpp",
-  "refine_model": "/path/to/qwen3-0.6b-q4_k_m.gguf",
-  "refine_n_gpu_layers": -1
-}
-```
-
-### 环境变量
+#### 方法 1: 直接编辑配置文件
 
 ```bash
-export RECORDIAN_DEVICE=cuda          # cuda / cpu / auto
-export RECORDIAN_DEBUG=1              # 调试模式
-export RECORDIAN_CLIPBOARD_TIMEOUT_MS=500
-export RECORDIAN_PASTE_SHORTCUT="ctrl+v"
+nano ~/.config/recordian/config.json
 ```
+
+#### 方法 2: 使用 Python API
+
+```python
+from recordian.config import ConfigManager
+
+# 加载配置
+config = ConfigManager.load("~/.config/recordian/config.json")
+
+# 修改配置
+config["policy"]["confidence_threshold"] = 0.9
+
+# 保存配置（自动备份）
+ConfigManager.save("~/.config/recordian/config.json", config)
+```
+
+### 配置备份
+
+配置文件在保存时会自动备份：
+
+- 备份位置：`~/.config/recordian/config.backup.YYYYMMDD_HHMMSS.json`
+- 默认保留最近 5 个备份
+- 自动清理旧备份
 
 ---
 
-## 4. 文本精炼器
+## 功能介绍
 
-Recordian 支持三种文本精炼后端，可按需选择。
+### 1. 语音识别（ASR）
 
-### 4.1 本地 Qwen3（transformers）
+#### 支持的 ASR 提供商
 
-使用 Qwen3-0.6B 模型，完全本地运行。
+- **Qwen ASR**: 阿里云通义千问 ASR
+- **本地 ASR**: 本地语音识别模型
 
-**安装：**
+#### 使用方法
 
-```bash
-pip install transformers torch
-modelscope download --model Qwen/Qwen3-0.6B --local_dir ./models/Qwen3-0.6B
-```
+1. 按下快捷键开始录音
+2. 说话（支持中英文混合）
+3. 再次按下快捷键停止录音
+4. 等待识别结果
 
-**配置：**
+#### 热词支持
 
-```json
-{
-  "refine_provider": "local",
-  "refine_model": "models/Qwen3-0.6B"
-}
-```
-
-**特点：** 速度约 3s，显存约 1.5GB，完全本地，免费。
-
-### 4.2 llama.cpp（GGUF 量化）
-
-使用 GGUF 量化模型，显存占用更低，速度更快。
-
-**安装 llama-cpp-python（带 CUDA）：**
-
-```bash
-CMAKE_ARGS="-DLLAMA_CUDA=on" pip install llama-cpp-python
-```
-
-**转换模型为 GGUF 格式：**
-
-```bash
-git clone https://github.com/ggerganov/llama.cpp
-cd llama.cpp && make
-
-# 转换为 FP16
-python convert_hf_to_gguf.py /path/to/Qwen3-0.6B --outtype f16
-
-# 量化为 Q4_K_M（推荐）
-./llama-quantize ggml-model-f16.gguf qwen3-0.6b-q4_k_m.gguf Q4_K_M
-```
-
-量化选项：
-- **Q4_K_M**：推荐，平衡速度和质量，约 400MB
-- **Q5_K_M**：质量更高，约 500MB
-- **Q8_0**：接近原始质量，约 800MB
-
-**配置：**
+在配置中添加热词以提高识别准确率：
 
 ```json
 {
-  "refine_provider": "llamacpp",
-  "refine_model": "/path/to/qwen3-0.6b-q4_k_m.gguf",
-  "refine_n_gpu_layers": -1
+  "hotwords": ["Recordian", "语音输入", "专业术语"]
 }
 ```
 
-`refine_n_gpu_layers` 说明：
-- `-1`：全部层放 GPU（推荐，显存充足时）
-- `0`：全部用 CPU
-- `10`：部分层放 GPU（显存不足时）
+### 2. 文本精炼
 
-**性能对比：**
+#### 精炼策略
 
-| 方案 | 速度 | 显存 | 推荐场景 |
-|------|------|------|---------|
-| transformers | ~3s | ~1.5GB | 质量优先 |
-| llama.cpp Q4 | ~1s | ~400MB | 速度/显存优先 |
+根据识别结果的置信度和英文比例，自动决定是否进行精炼：
 
-### 4.3 云端 LLM（Anthropic/OpenAI/Ollama 兼容）
+- **高置信度 + 低英文比例**: 直接输出
+- **低置信度 或 高英文比例**: 使用 LLM 精炼
 
-支持 Anthropic 兼容接口（如 MiniMax）、常见 OpenAI 兼容接口（如 OpenAI/Groq/DeepSeek），以及 Ollama 本地接口。
+#### 精炼超时
 
-**配置：**
+- 本地模型：900ms
+- 云端 API：1500ms
 
-```json
-{
-  "refine_provider": "cloud",
-  "refine_api_base": "https://api.example.com",
-  "refine_api_key": "your-api-key",
-  "refine_api_model": "claude-3-5-sonnet-20241022"
-}
-```
+超时后使用原始识别结果。
 
-如果云端精炼接的是 Ollama，请将 `refine_api_base` 配置为 `http://主机:11434`（不要添加 `/v1`）。
+### 3. 预设管理
 
-**特点：** 质量最高，需要网络，按量付费。
+#### 预设目录
 
----
+预设文件位于：`presets/`
 
-## 5. Preset 系统
+#### 创建预设
 
-### 内置 Preset
+1. 在 `presets/` 目录创建 `.md` 文件
+2. 第一行为标题（可选，会被忽略）
+3. 其余内容为 prompt
 
-| Preset | 用途 | 效果示例 |
-|--------|------|---------|
-| `default` | 日常口语整理 | 去除语气词、重复词，添加标点 |
-| `formal` | 正式书面语 | 口语 → 书面语转换 |
-| `summary` | 简洁总结 | 提炼核心内容 |
-| `meeting` | 会议纪要 | 整理为列表格式 |
-| `technical` | 技术文档 | 保留技术术语，结构清晰 |
-
-### 自定义 Preset
-
-在 `presets/` 目录下创建 `.md` 文件：
+示例 `presets/custom.md`：
 
 ```markdown
-# 我的自定义预设
+# 自定义预设
 
-将以下口语整理为代码注释风格：
-- 简洁明了
-- 使用技术术语
-- 数字使用阿拉伯数字
-
-原文：{text}
+请将以下文本优化为正式的商务邮件格式。
 ```
 
-保存为 `presets/my-preset.md`，然后在配置中使用：
+#### 使用预设
+
+```python
+from recordian.preset_manager import PresetManager
+
+manager = PresetManager()
+prompt = manager.load_preset("custom")
+```
+
+### 4. 快捷键
+
+#### 修改快捷键
+
+编辑配置文件：
 
 ```json
 {
-  "refine_preset": "my-preset"
+  "hotkey": "<ctrl>+<shift>+v"
 }
 ```
 
-**关键词触发机制（仅 llama.cpp 后端）：**
-
-Preset 文件中的关键词会影响 Few-shot 示例的生成：
-- `正式`、`书面语` → 正式书面语示例
-- `会议`、`纪要` → 会议纪要格式示例
-- `技术`、`文档` → 技术文档风格示例
-- `数字`、`阿拉伯` → 数字转换示例
-- `分段`、`换行` → 分段示例
-
-### 热切换 Preset
-
-右键托盘图标 → Preset → 选择，无需重启即可生效。
+支持的修饰键：
+- `<ctrl>`: Ctrl
+- `<alt>`: Alt
+- `<shift>`: Shift
+- `<super>`: Super/Win
 
 ---
 
-## 6. 热键配置
+## 故障排查
 
-### 触发模式
+### 问题 1: 无法启动托盘应用
 
-| 模式 | 操作 | 适合场景 |
-|------|------|---------|
-| `ptt` | 按住录音，松开识别 | 快速短句输入 |
-| `toggle` | 按一次开始，再按停止 | 长时间录音 |
-| `oneshot` | 按一次录音固定时长 | 固定时长场景 |
+**症状**: 运行 `recordian-tray` 报错
 
-### 热键格式
+**解决方法**:
 
-```json
-{
-  "hotkey": "<ctrl_r>",
-  "toggle_hotkey": "<ctrl>+<space>",
-  "exit_hotkey": "<ctrl>+<alt>+q",
-  "trigger_mode": "ptt"
-}
+1. 检查系统依赖：
+   ```bash
+   sudo apt-get install libgtk-3-dev libappindicator3-dev
+   ```
+
+2. 检查 Python 版本：
+   ```bash
+   python3 --version  # 应该 >= 3.10
+   ```
+
+3. 重新安装：
+   ```bash
+   pip install -e . --force-reinstall
+   ```
+
+### 问题 2: 快捷键不响应
+
+**症状**: 按下快捷键没有反应
+
+**解决方法**:
+
+1. 检查快捷键是否被其他应用占用
+2. 尝试修改快捷键
+3. 检查日志：
+   ```bash
+   tail -f ~/.local/share/recordian/logs/recordian.log
+   ```
+
+### 问题 3: 识别结果不准确
+
+**症状**: 语音识别错误率高
+
+**解决方法**:
+
+1. 添加热词：
+   ```json
+   {
+     "hotwords": ["常用词", "专业术语"]
+   }
+   ```
+
+2. 调整置信度阈值：
+   ```json
+   {
+     "policy": {
+       "confidence_threshold": 0.85
+     }
+   }
+   ```
+
+3. 确保录音环境安静
+4. 说话清晰，语速适中
+
+### 问题 4: 配置文件损坏
+
+**症状**: 加载配置时报错
+
+**解决方法**:
+
+1. 恢复备份：
+   ```bash
+   cd ~/.config/recordian
+   ls -lt config.backup.*.json  # 查看备份
+   cp config.backup.20240101_120000.json config.json
+   ```
+
+2. 或创建新配置：
+   ```bash
+   rm config.json
+   recordian-tray  # 会自动创建默认配置
+   ```
+
+### 问题 5: 内存占用过高
+
+**症状**: 应用占用内存过多
+
+**解决方法**:
+
+1. 清除预设缓存：
+   ```python
+   from recordian.preset_manager import PresetManager
+   manager = PresetManager()
+   manager.clear_cache()
+   ```
+
+2. 重启应用
+
+---
+
+## 常见问题
+
+### Q1: Recordian 支持哪些语言？
+
+A: 目前主要支持中文和英文，以及中英文混合输入。
+
+### Q2: 可以离线使用吗？
+
+A: 部分功能可以离线使用（本地 ASR 和本地 LLM），但云端 API 需要网络连接。
+
+### Q3: 如何提高识别准确率？
+
+A:
+1. 使用热词功能
+2. 确保录音环境安静
+3. 说话清晰，语速适中
+4. 调整置信度阈值
+
+### Q4: 配置文件在哪里？
+
+A: 默认位置：`~/.config/recordian/config.json`
+
+### Q5: 如何查看日志？
+
+A: 日志位置：`~/.local/share/recordian/logs/recordian.log`
+
+```bash
+tail -f ~/.local/share/recordian/logs/recordian.log
 ```
 
-常用热键格式：
-- `<ctrl_r>`：右 Ctrl
-- `<ctrl_l>`：左 Ctrl
-- `<alt>+<space>`：Alt+Space
-- `<ctrl>+<alt>+r`：Ctrl+Alt+R
+### Q6: 支持自定义 ASR 提供商吗？
 
-### ASR Context（专业词汇）
+A: 支持。参考 [开发者指南](DEVELOPER_GUIDE.md) 实现自定义 Provider。
 
-提高专业术语识别准确率：
+### Q7: 如何卸载？
 
-```json
-{
-  "asr_context": "Kubernetes, Docker, React, TypeScript, PostgreSQL"
-}
+A:
+```bash
+pip uninstall recordian
+rm -rf ~/.config/recordian
+rm -rf ~/.local/share/recordian
+```
+
+### Q8: 性能如何？
+
+A: 使用性能基准测试工具测试：
+
+```python
+from recordian.performance_benchmark import PerformanceBenchmark
+
+benchmark = PerformanceBenchmark()
+# 运行测试...
+benchmark.print_summary()
 ```
 
 ---
 
-## 7. 常见问题
+## 获取帮助
 
-### 模型加载失败
+- **GitHub Issues**: https://github.com/zz8011/Recordian/issues
+- **文档**: https://github.com/zz8011/Recordian/tree/master/docs
+- **API 文档**: [API.md](API.md)
+- **开发者指南**: [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md)
 
-```bash
-# 检查 CUDA 是否可用
-python3 -c "import torch; print(torch.cuda.is_available())"
+---
 
-# 检查显存
-nvidia-smi
-```
+## 更新日志
 
-显存不足时，改用 0.6B ASR 模型或 llama.cpp 精炼器。
+查看 [CHANGELOG.md](../CHANGELOG.md) 了解版本更新信息。
 
-### 热键不响应
+---
 
-1. 检查热键格式：`<ctrl_r>` 而不是 `Ctrl+R`
-2. 确认没有其他程序占用该热键
-3. 查看终端输出的错误信息
-
-### 上屏失败
-
-```bash
-# Wayland 用户
-sudo apt install wtype
-
-# X11 用户
-sudo apt install xdotool xsel
-
-# 检查当前显示服务器
-echo $XDG_SESSION_TYPE
-```
-
-### 托盘图标不显示
-
-```bash
-# Ubuntu/Debian
-sudo apt install gir1.2-appindicator3-0.1
-
-# Arch Linux
-sudo pacman -S libappindicator-gtk3
-
-# Fedora
-sudo dnf install libappindicator-gtk3
-```
-
-### llama.cpp 编译失败
-
-```bash
-# 确认 CUDA toolkit 已安装
-nvcc --version
-
-# 指定 CUDA 路径
-CMAKE_ARGS="-DLLAMA_CUDA=on -DCMAKE_CUDA_COMPILER=/usr/local/cuda/bin/nvcc" \
-  pip install llama-cpp-python
-
-# 或使用 CPU 版本（无 CUDA）
-pip install llama-cpp-python
-```
-
-### 动画卡顿
-
-1. 检查 GPU 驱动是否正确安装
-2. 关闭其他占用 GPU 的程序
-3. 确认 pyglet 版本兼容
-
-### 卸载
-
-```bash
-./uninstall.sh
-```
+**版本**: 1.0
+**最后更新**: 2024年
