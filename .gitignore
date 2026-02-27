@@ -47,3 +47,6 @@ docs/plans/
 # 参考图片
 reference-image.png
 
+.coverage
+coverage.json
+htmlcov/
