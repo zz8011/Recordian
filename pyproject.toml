@@ -17,7 +17,7 @@ dependencies = []
 qwen-asr = ["qwen-asr>=0.0.6", "torch>=2.0.0"]
 hotkey = ["pynput>=1.7.7"]
 gui = ["pystray>=0.19.5", "pillow>=10.0.0", "pynput>=1.7.7", "pyglet>=2.0.10", "sounddevice>=0.4.6", "numpy>=1.20.0"]
-dev = ["pytest>=8.0", "pytest-cov>=4.0.0", "sentry-sdk>=1.40.0"]
+dev = ["pytest>=8.0", "pytest-cov>=4.0.0", "sentry-sdk>=1.40.0", "numpy>=1.20.0"]
 
 [project.scripts]
 recordian = "recordian.cli:main"
