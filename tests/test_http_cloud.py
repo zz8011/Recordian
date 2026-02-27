@@ -3,8 +3,13 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 from recordian.audio import write_wav_mono_f32
 from recordian.providers.http_cloud import HttpCloudProvider
+
+# Skip tests if requests is not installed
+pytest.importorskip("requests")
 
 
 class _FakeResponse:
