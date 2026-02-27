@@ -71,9 +71,13 @@ class DictationEngine:
         if self.pass2_provider is None:
             return None
 
-        with ThreadPoolExecutor(max_workers=1) as executor:
+        executor = ThreadPoolExecutor(max_workers=1)
+        try:
             future = executor.submit(self.pass2_provider.transcribe_file, wav_path, hotwords=hotwords)
             try:
                 return future.result(timeout=timeout_ms / 1000)
             except TimeoutError:
+                future.cancel()
                 return None
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)

@@ -94,6 +94,7 @@ class XdotoolClipboardCommitter(TextCommitter):
         self.target_window_id = target_window_id
         self.clipboard_timeout_ms = clipboard_timeout_ms
         self._clear_timer: threading.Timer | None = None
+        self._timer_lock = threading.Lock()
 
     def commit(self, text: str) -> CommitResult:
         if not which("xdotool"):
@@ -101,24 +102,25 @@ class XdotoolClipboardCommitter(TextCommitter):
         _set_clipboard_text(text)
 
         # 取消之前的定时器（如果存在）
-        if self._clear_timer is not None:
-            self._clear_timer.cancel()
-            self._clear_timer = None
+        with self._timer_lock:
+            if self._clear_timer is not None:
+                self._clear_timer.cancel()
+                self._clear_timer = None
 
-        # 启动新的定时器清空剪贴板
-        if self.clipboard_timeout_ms > 0:
-            def _clear_clipboard():
-                try:
-                    _set_clipboard_text("")
-                except Exception:
-                    pass  # 静默失败，不影响主流程
+            # 启动新的定时器清空剪贴板
+            if self.clipboard_timeout_ms > 0:
+                def _clear_clipboard():
+                    try:
+                        _set_clipboard_text("")
+                    except Exception:
+                        pass  # 静默失败，不影响主流程
 
-            self._clear_timer = threading.Timer(
-                self.clipboard_timeout_ms / 1000.0,
-                _clear_clipboard
-            )
-            self._clear_timer.daemon = True
-            self._clear_timer.start()
+                self._clear_timer = threading.Timer(
+                    self.clipboard_timeout_ms / 1000.0,
+                    _clear_clipboard
+                )
+                self._clear_timer.daemon = True
+                self._clear_timer.start()
 
         time.sleep(0.10)
         shortcut = _resolve_paste_shortcut()

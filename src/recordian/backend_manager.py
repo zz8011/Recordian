@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import atexit
 import json
 import queue
 import subprocess
@@ -7,6 +8,30 @@ import sys
 import threading
 from pathlib import Path
 from typing import Callable
+
+
+# 全局进程注册表
+_ACTIVE_BACKEND_PROCESSES: list[subprocess.Popen[str]] = []
+
+
+def _cleanup_backend_processes() -> None:
+    """清理所有后端进程"""
+    for proc in _ACTIVE_BACKEND_PROCESSES[:]:
+        if proc.poll() is None:
+            try:
+                proc.terminate()
+                proc.wait(timeout=2.0)
+            except (ProcessLookupError, subprocess.TimeoutExpired):
+                try:
+                    proc.kill()
+                    proc.wait(timeout=0.5)
+                except (ProcessLookupError, subprocess.TimeoutExpired):
+                    pass
+        _ACTIVE_BACKEND_PROCESSES.remove(proc)
+
+
+# 注册清理函数
+atexit.register(_cleanup_backend_processes)
 
 
 def parse_backend_event_line(line: str) -> dict[str, object] | None:
@@ -61,6 +86,7 @@ class BackendManager:
             text=True,
             bufsize=1,
         )
+        _ACTIVE_BACKEND_PROCESSES.append(self.proc)
         self._on_state_change(True, "starting", "Starting backend...")
         self._on_menu_update()
 
@@ -83,7 +109,13 @@ class BackendManager:
                 proc.wait(timeout=2.0)
             except subprocess.TimeoutExpired:
                 proc.kill()
-                proc.wait(timeout=2.0)
+                try:
+                    proc.wait(timeout=0.5)
+                except subprocess.TimeoutExpired:
+                    pass
+        # 从注册表移除
+        if proc in _ACTIVE_BACKEND_PROCESSES:
+            _ACTIVE_BACKEND_PROCESSES.remove(proc)
         self.proc = None
         self._events.put({"event": "stopped"})
 

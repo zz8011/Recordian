@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import asdict
+import enum
 import json
 from pathlib import Path
 import threading
@@ -26,6 +27,13 @@ from .linux_dictate import (
 from .runtime_deps import ensure_ffmpeg_available
 
 DEFAULT_CONFIG_PATH = "~/.config/recordian/hotkey.json"
+
+
+class RecordingState(enum.Enum):
+    """录音状态枚举"""
+    IDLE = "idle"
+    RECORDING = "recording"
+    PROCESSING = "processing"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -342,6 +350,7 @@ def build_ptt_hotkey_handlers(
             refiner.refine("测试")
             on_state({"event": "refiner_warmup", "status": "ready", "provider": refiner.provider_name, "latency_ms": (time.perf_counter() - t0) * 1000})
 
+    state_lock = threading.RLock()
     state: dict[str, object] = {
         "last_trigger": 0.0,
         "process": None,
@@ -350,21 +359,42 @@ def build_ptt_hotkey_handlers(
         "record_started_at": None,
         "target_window_id": None,
         "level_stop": None,  # threading.Event to stop audio level sampling
+        "recording_state": RecordingState.IDLE,
     }
+
+    def _get_state(key: str) -> object:
+        """线程安全地读取状态"""
+        with state_lock:
+            return state.get(key)
+
+    def _set_state(key: str, value: object) -> None:
+        """线程安全地设置状态"""
+        with state_lock:
+            state[key] = value
+
+    def _update_state(updates: dict[str, object]) -> None:
+        """线程安全地批量更新状态"""
+        with state_lock:
+            state.update(updates)
 
     def _start_recording() -> None:
         now = time.monotonic()
-        if now - float(state["last_trigger"]) < cooldown_s:
+        last_trigger = float(_get_state("last_trigger"))
+        if now - last_trigger < cooldown_s:
             return
-        state["last_trigger"] = now
+        _set_state("last_trigger", now)
 
-        state["target_window_id"] = get_focused_window_id()
+        target_wid = get_focused_window_id()
+        _set_state("target_window_id", target_wid)
+        if args.debug_diagnostics:
+            on_state({"event": "log", "message": f"diag capture target_window_id={target_wid}"})
 
         if not lock.acquire(blocking=False):
             on_busy({"event": "busy", "reason": "dictation_in_progress"})
             return
 
         try:
+            _set_state("recording_state", RecordingState.RECORDING)
             temp_dir = TemporaryDirectory(prefix="recordian-ptt-")
             suffix = ".ogg" if args.record_format == "ogg" else ".wav"
             if recorder_backend == "arecord":
@@ -377,20 +407,26 @@ def build_ptt_hotkey_handlers(
                 output_path=audio_path,
                 duration_s=None,
             )
-            state["process"] = process
-            state["temp_dir"] = temp_dir
-            state["audio_path"] = audio_path
-            state["record_started_at"] = time.perf_counter()
+            _update_state({
+                "process": process,
+                "temp_dir": temp_dir,
+                "audio_path": audio_path,
+                "record_started_at": time.perf_counter(),
+            })
             on_state({"event": "recording_started", "record_backend": recorder_backend, "audio_path": str(audio_path)})
 
             # Start audio level sampling thread
             level_stop = threading.Event()
-            state["level_stop"] = level_stop
+            _set_state("level_stop", level_stop)
 
             def _level_worker(stop: threading.Event = level_stop) -> None:
                 try:
                     import sounddevice as sd
                     import numpy as np
+
+                    # 音量计动态参数：适配普通语音输入，避免只有大音量才触发动画。
+                    noise_floor = 0.0015
+                    smoothed_level = 0.0
 
                     # 自动检测设备支持的采样率
                     device_name = args.input_device if args.input_device != "default" else None
@@ -418,13 +454,27 @@ def build_ptt_hotkey_handlers(
                         sample_rate = 16000
 
                     def _cb(indata: Any, frames: int, t: Any, status: Any) -> None:
+                        nonlocal noise_floor, smoothed_level
                         if stop.is_set():
                             raise sd.CallbackStop()
+
                         rms = float(np.sqrt(np.mean(indata ** 2)))
-                        # 增强增益以适配低音量设备（如 DJI 无线麦克风）
-                        # 原始: rms * 1.8 - 0.02，适合内置麦克风
-                        # 增强: rms * 12.0 - 0.05，适配 USB 无线麦克风
-                        on_state({"event": "audio_level", "level": min(1.0, max(0.0, rms * 12.0 - 0.05))})
+
+                        # 动态噪声底估计：仅在较安静片段更新，降低环境噪声导致的抖动。
+                        if rms < noise_floor * 1.8:
+                            noise_floor = noise_floor * 0.98 + rms * 0.02
+
+                        # 去噪后信号强度（普通说话也能触发动画）。
+                        signal = max(0.0, rms - noise_floor * 1.1)
+
+                        # 饱和压缩：低音量更灵敏，高音量不过曝。
+                        linear = signal * 48.0
+                        level = linear / (linear + 0.15) if linear > 0.0 else 0.0
+
+                        # 快起慢落平滑：说话时迅速响应，停顿时缓慢回落，减少抖动感。
+                        alpha = 0.28 if level > smoothed_level else 0.12
+                        smoothed_level = smoothed_level * (1.0 - alpha) + level * alpha
+                        on_state({"event": "audio_level", "level": min(1.0, max(0.0, smoothed_level))})
 
                     with sd.InputStream(device=device_id, samplerate=sample_rate, channels=1, blocksize=1024, callback=_cb):
                         stop.wait()
@@ -443,23 +493,26 @@ def build_ptt_hotkey_handlers(
             raise
 
     def _stop_recording() -> None:
-        process = state.get("process")
-        started = state.get("record_started_at")
-        audio_path = state.get("audio_path")
-        temp_dir = state.get("temp_dir")
+        process = _get_state("process")
+        started = _get_state("record_started_at")
+        audio_path = _get_state("audio_path")
+        temp_dir = _get_state("temp_dir")
         if process is None or audio_path is None or temp_dir is None or started is None:
             return
 
         # Stop audio level sampling
-        level_stop = state.get("level_stop")
+        level_stop = _get_state("level_stop")
         if isinstance(level_stop, threading.Event):
             level_stop.set()
-        state["level_stop"] = None
+        _set_state("level_stop", None)
 
-        state["process"] = None
-        state["audio_path"] = None
-        state["temp_dir"] = None
-        state["record_started_at"] = None
+        _update_state({
+            "process": None,
+            "audio_path": None,
+            "temp_dir": None,
+            "record_started_at": None,
+            "recording_state": RecordingState.PROCESSING,
+        })
 
         try:
             stop_record_process(process, recorder_backend=recorder_backend)
@@ -584,6 +637,7 @@ def build_ptt_hotkey_handlers(
                 on_error({"event": "error", "error": f"{type(exc).__name__}: {exc}"})
             finally:
                 temp_dir.cleanup()
+                _set_state("recording_state", RecordingState.IDLE)
                 lock.release()
 
         threading.Thread(target=_worker, daemon=True).start()

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import atexit
 from dataclasses import asdict, dataclass
 import json
 import math
@@ -15,6 +16,30 @@ from typing import Any
 from .linux_commit import CommitError, resolve_committer
 from .providers import QwenASRProvider, HttpCloudProvider, ASRProvider
 from .runtime_deps import ensure_ffmpeg_available
+
+
+# 全局进程注册表
+_ACTIVE_PROCESSES: list[subprocess.Popen[Any]] = []
+
+
+def _cleanup_processes() -> None:
+    """清理所有活跃进程"""
+    for proc in _ACTIVE_PROCESSES[:]:
+        if proc.poll() is None:
+            try:
+                proc.terminate()
+                proc.wait(timeout=1.0)
+            except (ProcessLookupError, subprocess.TimeoutExpired):
+                try:
+                    proc.kill()
+                    proc.wait(timeout=0.5)
+                except (ProcessLookupError, subprocess.TimeoutExpired):
+                    pass
+        _ACTIVE_PROCESSES.remove(proc)
+
+
+# 注册清理函数
+atexit.register(_cleanup_processes)
 
 
 @dataclass(slots=True)
@@ -260,7 +285,9 @@ def start_record_process(
             sample_rate=args.sample_rate,
             channels=args.channels,
         )
-    return subprocess.Popen(record_cmd)
+    proc = subprocess.Popen(record_cmd)
+    _ACTIVE_PROCESSES.append(proc)
+    return proc
 
 
 def stop_record_process(
@@ -270,6 +297,9 @@ def stop_record_process(
     timeout_s: float = 2.0,
 ) -> None:
     if process.poll() is not None:
+        # 进程已退出，从注册表移除
+        if process in _ACTIVE_PROCESSES:
+            _ACTIVE_PROCESSES.remove(process)
         return
 
     # 发送信号
@@ -284,7 +314,10 @@ def stop_record_process(
 
     while elapsed < timeout_s:
         if process.poll() is not None:
-            return  # 进程已退出
+            # 进程已退出，从注册表移除
+            if process in _ACTIVE_PROCESSES:
+                _ACTIVE_PROCESSES.remove(process)
+            return
         time.sleep(poll_interval_s)
         elapsed += poll_interval_s
 
@@ -294,6 +327,10 @@ def stop_record_process(
         process.wait(timeout=0.5)
     except (ProcessLookupError, subprocess.TimeoutExpired):
         pass
+    finally:
+        # 从注册表移除
+        if process in _ACTIVE_PROCESSES:
+            _ACTIVE_PROCESSES.remove(process)
 
 
 def transcribe_and_commit(

@@ -84,14 +84,14 @@ void main() {
     for(int i = 0; i < 4; i++) {
         float fi = float(i);
         float baseSpeed = 0.15 + fi * 0.03;
-        float volumeSpeed = vol * 1.8;
+        float volumeSpeed = vol * 0.95;
         float totalSpeed = baseSpeed + volumeSpeed;
         float t = u_time * totalSpeed;
         vec2 offset = vec2(
             sin(t + fi * 1.5) * 0.18,
             cos(t * 0.7 + fi * 2.0) * 0.12
         );
-        float size = 0.28 + vol * 0.5 + sin(t * 0.5) * 0.06;
+        float size = 0.28 + vol * 0.28 + sin(t * 0.5) * 0.05;
         float mask = SoftEllipse(distortedUV + offset, size, size * 0.7, 0.8);
         vec3 col = c1;
         if(i==1) col = c2;
@@ -274,19 +274,25 @@ void main() {
                         self.hide_deadline = time.time() + (1.1 if self.detail.strip() else 0.35)
                 elif cmd == "level":
                     level = max(0.0, min(1.0, float(payload)))  # type: ignore[arg-type]
-                    self.level_boost = max(0.0, level - 0.25)
+                    # 降低触发阈值，普通语音也能驱动动画。
+                    self.level_boost = max(0.0, level - 0.04)
 
             target = self.target_amplitude
             if self.state == "recording":
-                target = min(1.0, target + self.level_boost * 0.6)
-                self.level_boost *= 0.60
-                self.smooth_audio += (self.amplitude - self.smooth_audio) * 0.45
+                target = min(1.0, target + self.level_boost * 0.70)
+                self.level_boost *= 0.78
+                self.smooth_audio += (self.amplitude - self.smooth_audio) * 0.34
             elif self.state == "processing":
                 target = 0.0
-                self.smooth_audio += (0.0 - self.smooth_audio) * 0.45
+                self.smooth_audio += (0.0 - self.smooth_audio) * 0.34
             else:
-                self.smooth_audio += (0.0 - self.smooth_audio) * 0.45
-            self.amplitude += (target - self.amplitude) * 0.035
+                self.smooth_audio += (0.0 - self.smooth_audio) * 0.34
+
+            # 分离攻击/释放速率：减少快速抖动，保留语音跟随感。
+            delta = target - self.amplitude
+            attack = 0.065
+            release = 0.033
+            self.amplitude += delta * (attack if delta >= 0.0 else release)
 
             if self.hide_deadline is not None and time.time() >= self.hide_deadline:
                 window.set_visible(False)
@@ -305,4 +311,3 @@ void main() {
     def shutdown(self) -> None:
         self._cmd_queue.put(("quit", None))
         self._thread.join(timeout=1.5)
-

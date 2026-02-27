@@ -118,9 +118,9 @@ class QwenASRProvider(ASRProvider):
 
             # 保存到临时文件
             import tempfile
-            fd, temp_path = tempfile.mkstemp(suffix='.wav')
-            import os
-            os.close(fd)
+            temp_file = tempfile.NamedTemporaryFile(suffix='.wav', delete=False)
+            temp_path = temp_file.name
+            temp_file.close()
 
             torchaudio.save(temp_path, trimmed, sample_rate)
             return temp_path
@@ -137,25 +137,35 @@ class QwenASRProvider(ASRProvider):
 
         # 使用 VAD 预处理音频，移除静音部分
         processed_audio = self._apply_vad(wav_path)
+        vad_temp_file = None if processed_audio == str(wav_path) else processed_audio
 
-        results = self._model.transcribe(
-            audio=processed_audio,
-            context=self.context,
-            language=self.language,
-            return_time_stamps=False,
-        )
+        try:
+            results = self._model.transcribe(
+                audio=processed_audio,
+                context=self.context,
+                language=self.language,
+                return_time_stamps=False,
+            )
 
-        result = results[0]
-        text = (result.text or "").strip()
-        metadata: dict[str, object] = {"source": "qwen_asr"}
-        if hasattr(result, "language"):
-            metadata["detected_language"] = result.language
+            result = results[0]
+            text = (result.text or "").strip()
+            metadata: dict[str, object] = {"source": "qwen_asr"}
+            if hasattr(result, "language"):
+                metadata["detected_language"] = result.language
 
-        return ASRResult(
-            text=text,
-            confidence=None,
-            english_ratio=_estimate_english_ratio(text),
-            model_name=self.model_name,
-            metadata=metadata,
-        )
+            return ASRResult(
+                text=text,
+                confidence=None,
+                english_ratio=_estimate_english_ratio(text),
+                model_name=self.model_name,
+                metadata=metadata,
+            )
+        finally:
+            # 清理 VAD 临时文件
+            if vad_temp_file is not None:
+                import os
+                try:
+                    os.unlink(vad_temp_file)
+                except OSError:
+                    pass
 

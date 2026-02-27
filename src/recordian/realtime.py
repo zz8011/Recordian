@@ -104,9 +104,13 @@ class RealtimeDictationEngine:
         with TemporaryDirectory(prefix="recordian-pass2-") as temp_dir:
             wav_path = Path(temp_dir) / "pass2.wav"
             write_wav_mono_f32(wav_path, samples, sample_rate=self.sample_rate)
-            with ThreadPoolExecutor(max_workers=1) as executor:
+            executor = ThreadPoolExecutor(max_workers=1)
+            try:
                 future = executor.submit(self.pass2_provider.transcribe_file, wav_path, hotwords=hotwords)
                 try:
                     return future.result(timeout=timeout_ms / 1000.0)
                 except TimeoutError:
+                    future.cancel()
                     return None
+            finally:
+                executor.shutdown(wait=False, cancel_futures=True)
