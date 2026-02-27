@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from functools import lru_cache
 
 from .config import Pass2PolicyConfig
 from .models import ASRResult, Decision, SessionContext
@@ -18,6 +19,8 @@ class Pass2Policy:
 
     def __init__(self, config: Pass2PolicyConfig) -> None:
         self.config = config
+        # 缓存 hotwords 的小写版本，避免重复转换
+        self._normalized_hotwords_cache: dict[tuple[str, ...], list[str]] = {}
 
     def evaluate(self, result: ASRResult, context: SessionContext) -> Decision:
         reasons: list[str] = []
@@ -39,20 +42,33 @@ class Pass2Policy:
 
         return Decision(run_pass2=len(reasons) > 0, reasons=reasons)
 
-    def _contains_risk_pattern(self, text: str) -> bool:
-        for pattern in self._risk_patterns:
+    @staticmethod
+    @lru_cache(maxsize=128)
+    def _contains_risk_pattern(text: str) -> bool:
+        """检查文本是否包含风险模式（带缓存）"""
+        for pattern in Pass2Policy._risk_patterns:
             if pattern.search(text):
                 return True
         return False
 
-    @staticmethod
-    def _hotword_missing(text: str, hotwords: list[str]) -> bool:
+    def _hotword_missing(self, text: str, hotwords: list[str]) -> bool:
+        """检查是否缺少必需的热词"""
         if not hotwords:
             return False
 
-        normalized = text.lower()
-        for hotword in hotwords:
-            hw = hotword.strip().lower()
-            if hw and hw not in normalized:
+        # 使用缓存的标准化 hotwords
+        hotwords_tuple = tuple(hotwords)
+        if hotwords_tuple not in self._normalized_hotwords_cache:
+            self._normalized_hotwords_cache[hotwords_tuple] = [
+                hw.strip().lower() for hw in hotwords if hw.strip()
+            ]
+
+        normalized_hotwords = self._normalized_hotwords_cache[hotwords_tuple]
+        if not normalized_hotwords:
+            return False
+
+        normalized_text = text.lower()
+        for hw in normalized_hotwords:
+            if hw not in normalized_text:
                 return True
         return False

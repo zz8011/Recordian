@@ -22,6 +22,7 @@ class CloudLLMRefiner(BaseTextRefiner):
         prompt_template: str | None = None,
         api_format: str = "auto",  # "auto", "anthropic", "openai"
         enable_thinking: bool = False,
+        timeout: int = 30,  # API 超时时间（秒），默认30秒
     ) -> None:
         super().__init__(
             max_tokens=max_tokens,
@@ -32,6 +33,7 @@ class CloudLLMRefiner(BaseTextRefiner):
         self.api_base = api_base.rstrip("/")
         self.api_key = api_key
         self.model = model
+        self.timeout = timeout
 
         # 自动检测 API 格式
         if api_format == "auto":
@@ -102,7 +104,7 @@ class CloudLLMRefiner(BaseTextRefiner):
             f"{self.api_base}/v1/messages",
             headers=headers,
             json=payload,
-            timeout=120,
+            timeout=self.timeout,
         )
 
         if response.status_code != 200:
@@ -157,7 +159,7 @@ class CloudLLMRefiner(BaseTextRefiner):
             f"{self.api_base}/chat/completions",
             headers=headers,
             json=payload,
-            timeout=120,
+            timeout=self.timeout,
         )
 
         if response.status_code != 200:
@@ -215,7 +217,7 @@ class CloudLLMRefiner(BaseTextRefiner):
             f"{self.api_base}/api/chat",
             headers=headers,
             json=payload,
-            timeout=120,
+            timeout=self.timeout,
         )
 
         if response.status_code != 200:

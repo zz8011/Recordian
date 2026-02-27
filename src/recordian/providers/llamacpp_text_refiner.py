@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import concurrent.futures
 from pathlib import Path
 
 from .base_text_refiner import BaseTextRefiner
@@ -26,6 +27,7 @@ class LlamaCppTextRefiner(BaseTextRefiner):
         temperature: float = 0.1,
         prompt_template: str | None = None,
         enable_thinking: bool = False,
+        timeout: int = 60,  # 本地推理超时时间（秒），默认60秒
     ) -> None:
         super().__init__(
             max_tokens=max_new_tokens,
@@ -35,6 +37,7 @@ class LlamaCppTextRefiner(BaseTextRefiner):
         )
         self.model_path = model_path
         self.max_new_tokens = max_new_tokens
+        self.timeout = timeout
         self._n_gpu_layers = n_gpu_layers
         self._n_ctx = n_ctx
         self._n_threads = n_threads
@@ -81,16 +84,14 @@ class LlamaCppTextRefiner(BaseTextRefiner):
         # 根据 prompt_template 判断使用哪种 Few-shot
         prompt = self._build_fewshot_prompt(text)
 
-        # 调用 llama.cpp 推理（使用原始 completion API）
-        result = self._llm(
-            prompt,
-            max_tokens=min(self.max_new_tokens, len(text) * 2 + 50),  # 增加 token 限制
-            temperature=0.1,  # 稍微增加随机性，避免过于死板
-            repeat_penalty=1.2,  # 降低惩罚，避免影响正常输出
-            top_p=0.9,
-            stop=["\n\n", "输入：", "<think>", "<|"],  # 优化停止词
-            echo=False,
-        )
+        # 使用 ThreadPoolExecutor 添加超时保护
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(self._run_inference, prompt, text)
+            try:
+                result = future.result(timeout=self.timeout)
+            except concurrent.futures.TimeoutError:
+                # 超时，返回原文本
+                return text
 
         # 提取生成的文本
         if result and "choices" in result and len(result["choices"]) > 0:
@@ -115,6 +116,18 @@ class LlamaCppTextRefiner(BaseTextRefiner):
             return generated
 
         return ""
+
+    def _run_inference(self, prompt: str, text: str) -> dict:
+        """执行推理（可被超时中断）"""
+        return self._llm(
+            prompt,
+            max_tokens=min(self.max_new_tokens, len(text) * 2 + 50),  # 增加 token 限制
+            temperature=0.1,  # 稍微增加随机性，避免过于死板
+            repeat_penalty=1.2,  # 降低惩罚，避免影响正常输出
+            top_p=0.9,
+            stop=["\n\n", "输入：", "<think>", "<|"],  # 优化停止词
+            echo=False,
+        )
 
     def _build_fewshot_prompt(self, text: str) -> str:
         """根据 prompt_template 动态构建 Few-shot prompt
