@@ -320,125 +320,129 @@ class TrayApp:
             return
 
         Gtk = self._gtk
-        Gdk = getattr(self, "_gdk", None)
 
-        # 检查是否已有窗口打开
-        if hasattr(self, "_gtk_context_window") and self._gtk_context_window is not None:
-            try:
-                self._gtk_context_window.present()
-                return
-            except Exception:
-                self._gtk_context_window = None
-
-        # 加载当前配置
-        try:
-            current = ConfigManager.load(self.config_path)
-        except Exception as e:
-            self.events.put({"event": "log", "message": f"加载配置失败: {e}"})
-            return
-
-        current_context = current.get("asr_context", "")
-
-        # 创建窗口
-        win = Gtk.Window(title="常用词管理")
-        win.set_default_size(600, 400)
-        win.set_position(Gtk.WindowPosition.CENTER)
-        win.set_keep_above(True)
-        self._gtk_context_window = win
-
-        # 主容器
-        root_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
-        root_box.set_border_width(12)
-        win.add(root_box)
-
-        # 标题
-        title_label = Gtk.Label()
-        title_label.set_xalign(0.0)
-        title_label.set_markup("<b>常用词管理</b>")
-        root_box.pack_start(title_label, False, False, 0)
-
-        # 说明
-        hint_label = Gtk.Label(label="添加常用词可以提高语音识别的准确率。多个词用逗号分隔。")
-        hint_label.set_xalign(0.0)
-        hint_label.set_opacity(0.75)
-        hint_label.set_line_wrap(True)
-        root_box.pack_start(hint_label, False, False, 0)
-
-        # 示例
-        example_label = Gtk.Label(label="示例: Recordian, Claude, Python, 张三, 李四, 机器学习")
-        example_label.set_xalign(0.0)
-        example_label.set_opacity(0.6)
-        example_label.set_line_wrap(True)
-        root_box.pack_start(example_label, False, False, 0)
-
-        # 文本编辑区域
-        scroll = Gtk.ScrolledWindow()
-        scroll.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
-        scroll.set_shadow_type(Gtk.ShadowType.IN)
-
-        text_view = Gtk.TextView()
-        text_view.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
-        text_view.set_border_width(8)
-        text_buffer = text_view.get_buffer()
-        text_buffer.set_text(current_context)
-
-        scroll.add(text_view)
-        root_box.pack_start(scroll, True, True, 0)
-
-        # 状态标签
-        status_label = Gtk.Label()
-        status_label.set_xalign(0.0)
-        status_label.set_opacity(0.75)
-        root_box.pack_start(status_label, False, False, 0)
-
-        # 按钮区域
-        button_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
-        button_box.set_halign(Gtk.Align.END)
-        root_box.pack_start(button_box, False, False, 0)
-
-        # 取消按钮
-        cancel_btn = Gtk.Button(label="取消")
-        cancel_btn.connect("activate", lambda _: win.destroy())
-        cancel_btn.connect("clicked", lambda _: win.destroy())
-        button_box.pack_start(cancel_btn, False, False, 0)
-
-        # 保存按钮
-        save_btn = Gtk.Button(label="保存")
-        save_btn.get_style_context().add_class("suggested-action")
-
-        def _save_context(*_args):
-            try:
-                # 获取文本
-                start_iter = text_buffer.get_start_iter()
-                end_iter = text_buffer.get_end_iter()
-                context_text = text_buffer.get_text(start_iter, end_iter, False).strip()
-
-                # 更新配置
-                current["asr_context"] = context_text
-                ConfigManager.save(self.config_path, current)
-
-                status_label.set_markup('<span foreground="green">✓ 保存成功！</span>')
-                self.events.put({"event": "log", "message": f"常用词已更新: {context_text[:50]}..."})
-
-                # 1秒后关闭窗口
-                def _close_window():
-                    try:
-                        win.destroy()
-                    except Exception:
-                        pass
+        def _on_gtk_thread():
+            # 检查是否已有窗口打开
+            if hasattr(self, "_gtk_context_window") and self._gtk_context_window is not None:
+                try:
+                    self._gtk_context_window.present()
                     return False
+                except Exception:
+                    self._gtk_context_window = None
 
-                self._glib.timeout_add(1000, _close_window)
-
+            # 加载当前配置
+            try:
+                current = ConfigManager.load(self.config_path)
             except Exception as e:
-                status_label.set_markup(f'<span foreground="red">✗ 保存失败: {e}</span>')
+                self.events.put({"event": "log", "message": f"加载配置失败: {e}"})
+                return False
 
-        save_btn.connect("clicked", _save_context)
-        button_box.pack_start(save_btn, False, False, 0)
+            current_context = current.get("asr_context", "")
 
-        # 显示窗口
-        win.connect("destroy", lambda _: setattr(self, "_gtk_context_window", None))
-        win.show_all()
+            # 创建窗口
+            win = Gtk.Window(title="常用词管理")
+            win.set_default_size(600, 400)
+            win.set_position(Gtk.WindowPosition.CENTER)
+            win.set_keep_above(True)
+            self._gtk_context_window = win
+
+            # 主容器
+            root_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+            root_box.set_border_width(12)
+            win.add(root_box)
+
+            # 标题
+            title_label = Gtk.Label()
+            title_label.set_xalign(0.0)
+            title_label.set_markup("<b>常用词管理</b>")
+            root_box.pack_start(title_label, False, False, 0)
+
+            # 说明
+            hint_label = Gtk.Label(label="添加常用词可以提高语音识别的准确率。多个词用逗号分隔。")
+            hint_label.set_xalign(0.0)
+            hint_label.set_opacity(0.75)
+            hint_label.set_line_wrap(True)
+            root_box.pack_start(hint_label, False, False, 0)
+
+            # 示例
+            example_label = Gtk.Label(label="示例: Recordian, Claude, Python, 张三, 李四, 机器学习")
+            example_label.set_xalign(0.0)
+            example_label.set_opacity(0.6)
+            example_label.set_line_wrap(True)
+            root_box.pack_start(example_label, False, False, 0)
+
+            # 文本编辑区域
+            scroll = Gtk.ScrolledWindow()
+            scroll.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
+            scroll.set_shadow_type(Gtk.ShadowType.IN)
+
+            text_view = Gtk.TextView()
+            text_view.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
+            text_view.set_border_width(8)
+            text_buffer = text_view.get_buffer()
+            text_buffer.set_text(current_context)
+
+            scroll.add(text_view)
+            root_box.pack_start(scroll, True, True, 0)
+
+            # 状态标签
+            status_label = Gtk.Label()
+            status_label.set_xalign(0.0)
+            status_label.set_opacity(0.75)
+            root_box.pack_start(status_label, False, False, 0)
+
+            # 按钮区域
+            button_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+            button_box.set_halign(Gtk.Align.END)
+            root_box.pack_start(button_box, False, False, 0)
+
+            # 取消按钮
+            cancel_btn = Gtk.Button(label="取消")
+            cancel_btn.connect("activate", lambda _: win.destroy())
+            cancel_btn.connect("clicked", lambda _: win.destroy())
+            button_box.pack_start(cancel_btn, False, False, 0)
+
+            # 保存按钮
+            save_btn = Gtk.Button(label="保存")
+            save_btn.get_style_context().add_class("suggested-action")
+
+            def _save_context(*_args):
+                try:
+                    # 获取文本
+                    start_iter = text_buffer.get_start_iter()
+                    end_iter = text_buffer.get_end_iter()
+                    context_text = text_buffer.get_text(start_iter, end_iter, False).strip()
+
+                    # 更新配置
+                    current["asr_context"] = context_text
+                    ConfigManager.save(self.config_path, current)
+
+                    status_label.set_markup('<span foreground="green">✓ 保存成功！</span>')
+                    self.events.put({"event": "log", "message": f"常用词已更新: {context_text[:50]}..."})
+
+                    # 1秒后关闭窗口
+                    def _close_window():
+                        try:
+                            win.destroy()
+                        except Exception:
+                            pass
+                        return False
+
+                    self._glib.timeout_add(1000, _close_window)
+
+                except Exception as e:
+                    status_label.set_markup(f'<span foreground="red">✗ 保存失败: {e}</span>')
+
+            save_btn.connect("clicked", _save_context)
+            button_box.pack_start(save_btn, False, False, 0)
+
+            # 显示窗口
+            win.connect("destroy", lambda _: setattr(self, "_gtk_context_window", None))
+            win.show_all()
+            win.present()
+            return False
+
+        self._glib.idle_add(_on_gtk_thread)
 
     def _open_settings_gtk(
         self,
