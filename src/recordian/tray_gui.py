@@ -16,6 +16,7 @@ from typing import Any
 
 from recordian.config import ConfigManager
 from recordian.backend_manager import BackendManager, parse_backend_event_line
+from recordian.exceptions import CommitError, ConfigError
 from recordian.preset_manager import PresetManager
 from recordian.waveform_renderer import WaveformRenderer
 

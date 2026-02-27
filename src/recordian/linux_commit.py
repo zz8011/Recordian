@@ -9,11 +9,9 @@ import sys
 import threading
 import time
 
+from .exceptions import CommitError
+
 logger = logging.getLogger(__name__)
-
-
-class CommitError(RuntimeError):
-    pass
 
 
 @dataclass(slots=True)
@@ -112,7 +110,7 @@ class XdotoolClipboardCommitter(TextCommitter):
                 def _clear_clipboard():
                     try:
                         _set_clipboard_text("")
-                    except Exception:
+                    except (subprocess.SubprocessError, OSError):
                         pass  # 静默失败，不影响主流程
 
                 self._clear_timer = threading.Timer(

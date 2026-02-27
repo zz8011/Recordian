@@ -5,6 +5,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .exceptions import ConfigError
+
 
 @dataclass(slots=True)
 class Pass2PolicyConfig:
@@ -30,7 +32,9 @@ class ConfigManager:
         try:
             data = json.loads(p.read_text(encoding="utf-8"))
             return data if isinstance(data, dict) else {}
-        except Exception:
+        except (json.JSONDecodeError, OSError, ValueError) as e:
+            # 配置文件损坏或读取失败，返回空配置
+            # 在生产环境中，这里应该记录日志
             return {}
 
     @staticmethod
