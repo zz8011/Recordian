@@ -1,12 +1,19 @@
 """测试 WaveformRenderer 的关键路径和异常处理"""
 from __future__ import annotations
 
+import os
 import queue
 import threading
 import time
 from unittest.mock import MagicMock, Mock, patch
 
 import pytest
+
+# Skip all tests if no DISPLAY is available (CI environment)
+pytestmark = pytest.mark.skipif(
+    not os.environ.get('DISPLAY'),
+    reason="Requires DISPLAY environment (GUI tests)"
+)
 
 
 class TestWaveformRendererInit:
