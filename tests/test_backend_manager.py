@@ -404,3 +404,157 @@ class TestBackendManagerRestart:
         # 验证新进程被启动
         mock_popen.assert_called_once()
         assert manager.proc == new_proc
+
+
+class TestBackendManagerCleanup:
+    """测试进程清理功能"""
+
+    def test_stop_handles_double_timeout(self) -> None:
+        """测试 terminate 和 kill 都超时的情况"""
+        config_path = Path("/tmp/test_config.json")
+        events = queue.Queue()
+        on_state_change = Mock()
+        on_menu_update = Mock()
+
+        mock_proc = Mock()
+        mock_proc.poll.return_value = None
+        # 两次 wait 都超时
+        mock_proc.wait.side_effect = [
+            subprocess.TimeoutExpired("cmd", 2.0),
+            subprocess.TimeoutExpired("cmd", 0.5),
+        ]
+
+        manager = BackendManager(
+            config_path=config_path,
+            events=events,
+            on_state_change=on_state_change,
+            on_menu_update=on_menu_update,
+        )
+        manager.proc = mock_proc
+
+        # 应该不抛出异常
+        manager.stop()
+
+        # 验证尝试了 terminate 和 kill
+        mock_proc.terminate.assert_called_once()
+        mock_proc.kill.assert_called_once()
+        assert mock_proc.wait.call_count == 2
+        assert manager.proc is None
+
+    def test_stop_removes_from_registry(self) -> None:
+        """测试停止时从全局注册表移除进程"""
+        from recordian.backend_manager import _ACTIVE_BACKEND_PROCESSES
+
+        config_path = Path("/tmp/test_config.json")
+        events = queue.Queue()
+        on_state_change = Mock()
+        on_menu_update = Mock()
+
+        mock_proc = Mock()
+        mock_proc.poll.return_value = None
+        mock_proc.wait.return_value = 0
+
+        manager = BackendManager(
+            config_path=config_path,
+            events=events,
+            on_state_change=on_state_change,
+            on_menu_update=on_menu_update,
+        )
+        manager.proc = mock_proc
+
+        # 手动添加到注册表
+        _ACTIVE_BACKEND_PROCESSES.append(mock_proc)
+
+        manager.stop()
+
+        # 验证从注册表移除
+        assert mock_proc not in _ACTIVE_BACKEND_PROCESSES
+
+    def test_cleanup_backend_processes(self) -> None:
+        """测试全局清理函数"""
+        from recordian.backend_manager import _ACTIVE_BACKEND_PROCESSES, _cleanup_backend_processes
+
+        # 创建模拟进程
+        mock_proc1 = Mock()
+        mock_proc1.poll.return_value = None
+        mock_proc1.wait.return_value = 0
+
+        mock_proc2 = Mock()
+        mock_proc2.poll.return_value = 1  # 已退出
+
+        # 添加到注册表
+        _ACTIVE_BACKEND_PROCESSES.clear()
+        _ACTIVE_BACKEND_PROCESSES.append(mock_proc1)
+        _ACTIVE_BACKEND_PROCESSES.append(mock_proc2)
+
+        # 执行清理
+        _cleanup_backend_processes()
+
+        # 验证运行中的进程被终止
+        mock_proc1.terminate.assert_called_once()
+        mock_proc1.wait.assert_called()
+
+        # 验证已退出的进程不被终止
+        mock_proc2.terminate.assert_not_called()
+
+        # 验证注册表被清空
+        assert len(_ACTIVE_BACKEND_PROCESSES) == 0
+
+    def test_cleanup_handles_process_lookup_error(self) -> None:
+        """测试清理时处理进程不存在错误"""
+        from recordian.backend_manager import _ACTIVE_BACKEND_PROCESSES, _cleanup_backend_processes
+
+        mock_proc = Mock()
+        mock_proc.poll.return_value = None
+        mock_proc.terminate.side_effect = ProcessLookupError()
+
+        _ACTIVE_BACKEND_PROCESSES.clear()
+        _ACTIVE_BACKEND_PROCESSES.append(mock_proc)
+
+        # 应该不抛出异常
+        _cleanup_backend_processes()
+
+        # 验证进程被移除
+        assert len(_ACTIVE_BACKEND_PROCESSES) == 0
+
+    def test_cleanup_handles_terminate_timeout_then_kill_timeout(self) -> None:
+        """测试清理时 terminate 和 kill 都超时"""
+        from recordian.backend_manager import _ACTIVE_BACKEND_PROCESSES, _cleanup_backend_processes
+
+        mock_proc = Mock()
+        mock_proc.poll.return_value = None
+        mock_proc.wait.side_effect = [
+            subprocess.TimeoutExpired("cmd", 2.0),
+            subprocess.TimeoutExpired("cmd", 0.5),
+        ]
+
+        _ACTIVE_BACKEND_PROCESSES.clear()
+        _ACTIVE_BACKEND_PROCESSES.append(mock_proc)
+
+        # 应该不抛出异常
+        _cleanup_backend_processes()
+
+        # 验证尝试了 terminate 和 kill
+        mock_proc.terminate.assert_called_once()
+        mock_proc.kill.assert_called_once()
+
+        # 验证进程被移除
+        assert len(_ACTIVE_BACKEND_PROCESSES) == 0
+
+    def test_cleanup_handles_kill_process_lookup_error(self) -> None:
+        """测试清理时 kill 阶段的进程不存在错误"""
+        from recordian.backend_manager import _ACTIVE_BACKEND_PROCESSES, _cleanup_backend_processes
+
+        mock_proc = Mock()
+        mock_proc.poll.return_value = None
+        mock_proc.wait.side_effect = subprocess.TimeoutExpired("cmd", 2.0)
+        mock_proc.kill.side_effect = ProcessLookupError()
+
+        _ACTIVE_BACKEND_PROCESSES.clear()
+        _ACTIVE_BACKEND_PROCESSES.append(mock_proc)
+
+        # 应该不抛出异常
+        _cleanup_backend_processes()
+
+        # 验证进程被移除
+        assert len(_ACTIVE_BACKEND_PROCESSES) == 0
