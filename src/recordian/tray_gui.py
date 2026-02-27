@@ -231,6 +231,13 @@ class TrayApp:
         mode_text = "快速模式" if enabled else "质量模式"
         self.events.put({"event": "log", "message": f"已切换到{mode_text}（热切换）"})
 
+        # 显示通知反馈
+        try:
+            from .linux_notify import notify
+            notify(f"已切换到{mode_text}", title="Recordian")
+        except Exception:  # noqa: BLE001
+            pass  # 通知失败不影响功能
+
         # 更新托盘菜单以反映新状态
         self._update_tray_menu()
 

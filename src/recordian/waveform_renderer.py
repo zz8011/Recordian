@@ -24,9 +24,8 @@ class WaveformRenderer:
         self._init_error: Exception | None = None
         self._thread = threading.Thread(target=self._run_shader_loop, daemon=True)
         self._thread.start()
-        self._ready.wait(timeout=3.0)
-        if self._init_error is not None:
-            raise RuntimeError(f"shader overlay init failed: {self._init_error}") from self._init_error
+        # 异步初始化：不阻塞主线程，后台完成后通知
+        # 如果需要检查初始化状态，使用 is_ready() 方法
 
     def _run_shader_loop(self) -> None:
         try:
@@ -307,6 +306,14 @@ void main() {
 
     def set_level(self, level: float) -> None:
         self._cmd_queue.put(("level", float(level)))
+
+    def is_ready(self) -> bool:
+        """检查渲染器是否已初始化完成"""
+        return self._ready.is_set()
+
+    def get_init_error(self) -> Exception | None:
+        """获取初始化错误（如果有）"""
+        return self._init_error
 
     def shutdown(self) -> None:
         self._cmd_queue.put(("quit", None))

@@ -490,6 +490,11 @@ def build_ptt_hotkey_handlers(
 
             threading.Thread(target=_level_worker, daemon=True).start()
         except Exception:  # noqa: BLE001
+            # 确保在异常路径停止音频采样线程
+            level_stop = _get_state("level_stop")
+            if isinstance(level_stop, threading.Event):
+                level_stop.set()
+            _set_state("level_stop", None)
             lock.release()
             raise
 
