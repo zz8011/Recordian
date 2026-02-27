@@ -22,7 +22,10 @@ def test_load_save_runtime_config(tmp_path: Path) -> None:
     payload = {"hotkey": "<ctrl>+<alt>+v", "duration": 3}
     ConfigManager.save(path, payload)
     loaded = ConfigManager.load(path)
-    assert loaded == payload
+    # ConfigManager 现在会自动迁移配置，添加 version 和 policy 字段
+    assert loaded["hotkey"] == payload["hotkey"]
+    assert loaded["duration"] == payload["duration"]
+    assert "version" in loaded  # 自动添加版本号
 
 
 def test_color_and_truncate_helpers() -> None:
