@@ -5,11 +5,17 @@ import time
 
 from recordian.hotkey_dictate import (
     _adaptive_vad_threshold,
+    _coerce_bool,
     _commit_text,
     _expand_key_name,
+    _float_to_pcm16le,
     _merge_stream_text,
     _normalize_final_text,
+    _pick_vad_sample_rate,
     _pcm16le_to_f32,
+    _resolve_auto_hard_enter,
+    _resample_audio_for_vad,
+    _vad_frame_bytes,
     build_hotkey_handlers,
     parse_hotkey_spec,
 )
@@ -132,11 +138,68 @@ def test_commit_text_handles_generic_exception() -> None:
     assert "boom" in str(payload["detail"])
 
 
+def test_commit_text_appends_hard_enter_detail_when_enabled(monkeypatch) -> None:
+    class _OkCommitter:
+        backend_name = "xdotool"
+
+        def commit(self, text: str):  # noqa: ANN001
+            class _R:
+                backend = "xdotool"
+                committed = True
+                detail = "typed"
+
+            return _R()
+
+    class _EnterR:
+        committed = True
+        detail = "hard_enter_sent"
+
+    monkeypatch.setattr("recordian.hotkey_dictate.send_hard_enter", lambda committer: _EnterR())
+    payload = _commit_text(_OkCommitter(), "你好", auto_hard_enter=True)
+    assert payload["committed"] is True
+    assert "typed" in str(payload["detail"])
+    assert "hard_enter_sent" in str(payload["detail"])
+
+
+def test_resolve_auto_hard_enter_reads_config(tmp_path: Path) -> None:
+    cfg = tmp_path / "hotkey.json"
+    cfg.write_text(json.dumps({"auto_hard_enter": "true"}, ensure_ascii=False), encoding="utf-8")
+    args = argparse.Namespace(auto_hard_enter=False, config_path=str(cfg))
+    assert _resolve_auto_hard_enter(args) is True
+
+
+def test_coerce_bool() -> None:
+    assert _coerce_bool(True) is True
+    assert _coerce_bool("1") is True
+    assert _coerce_bool("off", default=True) is False
+    assert _coerce_bool("unknown", default=True) is True
+
+
 def test_adaptive_vad_threshold_clamped_range() -> None:
     base = 0.045
     assert abs(_adaptive_vad_threshold(base, 0.0) - 0.018) < 1e-6
     assert 0.018 <= _adaptive_vad_threshold(base, 0.01) <= base
     assert abs(_adaptive_vad_threshold(base, 0.05) - base) < 1e-6
+
+
+def test_vad_helpers_choose_sample_rate_and_frame_size() -> None:
+    assert _pick_vad_sample_rate(48000) == 48000
+    assert _pick_vad_sample_rate(44100) == 16000
+    assert _vad_frame_bytes(16000, 30) == 960
+
+
+def test_float_to_pcm16le_and_resample_roundtrip() -> None:
+    src = [0.0, 0.5, -0.5, 1.2, -1.2]
+    pcm = _float_to_pcm16le(src)
+    decoded = _pcm16le_to_f32(pcm, channels=1)
+    assert len(decoded) == len(src)
+    assert 0.49 < decoded[1] < 0.51
+    assert -0.51 < decoded[2] < -0.49
+    assert decoded[3] <= 1.0
+    assert decoded[4] >= -1.0
+
+    resampled = _resample_audio_for_vad([0.0, 0.2, 0.4, 0.6], src_rate=8000, dst_rate=16000)
+    assert len(resampled) >= 7
 
 
 def test_pcm16le_to_f32_mono_and_stereo() -> None:
@@ -170,6 +233,43 @@ def test_build_parser_accepts_llamacpp_refine_provider() -> None:
     assert args.refine_provider == "llamacpp"
 
 
+def test_build_parser_accepts_voice_wake_options() -> None:
+    from recordian.hotkey_dictate import build_parser
+
+    parser = build_parser()
+    args = parser.parse_args(
+        [
+            "--enable-voice-wake",
+            "--wake-prefix",
+            "嘿",
+            "--wake-name",
+            "小二",
+            "--wake-cooldown-s",
+            "3",
+            "--wake-vad-aggressiveness",
+            "3",
+            "--wake-vad-frame-ms",
+            "20",
+            "--wake-no-speech-timeout-s",
+            "2.5",
+            "--auto-hard-enter",
+            "--sound-on-path",
+            "/tmp/on.mp3",
+            "--sound-off-path",
+            "/tmp/off.mp3",
+        ]
+    )
+    assert args.enable_voice_wake is True
+    assert "嘿" in args.wake_prefix
+    assert "小二" in args.wake_name
+    assert args.wake_vad_aggressiveness == 3
+    assert args.wake_vad_frame_ms == 20
+    assert args.wake_no_speech_timeout_s == 2.5
+    assert args.auto_hard_enter is True
+    assert args.sound_on_path == "/tmp/on.mp3"
+    assert args.sound_off_path == "/tmp/off.mp3"
+
+
 def test_parse_args_with_config_normalizes_legacy_values(tmp_path: Path, monkeypatch) -> None:
     from recordian.hotkey_dictate import _parse_args_with_config, build_parser
 
@@ -183,6 +283,10 @@ def test_parse_args_with_config_normalizes_legacy_values(tmp_path: Path, monkeyp
                 "record_backend": "ffmpeg",
                 "record_format": "mp3",
                 "commit_backend": "pynput",
+                "auto_hard_enter": True,
+                "wake_vad_aggressiveness": 9,
+                "wake_vad_frame_ms": 25,
+                "wake_no_speech_timeout_s": -3,
             },
             ensure_ascii=False,
         ),
@@ -198,6 +302,10 @@ def test_parse_args_with_config_normalizes_legacy_values(tmp_path: Path, monkeyp
     assert args.record_backend == "ffmpeg-pulse"
     assert args.record_format == "ogg"
     assert args.commit_backend == "auto"
+    assert args.auto_hard_enter is True
+    assert args.wake_vad_aggressiveness == 2
+    assert args.wake_vad_frame_ms == 30
+    assert args.wake_no_speech_timeout_s == 0.0
 
 
 def test_ptt_and_toggle_concurrent_trigger_no_conflict(monkeypatch) -> None:

@@ -9,6 +9,11 @@ import tkinter as tk
 class WaveformRenderer:
     """波形动画渲染器：使用 pyglet/OpenGL shader 渲染音频可视化叠加层"""
 
+    PROCESSING_HIDE_DELAY_S = 0.50
+    ERROR_HIDE_DELAY_S = 1.55
+    IDLE_HIDE_DELAY_WITH_DETAIL_S = 1.10
+    IDLE_HIDE_DELAY_EMPTY_S = 0.35
+
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
         self.state = "idle"
@@ -260,17 +265,18 @@ void main() {
                         self.amplitude = 0.0
                         self.base_mode = 0.0
                         self.level_boost = 0.0
-                        self.hide_deadline = time.time() + 0.50
+                        self.hide_deadline = time.time() + self.PROCESSING_HIDE_DELAY_S
                     elif self.state == "error":
                         self.target_amplitude = 0.50
                         self.base_mode = 3.0
                         window.set_location(_pos_x, _pos_y)
                         window.set_visible(True)
-                        self.hide_deadline = time.time() + 1.55
+                        self.hide_deadline = time.time() + self.ERROR_HIDE_DELAY_S
                     else:
                         self.target_amplitude = 0.0
                         self.base_mode = 0.0
-                        self.hide_deadline = time.time() + (1.1 if self.detail.strip() else 0.35)
+                        delay = self.IDLE_HIDE_DELAY_WITH_DETAIL_S if self.detail.strip() else self.IDLE_HIDE_DELAY_EMPTY_S
+                        self.hide_deadline = time.time() + delay
                 elif cmd == "level":
                     level = max(0.0, min(1.0, float(payload)))  # type: ignore[arg-type]
                     # 降低触发阈值，普通语音也能驱动动画。

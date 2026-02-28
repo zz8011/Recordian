@@ -5,8 +5,10 @@ from recordian.tray_gui import (
     _parse_bool,
     _blend_hex,
     _hex_with_alpha,
+    _overlay_hide_delay_seconds,
     _truncate,
 )
+from recordian.waveform_renderer import WaveformRenderer
 from recordian.backend_manager import parse_backend_event_line
 from recordian.config import ConfigManager
 
@@ -36,6 +38,20 @@ def test_color_and_truncate_helpers() -> None:
     assert _parse_bool("true", default=False)
     assert not _parse_bool("0", default=True)
     assert _parse_bool("unknown", default=True)
+
+
+def test_overlay_hide_delay_seconds_matches_renderer_constants() -> None:
+    class _FakeOverlay:
+        PROCESSING_HIDE_DELAY_S = WaveformRenderer.PROCESSING_HIDE_DELAY_S
+        ERROR_HIDE_DELAY_S = WaveformRenderer.ERROR_HIDE_DELAY_S
+        IDLE_HIDE_DELAY_WITH_DETAIL_S = WaveformRenderer.IDLE_HIDE_DELAY_WITH_DETAIL_S
+        IDLE_HIDE_DELAY_EMPTY_S = WaveformRenderer.IDLE_HIDE_DELAY_EMPTY_S
+
+    overlay = _FakeOverlay()
+    assert _overlay_hide_delay_seconds(overlay, "processing", "x") == WaveformRenderer.PROCESSING_HIDE_DELAY_S
+    assert _overlay_hide_delay_seconds(overlay, "error", "x") == WaveformRenderer.ERROR_HIDE_DELAY_S
+    assert _overlay_hide_delay_seconds(overlay, "idle", "有文字") == WaveformRenderer.IDLE_HIDE_DELAY_WITH_DETAIL_S
+    assert _overlay_hide_delay_seconds(overlay, "idle", "") == WaveformRenderer.IDLE_HIDE_DELAY_EMPTY_S
 
 
 def test_tray_gui_no_mktemp() -> None:

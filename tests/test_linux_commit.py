@@ -111,3 +111,48 @@ def test_xdotool_clipboard_multiple_commits_cancel_previous_timer(monkeypatch):
     assert clipboard_calls[0] == "set:文本1"
     assert clipboard_calls[1] == "set:文本2"
     assert clipboard_calls[2] == "set:"
+
+
+def test_send_hard_enter_xdotool_clipboard(monkeypatch) -> None:
+    from recordian.linux_commit import XdotoolClipboardCommitter, send_hard_enter
+
+    calls: list[tuple[str, int | None]] = []
+
+    def _fake_xdotool_key(shortcut: str, *, window_id=None) -> None:
+        calls.append((shortcut, window_id))
+
+    monkeypatch.setattr("recordian.linux_commit._send_hard_enter_via_pynput", lambda: False)
+    monkeypatch.setattr("recordian.linux_commit.which", lambda x: "/usr/bin/" + x)
+    monkeypatch.setattr("recordian.linux_commit._xdotool_key", _fake_xdotool_key)
+
+    committer = XdotoolClipboardCommitter(target_window_id=12345, clipboard_timeout_ms=0)
+    result = send_hard_enter(committer)
+    assert result.committed is True
+    assert calls == [("return", 12345)]
+
+
+def test_send_hard_enter_unsupported_backend() -> None:
+    from recordian.linux_commit import NoopCommitter, send_hard_enter
+
+    result = send_hard_enter(NoopCommitter())
+    assert result.committed is False
+    assert "unsupported" in result.detail
+
+
+def test_send_hard_enter_prefers_pynput(monkeypatch) -> None:
+    from recordian.linux_commit import XdotoolClipboardCommitter, send_hard_enter
+
+    called = {"xdotool": False}
+
+    def _fake_xdotool_key(shortcut: str, *, window_id=None) -> None:  # noqa: ANN001
+        called["xdotool"] = True
+
+    monkeypatch.setattr("recordian.linux_commit._send_hard_enter_via_pynput", lambda: True)
+    monkeypatch.setattr("recordian.linux_commit.which", lambda x: "/usr/bin/" + x)
+    monkeypatch.setattr("recordian.linux_commit._xdotool_key", _fake_xdotool_key)
+
+    committer = XdotoolClipboardCommitter(target_window_id=12345, clipboard_timeout_ms=0)
+    result = send_hard_enter(committer)
+    assert result.committed is True
+    assert "pynput" in result.detail
+    assert called["xdotool"] is False

@@ -32,9 +32,27 @@ pkill -f recordian && recordian-tray
   "qwen_model": "./models/...",      // 模型路径
   "enable_text_refine": true,        // 文本精炼
   "refine_preset": "default",        // 精炼预设
+  "enable_voice_wake": false,        // 语音唤醒开关
+  "wake_prefix": ["嗨", "嘿"],       // 唤醒前缀
+  "wake_name": ["小二"],             // 唤醒名字
+  "sound_on_path": "assets/wake-on.mp3",   // 全局开始音效
+  "sound_off_path": "assets/wake-off.mp3", // 全局结束音效
+  "wake_use_webrtcvad": true,        // 使用 WebRTC VAD 判定说话/静音
+  "wake_vad_aggressiveness": 2,      // VAD 灵敏度: 0-3
+  "wake_vad_frame_ms": 30,           // VAD 帧长: 10/20/30ms
+  "wake_no_speech_timeout_s": 2.0,   // 唤醒后未开口超时自动结束
+  "wake_auto_stop_silence_s": 1.0,   // 静音自动结束秒数
   "commit_backend": "auto"           // 文本上屏方式
 }
 ```
+
+### 语音唤醒模型（sherpa-onnx）
+- 默认模型目录：`models/sherpa-onnx-kws-zipformer-wenetspeech-3.3M-2024-01-01`
+- 默认文件：
+  - `encoder-epoch-12-avg-2-chunk-16-left-64.onnx`
+  - `decoder-epoch-12-avg-2-chunk-16-left-64.onnx`
+  - `joiner-epoch-12-avg-2-chunk-16-left-64.onnx`
+  - `tokens.txt`
 
 ## 🎨 动画问题
 

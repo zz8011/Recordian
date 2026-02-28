@@ -66,6 +66,12 @@ def test_commit_backend_rejects_unsupported_pynput_choice() -> None:
         parser.parse_args(["--commit-backend", "pynput"])
 
 
+def test_parser_accepts_auto_hard_enter() -> None:
+    parser = build_parser()
+    args = parser.parse_args(["--auto-hard-enter"])
+    assert args.auto_hard_enter is True
+
+
 def test_stop_record_process_ffmpeg_uses_sigint() -> None:
     import signal
     from unittest.mock import MagicMock

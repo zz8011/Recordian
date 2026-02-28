@@ -13,7 +13,7 @@ from tempfile import TemporaryDirectory
 import time
 from typing import Any
 
-from .linux_commit import CommitError, resolve_committer
+from .linux_commit import CommitError, resolve_committer, send_hard_enter
 from .providers import QwenASRProvider, HttpCloudProvider, ASRProvider
 from .runtime_deps import ensure_ffmpeg_available
 
@@ -69,6 +69,12 @@ def add_dictate_args(parser: argparse.ArgumentParser) -> None:
         "--commit-backend",
         choices=["none", "auto", "wtype", "xdotool", "xdotool-clipboard", "stdout"],
         default="auto",
+    )
+    parser.add_argument(
+        "--auto-hard-enter",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Send a real Enter key event after committing text",
     )
 
     parser.add_argument(
@@ -339,6 +345,7 @@ def transcribe_and_commit(
     committer: Any,
     audio_path: Path,
     hotwords: list[str],
+    auto_hard_enter: bool = False,
 ) -> tuple[str, float, dict[str, object]]:
     t1 = time.perf_counter()
     asr = provider.transcribe_file(audio_path, hotwords=hotwords)
@@ -348,7 +355,14 @@ def transcribe_and_commit(
     if asr.text.strip():
         try:
             result = committer.commit(asr.text)
-            commit_info = {"backend": result.backend, "committed": result.committed, "detail": result.detail}
+            detail = str(result.detail)
+            if result.committed and auto_hard_enter:
+                enter_result = send_hard_enter(committer)
+                if enter_result.committed:
+                    detail = f"{detail};{enter_result.detail}" if detail else str(enter_result.detail)
+                else:
+                    detail = f"{detail};{enter_result.detail}" if detail else str(enter_result.detail)
+            commit_info = {"backend": result.backend, "committed": result.committed, "detail": detail}
         except Exception as exc:  # noqa: BLE001
             commit_info = {
                 "backend": committer.backend_name,
@@ -400,6 +414,7 @@ def run_dictate_once(
             committer=committer,
             audio_path=audio_path,
             hotwords=args.hotword,
+            auto_hard_enter=bool(getattr(args, "auto_hard_enter", False)),
         )
 
         return DictateResult(

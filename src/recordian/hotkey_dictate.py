@@ -12,9 +12,10 @@ from typing import Any, Callable
 
 from recordian.config import ConfigManager
 
+from .audio_feedback import default_sound_off_path, default_sound_on_path, play_sound
 from .audio import read_wav_mono_f32
 from .exceptions import ASRError, AudioError, CommitError, RefinerError
-from .linux_commit import get_focused_window_id, resolve_committer
+from .linux_commit import get_focused_window_id, resolve_committer, send_hard_enter
 from .linux_notify import Notification, resolve_notifier
 from .linux_dictate import (
     add_dictate_args,
@@ -26,8 +27,17 @@ from .linux_dictate import (
     stop_record_process,
 )
 from .runtime_deps import ensure_ffmpeg_available
+from .voice_wake import VoiceWakeService, make_wake_model_config, make_wake_runtime_config, normalize_tokens_type
 
 DEFAULT_CONFIG_PATH = "~/.config/recordian/hotkey.json"
+
+_DEFAULT_WAKE_MODEL_DIR = Path(__file__).parent.parent.parent / "models" / "sherpa-onnx-kws-zipformer-wenetspeech-3.3M-2024-01-01"
+_DEFAULT_WAKE_ENCODER = _DEFAULT_WAKE_MODEL_DIR / "encoder-epoch-12-avg-2-chunk-16-left-64.onnx"
+_DEFAULT_WAKE_DECODER = _DEFAULT_WAKE_MODEL_DIR / "decoder-epoch-12-avg-2-chunk-16-left-64.onnx"
+_DEFAULT_WAKE_JOINER = _DEFAULT_WAKE_MODEL_DIR / "joiner-epoch-12-avg-2-chunk-16-left-64.onnx"
+_DEFAULT_WAKE_TOKENS = _DEFAULT_WAKE_MODEL_DIR / "tokens.txt"
+_DEFAULT_SOUND_ON = default_sound_on_path()
+_DEFAULT_SOUND_OFF = default_sound_off_path()
 
 
 class RecordingState(enum.Enum):
@@ -146,6 +156,67 @@ def build_parser() -> argparse.ArgumentParser:
         default=False,
         help="Enable streaming output for text refinement (real-time display)",
     )
+    parser.add_argument(
+        "--enable-voice-wake",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Enable wake-word mode (continuous low-power listening)",
+    )
+    parser.add_argument(
+        "--wake-prefix",
+        action="append",
+        default=["嗨", "嘿"],
+        help="Wake-word prefix, repeatable (e.g., 嗨/嘿)",
+    )
+    parser.add_argument(
+        "--wake-name",
+        action="append",
+        default=["小二"],
+        help="Wake-word name, repeatable (e.g., 小二/小三/乐乐)",
+    )
+    parser.add_argument("--wake-cooldown-s", type=float, default=3.0, help="Cooldown after wake trigger")
+    parser.add_argument("--wake-auto-stop-silence-s", type=float, default=1.0, help="Auto-stop after silence")
+    parser.add_argument("--wake-min-speech-s", type=float, default=0.5, help="Minimum speech duration before auto-stop")
+    parser.add_argument(
+        "--wake-use-webrtcvad",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Use WebRTC VAD for wake-session speech/silence detection",
+    )
+    parser.add_argument(
+        "--wake-vad-aggressiveness",
+        type=int,
+        default=2,
+        choices=[0, 1, 2, 3],
+        help="WebRTC VAD aggressiveness (0=loose, 3=strict)",
+    )
+    parser.add_argument(
+        "--wake-vad-frame-ms",
+        type=int,
+        default=30,
+        choices=[10, 20, 30],
+        help="WebRTC VAD frame size in ms",
+    )
+    parser.add_argument(
+        "--wake-no-speech-timeout-s",
+        type=float,
+        default=2.0,
+        help="Auto-stop if no speech is detected after wake",
+    )
+    parser.add_argument("--sound-on-path", default=str(_DEFAULT_SOUND_ON), help="Global cue sound when recording starts")
+    parser.add_argument("--sound-off-path", default=str(_DEFAULT_SOUND_OFF), help="Global cue sound when recording ends")
+    parser.add_argument("--wake-beep-path", default="", help="Deprecated legacy cue path, kept for compatibility")
+    parser.add_argument("--wake-encoder", default=str(_DEFAULT_WAKE_ENCODER))
+    parser.add_argument("--wake-decoder", default=str(_DEFAULT_WAKE_DECODER))
+    parser.add_argument("--wake-joiner", default=str(_DEFAULT_WAKE_JOINER))
+    parser.add_argument("--wake-tokens", default=str(_DEFAULT_WAKE_TOKENS))
+    parser.add_argument("--wake-keywords-file", default="", help="Optional pre-tokenized keywords.txt path")
+    parser.add_argument("--wake-tokens-type", default="ppinyin", choices=["ppinyin", "bpe", "cjkchar", "fpinyin"])
+    parser.add_argument("--wake-provider", default="cpu")
+    parser.add_argument("--wake-num-threads", type=int, default=2)
+    parser.add_argument("--wake-sample-rate", type=int, default=16000)
+    parser.add_argument("--wake-keyword-score", type=float, default=1.5)
+    parser.add_argument("--wake-keyword-threshold", type=float, default=0.25)
     add_dictate_args(parser)
     return parser
 
@@ -175,11 +246,13 @@ def build_hotkey_handlers(
 
         def _worker() -> None:
             try:
+                _play_global_cue(args, "on")
                 result = run_dictate_once(args)
                 on_result({"event": "result", "result": asdict(result)})
             except Exception as exc:  # noqa: BLE001
                 on_error({"event": "error", "error": f"{type(exc).__name__}: {exc}"})
             finally:
+                _play_global_cue(args, "off")
                 lock.release()
 
         threading.Thread(target=_worker, daemon=True).start()
@@ -217,13 +290,57 @@ def _preview_text(text: str, max_len: int = 48) -> str:
     return normalized[: max_len - 3] + "..."
 
 
-def _commit_text(committer: Any, text: str) -> dict[str, object]:
+def _play_global_cue(args: argparse.Namespace, cue: str) -> None:
+    custom_path = getattr(args, "sound_on_path", "") if cue == "on" else getattr(args, "sound_off_path", "")
+    # Backward compatibility: older config only had wake_beep_path.
+    legacy = getattr(args, "wake_beep_path", "")
+    play_sound(cue=cue, custom_path=custom_path, legacy_beep_path=legacy)
+
+
+def _coerce_bool(value: object, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    if isinstance(value, (int, float)):
+        return bool(value)
+    token = str(value).strip().lower()
+    if token in {"1", "true", "yes", "on"}:
+        return True
+    if token in {"0", "false", "no", "off"}:
+        return False
+    return default
+
+
+def _resolve_auto_hard_enter(args: argparse.Namespace) -> bool:
+    default = bool(getattr(args, "auto_hard_enter", False))
+    raw_path = str(getattr(args, "config_path", "")).strip()
+    if not raw_path:
+        return default
+    try:
+        path = Path(raw_path).expanduser()
+        if not path.exists():
+            return default
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(payload, dict):
+            return _coerce_bool(payload.get("auto_hard_enter", default), default=default)
+    except Exception:
+        return default
+    return default
+
+
+def _commit_text(committer: Any, text: str, *, auto_hard_enter: bool = False) -> dict[str, object]:
     stripped = text.strip()
     if not stripped:
         return {"backend": committer.backend_name, "committed": False, "detail": "empty_text"}
     try:
         result = committer.commit(stripped)
-        return {"backend": result.backend, "committed": result.committed, "detail": result.detail}
+        detail = str(result.detail)
+        if result.committed and auto_hard_enter:
+            enter_result = send_hard_enter(committer)
+            enter_detail = str(enter_result.detail)
+            detail = f"{detail};{enter_detail}" if detail else enter_detail
+        return {"backend": result.backend, "committed": result.committed, "detail": detail}
     except Exception as exc:  # noqa: BLE001
         return {"backend": committer.backend_name, "committed": False, "detail": str(exc)}
 
@@ -242,7 +359,7 @@ def build_ptt_hotkey_handlers(
     on_error: Callable[[dict[str, object]], None],
     on_busy: Callable[[dict[str, object]], None],
     on_state: Callable[[dict[str, object]], None],
-) -> tuple[Callable[[], None], Callable[[], None], Callable[[], None], threading.Event]:
+) -> tuple[Callable[..., None], Callable[[], None], Callable[[], None], threading.Event]:
     lock = threading.Lock()
     stop_event = threading.Event()
     cooldown_s = max(0.0, args.cooldown_ms / 1000.0)
@@ -361,6 +478,12 @@ def build_ptt_hotkey_handlers(
         "target_window_id": None,
         "level_stop": None,  # threading.Event to stop audio level sampling
         "recording_state": RecordingState.IDLE,
+        "record_source": "hotkey",
+        "voice_session_active": False,
+        "voice_last_speech_ts": 0.0,
+        "voice_started_ts": 0.0,
+        "voice_speech_detected": False,
+        "voice_auto_stopping": False,
     }
 
     def _get_state(key: str) -> object:
@@ -378,7 +501,7 @@ def build_ptt_hotkey_handlers(
         with state_lock:
             state.update(updates)
 
-    def _start_recording() -> None:
+    def _start_recording(trigger_source: str = "hotkey") -> None:
         now = time.monotonic()
         last_trigger = float(_get_state("last_trigger"))
         if now - last_trigger < cooldown_s:
@@ -413,6 +536,12 @@ def build_ptt_hotkey_handlers(
                 "temp_dir": temp_dir,
                 "audio_path": audio_path,
                 "record_started_at": time.perf_counter(),
+                "record_source": trigger_source,
+                "voice_session_active": trigger_source == "voice_wake",
+                "voice_last_speech_ts": time.monotonic(),
+                "voice_started_ts": time.monotonic(),
+                "voice_speech_detected": False,
+                "voice_auto_stopping": False,
             })
             on_state({"event": "recording_started", "record_backend": recorder_backend, "audio_path": str(audio_path)})
 
@@ -454,8 +583,28 @@ def build_ptt_hotkey_handlers(
                         device_id = None
                         sample_rate = 16000
 
+                    use_webrtc_vad = bool(getattr(args, "wake_use_webrtcvad", True))
+                    try:
+                        vad_aggressiveness = int(getattr(args, "wake_vad_aggressiveness", 2))
+                    except Exception:
+                        vad_aggressiveness = 2
+                    if vad_aggressiveness not in {0, 1, 2, 3}:
+                        vad_aggressiveness = 2
+                    try:
+                        vad_frame_ms = int(getattr(args, "wake_vad_frame_ms", 30))
+                    except Exception:
+                        vad_frame_ms = 30
+                    if vad_frame_ms not in {10, 20, 30}:
+                        vad_frame_ms = 30
+                    vad_sample_rate = _pick_vad_sample_rate(sample_rate)
+                    vad_frame_bytes = _vad_frame_bytes(vad_sample_rate, vad_frame_ms)
+                    vad_pcm_buffer = bytearray()
+                    vad = None
+                    vad_init_attempted = False
+                    vad_log_emitted = False
+
                     def _cb(indata: Any, frames: int, t: Any, status: Any) -> None:
-                        nonlocal noise_floor, smoothed_level
+                        nonlocal noise_floor, smoothed_level, vad, vad_init_attempted, vad_log_emitted
                         if stop.is_set():
                             raise sd.CallbackStop()
 
@@ -477,8 +626,86 @@ def build_ptt_hotkey_handlers(
                         smoothed_level = smoothed_level * (1.0 - alpha) + level * alpha
                         on_state({"event": "audio_level", "level": min(1.0, max(0.0, smoothed_level))})
 
+                        # 语音唤醒会话自动停止：检测说话后连续静音约 1s 自动结束。
+                        if bool(_get_state("voice_session_active")):
+                            if use_webrtc_vad and vad is None and not vad_init_attempted:
+                                vad_init_attempted = True
+                                try:
+                                    import webrtcvad
+
+                                    vad = webrtcvad.Vad(vad_aggressiveness)
+                                    if args.debug_diagnostics and not vad_log_emitted:
+                                        on_state(
+                                            {
+                                                "event": "log",
+                                                "message": (
+                                                    "diag voice_activity_detector mode=webrtcvad"
+                                                    f" sample_rate={vad_sample_rate}"
+                                                    f" frame_ms={vad_frame_ms}"
+                                                    f" aggressiveness={vad_aggressiveness}"
+                                                ),
+                                            }
+                                        )
+                                        vad_log_emitted = True
+                                except Exception as exc:  # noqa: BLE001
+                                    vad = None
+                                    if args.debug_diagnostics and not vad_log_emitted:
+                                        on_state(
+                                            {
+                                                "event": "log",
+                                                "message": f"diag voice_activity_detector_fallback=level reason={type(exc).__name__}: {exc}",
+                                            }
+                                        )
+                                        vad_log_emitted = True
+                            elif args.debug_diagnostics and not use_webrtc_vad and not vad_log_emitted:
+                                on_state({"event": "log", "message": "diag voice_activity_detector mode=level"})
+                                vad_log_emitted = True
+
+                            now_ts = time.monotonic()
+                            speech_detected = False
+                            if vad is not None:
+                                frame = np.ascontiguousarray(indata.reshape(-1), dtype=np.float32)
+                                if sample_rate != vad_sample_rate:
+                                    frame = _resample_audio_for_vad(frame, src_rate=sample_rate, dst_rate=vad_sample_rate)
+                                vad_pcm_buffer.extend(_float_to_pcm16le(frame))
+                                while len(vad_pcm_buffer) >= vad_frame_bytes:
+                                    frame_bytes = bytes(vad_pcm_buffer[:vad_frame_bytes])
+                                    del vad_pcm_buffer[:vad_frame_bytes]
+                                    if vad.is_speech(frame_bytes, vad_sample_rate):
+                                        speech_detected = True
+                            elif level >= 0.08:
+                                speech_detected = True
+
+                            if speech_detected:
+                                _set_state("voice_last_speech_ts", now_ts)
+                                _set_state("voice_speech_detected", True)
+
                     with sd.InputStream(device=device_id, samplerate=sample_rate, channels=1, blocksize=1024, callback=_cb):
-                        stop.wait()
+                        while not stop.wait(0.05):
+                            if not bool(_get_state("voice_session_active")):
+                                continue
+                            if bool(_get_state("voice_auto_stopping")):
+                                continue
+                            speech_detected = bool(_get_state("voice_speech_detected"))
+                            started_ts = float(_get_state("voice_started_ts"))
+                            now_ts = time.monotonic()
+                            if not speech_detected:
+                                no_speech_timeout_s = max(0.0, float(getattr(args, "wake_no_speech_timeout_s", 2.0)))
+                                if no_speech_timeout_s > 0 and now_ts - started_ts >= no_speech_timeout_s:
+                                    _set_state("voice_auto_stopping", True)
+                                    on_state({"event": "voice_wake_auto_stop", "reason": "no_speech_timeout"})
+                                    threading.Thread(target=_stop_recording, daemon=True).start()
+                                    break
+                                continue
+                            last_speech_ts = float(_get_state("voice_last_speech_ts"))
+                            if now_ts - started_ts < max(0.0, float(getattr(args, "wake_min_speech_s", 0.5))):
+                                continue
+                            if now_ts - last_speech_ts < max(0.0, float(getattr(args, "wake_auto_stop_silence_s", 1.0))):
+                                continue
+                            _set_state("voice_auto_stopping", True)
+                            on_state({"event": "voice_wake_auto_stop", "reason": "silence"})
+                            threading.Thread(target=_stop_recording, daemon=True).start()
+                            break
                 except ImportError:
                     # sounddevice not available, skip audio level monitoring
                     if args.debug_diagnostics:
@@ -518,6 +745,8 @@ def build_ptt_hotkey_handlers(
             "temp_dir": None,
             "record_started_at": None,
             "recording_state": RecordingState.PROCESSING,
+            "voice_session_active": False,
+            "voice_auto_stopping": False,
         })
 
         try:
@@ -619,7 +848,14 @@ def build_ptt_hotkey_handlers(
                         )})
 
                 _apply_target_window(committer, state)
-                commit_info = _commit_text(committer, text)
+                auto_hard_enter = _resolve_auto_hard_enter(args)
+                commit_info = _commit_text(
+                    committer,
+                    text,
+                    auto_hard_enter=auto_hard_enter,
+                )
+                if auto_hard_enter and "hard_enter_failed" in str(commit_info.get("detail", "")):
+                    on_state({"event": "log", "message": f"auto_hard_enter_failed: {commit_info.get('detail', '')}"})
                 if args.debug_diagnostics:
                     on_state({"event": "log", "message": (
                         "diag finalize source=oneshot"
@@ -707,11 +943,34 @@ def _parse_args_with_config(parser: argparse.ArgumentParser) -> argparse.Namespa
         args.commit_backend = "auto"
     if getattr(args, "commit_backend", "auto") not in {"none", "auto", "wtype", "xdotool", "xdotool-clipboard", "stdout"}:
         args.commit_backend = "auto"
+    args.auto_hard_enter = bool(getattr(args, "auto_hard_enter", False))
+    try:
+        wake_vad_aggressiveness = int(getattr(args, "wake_vad_aggressiveness", 2))
+    except Exception:
+        wake_vad_aggressiveness = 2
+    if wake_vad_aggressiveness not in {0, 1, 2, 3}:
+        args.wake_vad_aggressiveness = 2
+    else:
+        args.wake_vad_aggressiveness = wake_vad_aggressiveness
+    try:
+        wake_vad_frame_ms = int(getattr(args, "wake_vad_frame_ms", 30))
+    except Exception:
+        wake_vad_frame_ms = 30
+    if wake_vad_frame_ms not in {10, 20, 30}:
+        args.wake_vad_frame_ms = 30
+    else:
+        args.wake_vad_frame_ms = wake_vad_frame_ms
+    try:
+        args.wake_no_speech_timeout_s = max(0.0, float(getattr(args, "wake_no_speech_timeout_s", 2.0)))
+    except Exception:
+        args.wake_no_speech_timeout_s = 2.0
+    args.wake_tokens_type = normalize_tokens_type(str(getattr(args, "wake_tokens_type", "ppinyin")))
     args.config_path = str(Path(args.config_path).expanduser())
     return args
 
 
 def _save_runtime_config(args: argparse.Namespace) -> None:
+    wake_runtime = make_wake_runtime_config(args)
     payload = {
         "hotkey": args.hotkey,
         "stop_hotkey": getattr(args, "stop_hotkey", ""),
@@ -727,6 +986,7 @@ def _save_runtime_config(args: argparse.Namespace) -> None:
         "record_format": args.record_format,
         "record_backend": args.record_backend,
         "commit_backend": args.commit_backend,
+        "auto_hard_enter": bool(getattr(args, "auto_hard_enter", False)),
         "model": args.model,
         "device": args.device,
         "hub": args.hub,
@@ -753,6 +1013,30 @@ def _save_runtime_config(args: argparse.Namespace) -> None:
         "refine_api_key": getattr(args, "refine_api_key", ""),
         "refine_api_model": getattr(args, "refine_api_model", "claude-3-5-sonnet-20241022"),
         "enable_streaming_refine": getattr(args, "enable_streaming_refine", False),
+        "enable_voice_wake": getattr(args, "enable_voice_wake", False),
+        "wake_prefix": wake_runtime.prefixes,
+        "wake_name": wake_runtime.names,
+        "wake_cooldown_s": getattr(args, "wake_cooldown_s", 3.0),
+        "wake_auto_stop_silence_s": getattr(args, "wake_auto_stop_silence_s", 1.0),
+        "wake_min_speech_s": getattr(args, "wake_min_speech_s", 0.5),
+        "wake_use_webrtcvad": getattr(args, "wake_use_webrtcvad", True),
+        "wake_vad_aggressiveness": getattr(args, "wake_vad_aggressiveness", 2),
+        "wake_vad_frame_ms": getattr(args, "wake_vad_frame_ms", 30),
+        "wake_no_speech_timeout_s": getattr(args, "wake_no_speech_timeout_s", 2.0),
+        "sound_on_path": getattr(args, "sound_on_path", str(_DEFAULT_SOUND_ON)),
+        "sound_off_path": getattr(args, "sound_off_path", str(_DEFAULT_SOUND_OFF)),
+        "wake_beep_path": getattr(args, "wake_beep_path", ""),
+        "wake_encoder": getattr(args, "wake_encoder", str(_DEFAULT_WAKE_ENCODER)),
+        "wake_decoder": getattr(args, "wake_decoder", str(_DEFAULT_WAKE_DECODER)),
+        "wake_joiner": getattr(args, "wake_joiner", str(_DEFAULT_WAKE_JOINER)),
+        "wake_tokens": getattr(args, "wake_tokens", str(_DEFAULT_WAKE_TOKENS)),
+        "wake_keywords_file": getattr(args, "wake_keywords_file", ""),
+        "wake_tokens_type": getattr(args, "wake_tokens_type", "ppinyin"),
+        "wake_provider": getattr(args, "wake_provider", "cpu"),
+        "wake_num_threads": getattr(args, "wake_num_threads", 2),
+        "wake_sample_rate": getattr(args, "wake_sample_rate", 16000),
+        "wake_keyword_score": getattr(args, "wake_keyword_score", 1.5),
+        "wake_keyword_threshold": getattr(args, "wake_keyword_threshold", 0.25),
     }
     path = Path(args.config_path)
     ConfigManager.save(path, payload)
@@ -897,6 +1181,8 @@ def main() -> None:
     if not trigger_keys:
         raise RuntimeError("empty hotkey is not allowed")
 
+    voice_wake_service: VoiceWakeService | None = None
+
     if args.trigger_mode in {"ptt", "toggle"}:
         start_recording, stop_recording, exit_daemon, stop_event = build_ptt_hotkey_handlers(
             args=args,
@@ -905,6 +1191,25 @@ def main() -> None:
             on_busy=_emit,
             on_state=_emit,
         )
+
+        if bool(getattr(args, "enable_voice_wake", False)):
+            runtime_cfg = make_wake_runtime_config(args)
+            model_cfg = make_wake_model_config(args)
+
+            def _on_wake(keyword: str) -> None:
+                try:
+                    start_recording("voice_wake")
+                except Exception as exc:  # noqa: BLE001
+                    _emit({"event": "error", "error": f"voice_wake_start_failed: {exc}"})
+
+            voice_wake_service = VoiceWakeService(
+                model=model_cfg,
+                runtime=runtime_cfg,
+                on_wake=_on_wake,
+                on_event=_emit,
+                cache_dir=Path.home() / ".cache" / "recordian" / "wake",
+            )
+            voice_wake_service.start()
         trigger_pressed = {"active": False}
 
         pressed: set[str] = set()
@@ -1023,6 +1328,8 @@ def main() -> None:
             on_error=_emit,
             on_busy=_emit,
         )
+        if bool(getattr(args, "enable_voice_wake", False)):
+            _emit({"event": "log", "message": "trigger_mode=oneshot 时不支持语音唤醒，已忽略"})
         trigger_pressed = {"active": False}
 
         pressed: set[str] = set()
@@ -1060,6 +1367,7 @@ def main() -> None:
             "trigger_mode": args.trigger_mode,
             "config_path": args.config_path,
             "notify_backend": notifier.backend_name,
+            "voice_wake_enabled": bool(getattr(args, "enable_voice_wake", False)),
         }
     )
 
@@ -1068,6 +1376,9 @@ def main() -> None:
             time.sleep(0.1)
         listener.stop()
 
+    if voice_wake_service is not None:
+        voice_wake_service.stop()
+
     _emit({"event": "stopped"})
 
 
@@ -1075,11 +1386,6 @@ def _truncate_text(text: str, *, max_len: int) -> str:
     if len(text) <= max_len:
         return text
     return text[: max_len - 3] + "..."
-
-
-if __name__ == "__main__":
-    main()
-
 
 def _merge_stream_text(prev: str, current: str) -> str:
     """合并流式 ASR 文本：若 current 以 prev 开头则直接返回 current，否则拼接。"""
@@ -1090,6 +1396,43 @@ def _merge_stream_text(prev: str, current: str) -> str:
     if prev.endswith(current):
         return prev
     return prev + current
+
+
+def _pick_vad_sample_rate(sample_rate: int) -> int:
+    if sample_rate in {8000, 16000, 32000, 48000}:
+        return sample_rate
+    return 16000
+
+
+def _vad_frame_bytes(sample_rate: int, frame_ms: int) -> int:
+    samples = sample_rate * frame_ms // 1000
+    return samples * 2
+
+
+def _float_to_pcm16le(samples: Any) -> bytes:
+    import numpy as np
+
+    data = np.asarray(samples, dtype=np.float32)
+    if data.size == 0:
+        return b""
+    clipped = np.clip(data, -1.0, 1.0)
+    pcm = (clipped * 32767.0).astype(np.int16)
+    return pcm.tobytes()
+
+
+def _resample_audio_for_vad(samples: Any, *, src_rate: int, dst_rate: int) -> Any:
+    if src_rate == dst_rate:
+        return samples
+    import numpy as np
+
+    data = np.asarray(samples, dtype=np.float32)
+    if data.size == 0:
+        return data
+
+    out_len = max(1, int(round(data.size * dst_rate / src_rate)))
+    src_x = np.arange(data.size, dtype=np.float32)
+    dst_x = np.linspace(0, data.size - 1, out_len, dtype=np.float32)
+    return np.interp(dst_x, src_x, data).astype(np.float32)
 
 
 def _adaptive_vad_threshold(base: float, noise_level: float) -> float:
@@ -1115,3 +1458,7 @@ def _pcm16le_to_f32(data: bytes, *, channels: int = 1) -> list:
         avg = sum(frame) / channels / 32768.0
         result.append(avg)
     return result
+
+
+if __name__ == "__main__":
+    main()

@@ -64,6 +64,51 @@ class XDoToolCommitter(TextCommitter):
         return CommitResult(backend=self.backend_name, committed=True)
 
 
+def send_hard_enter(committer: TextCommitter) -> CommitResult:
+    """Send a real Enter key event (not text newline) via current commit backend."""
+    backend = getattr(committer, "backend_name", "unknown")
+    try:
+        if backend in {"none", "stdout"}:
+            return CommitResult(backend=backend, committed=False, detail="hard_enter_unsupported_backend")
+
+        # Prefer real keyboard simulation first. Some apps ignore xdotool key events
+        # but accept physical-like key press/release from pynput.
+        if _send_hard_enter_via_pynput():
+            return CommitResult(backend=backend, committed=True, detail="hard_enter_sent:pynput")
+
+        if backend == "wtype":
+            if not which("wtype"):
+                raise CommitError("wtype not found in PATH")
+            _run_command(["wtype", "-k", "Return"])
+            return CommitResult(backend=backend, committed=True, detail="hard_enter_sent")
+
+        if backend in {"xdotool", "xdotool-clipboard", "auto"}:
+            if not which("xdotool"):
+                raise CommitError("xdotool not found in PATH")
+            wid = getattr(committer, "target_window_id", None)
+            _xdotool_key("return", window_id=wid if isinstance(wid, int) else None)
+            detail = "hard_enter_sent"
+            if isinstance(wid, int):
+                detail += f" wid:{wid}"
+            return CommitResult(backend=backend, committed=True, detail=detail)
+
+        return CommitResult(backend=backend, committed=False, detail="hard_enter_unsupported_backend")
+    except Exception as exc:  # noqa: BLE001
+        return CommitResult(backend=backend, committed=False, detail=f"hard_enter_failed:{exc}")
+
+
+def _send_hard_enter_via_pynput() -> bool:
+    try:
+        from pynput.keyboard import Controller, Key
+
+        kb = Controller()
+        kb.press(Key.enter)
+        kb.release(Key.enter)
+        return True
+    except Exception:
+        return False
+
+
 def _parse_clipboard_timeout_ms(env_value: str | None) -> int:
     """Parse and validate clipboard timeout from environment variable.
 
