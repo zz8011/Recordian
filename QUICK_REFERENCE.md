@@ -48,10 +48,36 @@ pkill -f recordian && recordian-tray
   "wake_vad_aggressiveness": 2,      // VAD 灵敏度: 0-3
   "wake_vad_frame_ms": 30,           // VAD 帧长: 10/20/30ms
   "wake_no_speech_timeout_s": 2.0,   // 唤醒后未开口超时自动结束
-  "wake_auto_stop_silence_s": 1.0,   // 静音自动结束秒数
+  "wake_auto_stop_silence_s": 1.2,   // 声学静默结束秒数
+  "wake_use_semantic_gate": true,    // 语义门控结束判定
+  "wake_semantic_probe_interval_s": 0.4,
+  "wake_semantic_end_silence_s": 1.2,
+  "wake_owner_verify": true,         // 仅主人声音可唤醒/会话辅助过滤
+  "wake_owner_profile": "~/.config/recordian/owner_voice_profile.json",
+  "wake_owner_sample": "~/.config/recordian/owner_voice_sample.wav",
+  "wake_owner_threshold": 0.72,
+  "wake_owner_window_s": 1.6,
   "commit_backend": "auto"           // 文本上屏方式
 }
 ```
+
+### Preset 后处理指令（推荐）
+
+在 `presets/*.md` 首行可选添加：
+
+```text
+@postprocess: zh-stutter-lite
+```
+
+- `none`: 不做规则后处理（纯 LLM）
+- `repeat-lite`: 英文等空格分词语言的轻量重复词清理
+- `zh-stutter-lite`: 中文口吃/语气词链清理（保守）
+
+### 二轮精炼与个人词库联动
+
+- 二轮精炼前会读取 `effective_hotwords`（手动常用词 + 自动词库热词）
+- 对“当前文本已出现”的热词添加原样保留约束，降低误改术语/人名概率
+- 该联动开销极低，主要耗时仍在模型推理
 
 ### 语音唤醒模型（sherpa-onnx）
 - 默认模型目录：`models/sherpa-onnx-kws-zipformer-wenetspeech-3.3M-2024-01-01`

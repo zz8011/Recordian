@@ -38,6 +38,11 @@ class WakeRuntimeConfig:
     auto_name_variants: bool = True
     auto_prefix_variants: bool = True
     allow_name_only: bool = True
+    owner_verify_enabled: bool = False
+    owner_profile_path: str = "~/.config/recordian/owner_voice_profile.json"
+    owner_sample_path: str = ""
+    owner_threshold: float = 0.72
+    owner_window_s: float = 1.6
 
 
 def normalize_tokens_type(value: str) -> str:
@@ -411,6 +416,61 @@ class VoiceWakeService:
             return
 
         samples_per_read = int(self.model.sample_rate * 0.1)
+        owner_verify_enabled = bool(getattr(self.runtime, "owner_verify_enabled", False))
+        owner_threshold = min(0.99, max(0.0, float(getattr(self.runtime, "owner_threshold", 0.72))))
+        owner_window_s = max(0.6, float(getattr(self.runtime, "owner_window_s", 1.6)))
+        owner_embedding: list[float] | None = None
+        _extract_speaker_embedding = None
+        _cosine_similarity = None
+        if owner_verify_enabled:
+            try:
+                from .speaker_verify import (
+                    cosine_similarity,
+                    enroll_speaker_profile_from_wav,
+                    extract_speaker_embedding,
+                    load_speaker_profile,
+                )
+
+                profile_path = Path(str(getattr(self.runtime, "owner_profile_path", "~/.config/recordian/owner_voice_profile.json"))).expanduser()
+                sample_path_raw = str(getattr(self.runtime, "owner_sample_path", "")).strip()
+                sample_path = Path(sample_path_raw).expanduser() if sample_path_raw else None
+
+                profile = load_speaker_profile(profile_path)
+                if profile is None and sample_path is not None and sample_path.exists():
+                    profile = enroll_speaker_profile_from_wav(
+                        sample_path=sample_path,
+                        profile_path=profile_path,
+                        target_rate=self.model.sample_rate,
+                    )
+                    self._emit({"message": f"voice_wake_owner_profile_enrolled: {profile_path}"})
+                if profile is None:
+                    owner_verify_enabled = False
+                    self._emit({"message": "voice_wake_owner_verify_disabled: profile_not_found"})
+                else:
+                    owner_embedding = list(profile.embedding)
+                    _extract_speaker_embedding = extract_speaker_embedding
+                    _cosine_similarity = cosine_similarity
+                    self._emit(
+                        {
+                            "message": (
+                                "voice_wake_owner_verify_enabled"
+                                f" threshold={owner_threshold:.2f}"
+                                f" window_s={owner_window_s:.2f}"
+                            )
+                        }
+                    )
+            except Exception as exc:  # noqa: BLE001
+                owner_verify_enabled = False
+                self._emit({"message": f"voice_wake_owner_verify_disabled: {type(exc).__name__}: {exc}"})
+
+        owner_audio_chunks = None
+        owner_audio_samples = 0
+        owner_max_samples = max(samples_per_read, int(self.model.sample_rate * owner_window_s))
+        if owner_verify_enabled:
+            from collections import deque
+
+            owner_audio_chunks = deque()
+
         self._emit({"message": "voice_wake_ready"})
         try:
             with sd.InputStream(
@@ -422,6 +482,11 @@ class VoiceWakeService:
                 while not self._stop.is_set():
                     audio, _ = mic.read(samples_per_read)
                     samples = np.ascontiguousarray(audio.reshape(-1))
+                    if owner_verify_enabled and owner_audio_chunks is not None:
+                        owner_audio_chunks.append(samples.copy())
+                        owner_audio_samples += int(samples.size)
+                        while owner_audio_samples > owner_max_samples and owner_audio_chunks:
+                            owner_audio_samples -= int(owner_audio_chunks.popleft().size)
 
                     stream.accept_waveform(self.model.sample_rate, samples)
                     while spotter.is_ready(stream):
@@ -436,6 +501,41 @@ class VoiceWakeService:
                     if now - self._last_trigger < max(0.0, self.runtime.cooldown_s):
                         self._emit({"message": f"voice_wake_ignored_in_cooldown: {result}"})
                         continue
+
+                    if (
+                        owner_verify_enabled
+                        and owner_embedding is not None
+                        and _extract_speaker_embedding is not None
+                        and _cosine_similarity is not None
+                        and owner_audio_chunks is not None
+                    ):
+                        if owner_audio_samples < max(samples_per_read, int(self.model.sample_rate * 0.35)):
+                            self._emit({"message": "voice_wake_rejected_speaker: insufficient_audio"})
+                            continue
+                        try:
+                            verify_samples = np.concatenate(list(owner_audio_chunks))
+                            if verify_samples.size > owner_max_samples:
+                                verify_samples = verify_samples[-owner_max_samples:]
+                            candidate_embedding = _extract_speaker_embedding(
+                                verify_samples,
+                                sample_rate=self.model.sample_rate,
+                                target_rate=self.model.sample_rate,
+                            )
+                            similarity = float(_cosine_similarity(candidate_embedding, owner_embedding))
+                        except Exception as exc:  # noqa: BLE001
+                            self._emit({"message": f"voice_wake_rejected_speaker: feature_error={type(exc).__name__}"})
+                            continue
+                        if similarity < owner_threshold:
+                            self._emit(
+                                {
+                                    "message": (
+                                        "voice_wake_rejected_speaker"
+                                        f" score={similarity:.3f}"
+                                        f" threshold={owner_threshold:.3f}"
+                                    )
+                                }
+                            )
+                            continue
 
                     self._last_trigger = now
                     self._emit({"event": "voice_wake_triggered", "keyword": result})
@@ -471,4 +571,9 @@ def make_wake_runtime_config(args: argparse.Namespace) -> WakeRuntimeConfig:
         auto_name_variants=bool(getattr(args, "wake_auto_name_variants", True)),
         auto_prefix_variants=bool(getattr(args, "wake_auto_prefix_variants", True)),
         allow_name_only=bool(getattr(args, "wake_allow_name_only", True)),
+        owner_verify_enabled=bool(getattr(args, "wake_owner_verify", False)),
+        owner_profile_path=str(getattr(args, "wake_owner_profile", "~/.config/recordian/owner_voice_profile.json")),
+        owner_sample_path=str(getattr(args, "wake_owner_sample", "")),
+        owner_threshold=float(getattr(args, "wake_owner_threshold", 0.72)),
+        owner_window_s=float(getattr(args, "wake_owner_window_s", 1.6)),
     )

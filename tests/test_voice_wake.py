@@ -54,6 +54,11 @@ def test_make_wake_runtime_config() -> None:
         wake_auto_name_variants=True,
         wake_auto_prefix_variants=True,
         wake_allow_name_only=True,
+        wake_owner_verify=True,
+        wake_owner_profile="/tmp/owner.profile.json",
+        wake_owner_sample="/tmp/owner.wav",
+        wake_owner_threshold=0.78,
+        wake_owner_window_s=1.8,
     )
     cfg = make_wake_runtime_config(args)
     assert cfg.enabled is True
@@ -65,6 +70,11 @@ def test_make_wake_runtime_config() -> None:
     assert cfg.auto_name_variants is True
     assert cfg.auto_prefix_variants is True
     assert cfg.allow_name_only is True
+    assert cfg.owner_verify_enabled is True
+    assert cfg.owner_profile_path == "/tmp/owner.profile.json"
+    assert cfg.owner_sample_path == "/tmp/owner.wav"
+    assert cfg.owner_threshold == 0.78
+    assert cfg.owner_window_s == 1.8
 
 
 def test_make_wake_runtime_config_accepts_csv_string() -> None:
@@ -81,6 +91,7 @@ def test_make_wake_runtime_config_accepts_csv_string() -> None:
     assert cfg.names == ["小二", "乐乐"]
     assert cfg.auto_prefix_variants is True
     assert cfg.allow_name_only is True
+    assert cfg.owner_verify_enabled is False
 
 
 def test_make_wake_model_config() -> None:

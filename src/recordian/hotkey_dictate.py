@@ -230,6 +230,34 @@ def build_parser() -> argparse.ArgumentParser:
         help="Also allow wake by name-only phrase (e.g. 小二) to reduce clipped-prefix misses",
     )
     parser.add_argument(
+        "--wake-owner-verify",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Require registered owner voiceprint verification after keyword hit",
+    )
+    parser.add_argument(
+        "--wake-owner-profile",
+        default="~/.config/recordian/owner_voice_profile.json",
+        help="Owner voiceprint feature profile json path",
+    )
+    parser.add_argument(
+        "--wake-owner-sample",
+        default="",
+        help="Optional owner sample wav path for auto-enrollment when profile is missing",
+    )
+    parser.add_argument(
+        "--wake-owner-threshold",
+        type=float,
+        default=0.72,
+        help="Owner voiceprint cosine threshold (0~1, higher = stricter)",
+    )
+    parser.add_argument(
+        "--wake-owner-window-s",
+        type=float,
+        default=1.6,
+        help="Audio window length (seconds) used for owner voiceprint verification",
+    )
+    parser.add_argument(
         "--wake-use-semantic-gate",
         action=argparse.BooleanOptionalAction,
         default=False,
@@ -374,6 +402,197 @@ def _normalize_final_text(text: str) -> str:
     return normalized
 
 
+def _extract_refine_postprocess_rule(prompt_template: str | None) -> tuple[str, str | None]:
+    if not prompt_template:
+        return "none", prompt_template
+    lines = prompt_template.splitlines()
+    for idx, raw in enumerate(lines):
+        stripped = raw.strip()
+        if not stripped:
+            continue
+        if stripped.lower().startswith("@postprocess:"):
+            rule = stripped.split(":", 1)[1].strip().lower() or "none"
+            if rule not in {"none", "repeat-lite", "zh-stutter-lite"}:
+                rule = "none"
+            lines.pop(idx)
+            cleaned_prompt = "\n".join(lines).strip()
+            return rule, (cleaned_prompt or None)
+        break
+    return "none", prompt_template
+
+
+def _cleanup_stutter_text(text: str) -> str:
+    """Conservative deterministic cleanup for common stutter repetitions."""
+    import re
+
+    if not text:
+        return ""
+
+    cleaned = str(text)
+    clause_boundary = r"(?:(?<=^)|(?<=[，。！？；：、,.!?\s]))"
+    following_content = r"(?=[\u4e00-\u9fffA-Za-z0-9])"
+
+    # Collapse repeated functional words (e.g. "这个这个问题" -> "这个问题").
+    # This list only contains high-frequency filler/function terms.
+    common_words = [
+        "这个",
+        "那个",
+        "就是",
+        "然后",
+        "我们",
+        "你们",
+        "他们",
+        "她们",
+        "它们",
+    ]
+    for token in common_words:
+        cleaned = re.sub(rf"(?:{re.escape(token)})(?:\s*{re.escape(token)})+", token, cleaned)
+
+    # Collapse repeated common stutter single characters near clause boundaries
+    # (e.g. "要要要把" -> "要把"), while leaving normal reduplications such as
+    # names/idioms outside this conservative token set untouched.
+    stutter_chars = "我你他她它这那要就先再嗯啊呃额诶欸"
+    cleaned = re.sub(
+        rf"{clause_boundary}([{stutter_chars}])(?:\s*\1)+{following_content}",
+        r"\1",
+        cleaned,
+    )
+
+    # Remove filler chains around clause boundaries such as:
+    # "然后呢，同时呢，然后a，然后这个 ..."
+    filler_tokens = [
+        "然后呢",
+        "然后",
+        "同时呢",
+        "同时",
+        "这个呢",
+        "这个",
+        "那个呢",
+        "那个",
+        "就是",
+        "嗯",
+        "啊",
+        "呃",
+        "额",
+        "诶",
+        "欸",
+        "a",
+        "A",
+    ]
+    filler_group = "|".join(re.escape(token) for token in filler_tokens)
+    cleaned = re.sub(
+        rf"(?:(?<=^)|(?<=[。！？；]))(?:\s*(?:{filler_group})[，、,\s]*){{2,6}}(?=[\u4e00-\u9fffA-Za-z0-9])",
+        "",
+        cleaned,
+    )
+    cleaned = re.sub(
+        rf"([，,]\s*)(?:{filler_group})(?=[，,])",
+        r"\1",
+        cleaned,
+    )
+    cleaned = re.sub(r"[，,]\s*[，,]+", "，", cleaned)
+    cleaned = re.sub(r"\s{2,}", " ", cleaned).strip()
+
+    return cleaned
+
+
+def _cleanup_repeat_lite_text(text: str) -> str:
+    import re
+
+    if not text:
+        return ""
+    cleaned = str(text)
+    # Generic word-level stutter collapse for space-separated languages:
+    # "I I I think" -> "I think", "the the issue" -> "the issue".
+    cleaned = re.sub(
+        r"(?i)\b([a-z][a-z0-9'_-]{0,31})(?:\s+\1){1,}\b",
+        r"\1",
+        cleaned,
+    )
+    return cleaned
+
+
+def _apply_refine_postprocess(text: str, *, rule: str) -> str:
+    normalized_rule = str(rule or "none").strip().lower()
+    if normalized_rule == "zh-stutter-lite":
+        return _cleanup_stutter_text(text)
+    if normalized_rule == "repeat-lite":
+        return _cleanup_repeat_lite_text(text)
+    return text
+
+
+_REFINE_PROTECTED_STOPWORDS = {
+    "这个",
+    "那个",
+    "就是",
+    "然后",
+    "我们",
+    "你们",
+    "他们",
+    "她们",
+    "它们",
+    "可以",
+    "一下",
+    "还有",
+    "是不是",
+    "现在",
+    "时候",
+    "what",
+    "this",
+    "that",
+    "and",
+    "then",
+}
+
+
+def _text_contains_term(text: str, term: str) -> bool:
+    source = str(text or "")
+    token = str(term or "").strip()
+    if not source or not token:
+        return False
+    if token.isascii():
+        return token.lower() in source.lower()
+    return token in source
+
+
+def _select_refine_protected_terms(text: str, hotwords: list[str], *, max_terms: int = 12) -> list[str]:
+    selected: list[str] = []
+    seen: set[str] = set()
+    for raw in hotwords:
+        token = str(raw).strip()
+        if not token:
+            continue
+        key = token.lower() if token.isascii() else token
+        if key in seen:
+            continue
+        seen.add(key)
+        if len(token) < 2 or len(token) > 32:
+            continue
+        if key in _REFINE_PROTECTED_STOPWORDS:
+            continue
+        if not _text_contains_term(text, token):
+            continue
+        selected.append(token)
+        if len(selected) >= max(0, int(max_terms)):
+            break
+    return selected
+
+
+def _build_refine_prompt_with_protected_terms(prompt_template: str | None, protected_terms: list[str]) -> str | None:
+    if not prompt_template:
+        return prompt_template
+    terms = [str(t).strip() for t in protected_terms if str(t).strip()]
+    if not terms:
+        return prompt_template
+    term_line = "、".join(terms)
+    guard = (
+        "附加约束（必须遵守）：下列词语如果在原文中出现，输出时必须原样保留，"
+        "不得改写、同义替换或删除："
+        f"{term_line}\n"
+    )
+    return guard + "\n" + prompt_template
+
+
 def _preview_text(text: str, max_len: int = 48) -> str:
     normalized = " ".join(text.strip().split())
     if len(normalized) <= max_len:
@@ -496,6 +715,7 @@ def build_ptt_hotkey_handlers(
 
     # Initialize text refiner if enabled
     refiner = None
+    refine_postprocess_rule = "none"
     if getattr(args, "enable_text_refine", False):
         from .preset_manager import PresetManager
 
@@ -511,6 +731,9 @@ def build_ptt_hotkey_handlers(
             except FileNotFoundError as e:
                 on_state({"event": "log", "message": f"预设加载失败: {e}"})
                 custom_prompt = None
+        refine_postprocess_rule, custom_prompt = _extract_refine_postprocess_rule(custom_prompt)
+        if args.debug_diagnostics:
+            on_state({"event": "log", "message": f"diag refine_postprocess_rule={refine_postprocess_rule}"})
 
         # 选择 provider：local, cloud, llamacpp
         refine_provider = getattr(args, "refine_provider", "local")
@@ -614,6 +837,10 @@ def build_ptt_hotkey_handlers(
         "voice_semantic_has_text": False,
         "voice_semantic_last_text_ts": 0.0,
         "voice_semantic_last_text": "",
+        "voice_owner_filter_enabled": False,
+        "voice_owner_active": True,
+        "voice_owner_seen": False,
+        "voice_owner_last_score": -1.0,
     }
 
     def _get_state(key: str) -> object:
@@ -676,6 +903,10 @@ def build_ptt_hotkey_handlers(
                 "voice_semantic_has_text": False,
                 "voice_semantic_last_text_ts": 0.0,
                 "voice_semantic_last_text": "",
+                "voice_owner_filter_enabled": trigger_source == "voice_wake" and bool(getattr(args, "wake_owner_verify", False)),
+                "voice_owner_active": not (trigger_source == "voice_wake" and bool(getattr(args, "wake_owner_verify", False))),
+                "voice_owner_seen": False,
+                "voice_owner_last_score": -1.0,
             })
             on_state({"event": "recording_started", "record_backend": recorder_backend, "audio_path": str(audio_path)})
 
@@ -768,6 +999,71 @@ def build_ptt_hotkey_handlers(
                     semantic_buffer: list[float] = []
                     semantic_lock = threading.Lock()
                     semantic_thread: threading.Thread | None = None
+                    owner_filter_enabled = bool(_get_state("voice_owner_filter_enabled"))
+                    owner_threshold = min(0.99, max(0.0, float(getattr(args, "wake_owner_threshold", 0.72))))
+                    owner_window_s = max(0.6, float(getattr(args, "wake_owner_window_s", 1.6)))
+                    owner_verify_interval_s = 0.35
+                    owner_min_samples = max(3200, int(sample_rate * 0.35))
+                    owner_max_samples = max(1, int(sample_rate * owner_window_s))
+                    owner_audio_chunks: Any = None
+                    owner_audio_samples = 0
+                    owner_last_verify_ts = 0.0
+                    owner_last_active = False
+                    owner_embedding: list[float] | None = None
+                    _extract_owner_embedding = None
+                    _owner_cosine_similarity = None
+
+                    if owner_filter_enabled:
+                        try:
+                            from collections import deque
+
+                            from .speaker_verify import (
+                                cosine_similarity as _cosine_similarity,
+                                enroll_speaker_profile_from_wav,
+                                extract_speaker_embedding as _extract_speaker_embedding,
+                                load_speaker_profile,
+                            )
+
+                            profile_path = Path(
+                                str(getattr(args, "wake_owner_profile", "~/.config/recordian/owner_voice_profile.json"))
+                            ).expanduser()
+                            sample_path_raw = str(getattr(args, "wake_owner_sample", "")).strip()
+                            sample_path = Path(sample_path_raw).expanduser() if sample_path_raw else None
+                            profile = load_speaker_profile(profile_path)
+                            if profile is None and sample_path is not None and sample_path.exists():
+                                profile = enroll_speaker_profile_from_wav(
+                                    sample_path=sample_path,
+                                    profile_path=profile_path,
+                                    target_rate=sample_rate,
+                                )
+                                on_state({"event": "log", "message": f"voice_owner_profile_enrolled: {profile_path}"})
+                            if profile is None:
+                                owner_filter_enabled = False
+                                on_state({"event": "log", "message": "voice_owner_filter_disabled: profile_not_found"})
+                            else:
+                                owner_embedding = list(profile.embedding)
+                                _extract_owner_embedding = _extract_speaker_embedding
+                                _owner_cosine_similarity = _cosine_similarity
+                                owner_audio_chunks = deque()
+                                if args.debug_diagnostics:
+                                    on_state(
+                                        {
+                                            "event": "log",
+                                            "message": (
+                                                "diag voice_owner_filter enabled"
+                                                f" threshold={owner_threshold:.2f}"
+                                                f" window_s={owner_window_s:.2f}"
+                                            ),
+                                        }
+                                    )
+                        except Exception as exc:  # noqa: BLE001
+                            owner_filter_enabled = False
+                            on_state({"event": "log", "message": f"voice_owner_filter_disabled: {type(exc).__name__}: {exc}"})
+
+                    _set_state("voice_owner_filter_enabled", owner_filter_enabled)
+                    _set_state("voice_owner_active", not owner_filter_enabled)
+                    _set_state("voice_owner_seen", False)
+                    _set_state("voice_owner_last_score", -1.0)
 
                     def _append_semantic_frame(frame: Any) -> None:
                         if not semantic_enabled:
@@ -808,6 +1104,8 @@ def build_ptt_hotkey_handlers(
                                 continue
                             if bool(_get_state("voice_auto_stopping")):
                                 continue
+                            if owner_filter_enabled and not bool(_get_state("voice_owner_active")):
+                                continue
                             probe_samples = _snapshot_semantic_samples()
                             if len(probe_samples) < max(3200, int(sample_rate * 0.25)):
                                 continue
@@ -831,10 +1129,12 @@ def build_ptt_hotkey_handlers(
                         semantic_thread.start()
 
                     def _cb(indata: Any, frames: int, t: Any, status: Any) -> None:
-                        nonlocal noise_floor, smoothed_level, vad, vad_init_attempted, vad_log_emitted, speech_evidence_s
+                        nonlocal noise_floor, smoothed_level, vad, vad_init_attempted, vad_log_emitted
+                        nonlocal speech_evidence_s, owner_audio_samples, owner_last_verify_ts, owner_last_active
                         if stop.is_set():
                             raise sd.CallbackStop()
 
+                        mono_frame = np.ascontiguousarray(indata.reshape(-1), dtype=np.float32)
                         rms = float(np.sqrt(np.mean(indata ** 2)))
                         _append_semantic_frame(indata)
 
@@ -849,10 +1149,67 @@ def build_ptt_hotkey_handlers(
                         linear = signal * 48.0
                         level = linear / (linear + 0.15) if linear > 0.0 else 0.0
 
+                        owner_active = True
+                        if (
+                            owner_filter_enabled
+                            and owner_embedding is not None
+                            and _extract_owner_embedding is not None
+                            and _owner_cosine_similarity is not None
+                            and owner_audio_chunks is not None
+                        ):
+                            owner_audio_chunks.append(mono_frame.copy())
+                            owner_audio_samples += int(mono_frame.size)
+                            while owner_audio_samples > owner_max_samples and owner_audio_chunks:
+                                owner_audio_samples -= int(owner_audio_chunks.popleft().size)
+
+                            now_owner = time.monotonic()
+                            if now_owner - owner_last_verify_ts >= owner_verify_interval_s:
+                                owner_last_verify_ts = now_owner
+                                owner_score = -1.0
+                                owner_active = False
+                                if owner_audio_samples >= owner_min_samples:
+                                    try:
+                                        verify_samples = np.concatenate(list(owner_audio_chunks))
+                                        if verify_samples.size > owner_max_samples:
+                                            verify_samples = verify_samples[-owner_max_samples:]
+                                        candidate_embedding = _extract_owner_embedding(
+                                            verify_samples,
+                                            sample_rate=sample_rate,
+                                            target_rate=sample_rate,
+                                        )
+                                        owner_score = float(_owner_cosine_similarity(candidate_embedding, owner_embedding))
+                                        owner_active = owner_score >= owner_threshold
+                                    except Exception:
+                                        owner_active = False
+                                _set_state("voice_owner_active", owner_active)
+                                _set_state("voice_owner_last_score", owner_score)
+                                if owner_active:
+                                    _set_state("voice_owner_seen", True)
+                                if args.debug_diagnostics and owner_active != owner_last_active:
+                                    on_state(
+                                        {
+                                            "event": "log",
+                                            "message": (
+                                                "diag voice_owner_gate"
+                                                f" active={owner_active}"
+                                                f" score={owner_score:.3f}"
+                                                f" threshold={owner_threshold:.3f}"
+                                            ),
+                                        }
+                                    )
+                                owner_last_active = owner_active
+                            else:
+                                owner_active = bool(_get_state("voice_owner_active"))
+
                         # 快起慢落平滑：说话时迅速响应，停顿时缓慢回落，减少抖动感。
                         alpha = 0.28 if level > smoothed_level else 0.12
                         smoothed_level = smoothed_level * (1.0 - alpha) + level * alpha
-                        on_state({"event": "audio_level", "level": min(1.0, max(0.0, smoothed_level))})
+                        display_level = _owner_gate_level(
+                            smoothed_level,
+                            owner_filter_enabled=owner_filter_enabled,
+                            owner_active=owner_active,
+                        )
+                        on_state({"event": "audio_level", "level": display_level})
 
                         # 语音唤醒会话自动停止：检测说话后连续静音约 1s 自动结束。
                         if bool(_get_state("voice_session_active")):
@@ -892,7 +1249,7 @@ def build_ptt_hotkey_handlers(
                             now_ts = time.monotonic()
                             speech_detected_raw = False
                             if vad is not None:
-                                frame = np.ascontiguousarray(indata.reshape(-1), dtype=np.float32)
+                                frame = mono_frame
                                 if sample_rate != vad_sample_rate:
                                     frame = _resample_audio_for_vad(frame, src_rate=sample_rate, dst_rate=vad_sample_rate)
                                 vad_pcm_buffer.extend(_float_to_pcm16le(frame))
@@ -903,6 +1260,8 @@ def build_ptt_hotkey_handlers(
                                         speech_detected_raw = True
                             elif _is_level_speech_frame(level=level, rms=rms, noise_floor=noise_floor):
                                 speech_detected_raw = True
+                            if owner_filter_enabled and not owner_active:
+                                speech_detected_raw = False
 
                             block_duration_s = max(0.0, float(frames) / float(sample_rate)) if sample_rate > 0 else 0.0
                             speech_evidence_s, speech_detected = _update_speech_evidence(
@@ -991,6 +1350,12 @@ def build_ptt_hotkey_handlers(
         started = _get_state("record_started_at")
         audio_path = _get_state("audio_path")
         temp_dir = _get_state("temp_dir")
+        owner_filter_enabled = bool(_get_state("voice_owner_filter_enabled"))
+        owner_seen = bool(_get_state("voice_owner_seen"))
+        try:
+            owner_last_score = float(_get_state("voice_owner_last_score"))
+        except Exception:
+            owner_last_score = -1.0
         if process is None or audio_path is None or temp_dir is None or started is None:
             return
 
@@ -1012,6 +1377,10 @@ def build_ptt_hotkey_handlers(
             "voice_semantic_has_text": False,
             "voice_semantic_last_text_ts": 0.0,
             "voice_semantic_last_text": "",
+            "voice_owner_filter_enabled": False,
+            "voice_owner_active": True,
+            "voice_owner_seen": False,
+            "voice_owner_last_score": -1.0,
         })
 
         try:
@@ -1028,6 +1397,37 @@ def build_ptt_hotkey_handlers(
 
         def _worker() -> None:
             try:
+                if _should_skip_owner_gated_asr(
+                    owner_filter_enabled=owner_filter_enabled,
+                    owner_seen=owner_seen,
+                ):
+                    if args.debug_diagnostics:
+                        on_state(
+                            {
+                                "event": "log",
+                                "message": (
+                                    "diag owner_gate_skip_asr"
+                                    f" owner_seen={owner_seen}"
+                                    f" last_score={owner_last_score:.3f}"
+                                ),
+                            }
+                        )
+                    on_result({"event": "result", "result": {
+                        "audio_path": str(audio_path),
+                        "record_backend": recorder_backend,
+                        "duration_s": record_latency_ms / 1000.0,
+                        "record_latency_ms": record_latency_ms,
+                        "transcribe_latency_ms": 0.0,
+                        "refine_latency_ms": 0.0,
+                        "text": "",
+                        "commit": {
+                            "backend": "none",
+                            "committed": False,
+                            "detail": "owner_gate_rejected_no_owner_speech",
+                        },
+                    }})
+                    return
+
                 # 静音检测：仅对 WAV 格式有效，OGG 等格式跳过
                 try:
                     import numpy as np
@@ -1079,25 +1479,36 @@ def build_ptt_hotkey_handlers(
                             on_state({"event": "log", "message": f"preset 热切换失败: {e}"})
 
                     t1 = time.perf_counter()
+                    base_prompt_template = getattr(refiner, "prompt_template", None)
+                    protected_terms = _select_refine_protected_terms(text, effective_hotwords)
+                    prompt_with_guards = _build_refine_prompt_with_protected_terms(base_prompt_template, protected_terms)
+                    if prompt_with_guards != base_prompt_template:
+                        refiner.prompt_template = prompt_with_guards
+                    if args.debug_diagnostics and protected_terms:
+                        on_state({"event": "log", "message": f"diag refine_protected_terms={protected_terms}"})
 
                     # 调试：输出 ASR 原始文本
                     on_state({"event": "log", "message": f"ASR 原始输出: {text}"})
 
                     # 使用流式输出或非流式输出
-                    if getattr(args, "enable_streaming_refine", False):
-                        # 流式输出：逐字显示
-                        refined_text = ""
-                        for chunk in refiner.refine_stream(text):
-                            refined_text += chunk
-                            # 发送流式更新事件
-                            on_state({
-                                "event": "refine_stream_chunk",
-                                "chunk": chunk,
-                                "accumulated": refined_text,
-                            })
-                    else:
-                        # 非流式输出：一次性返回
-                        refined_text = refiner.refine(text)
+                    try:
+                        if getattr(args, "enable_streaming_refine", False):
+                            # 流式输出：逐字显示
+                            refined_text = ""
+                            for chunk in refiner.refine_stream(text):
+                                refined_text += chunk
+                                # 发送流式更新事件
+                                on_state({
+                                    "event": "refine_stream_chunk",
+                                    "chunk": chunk,
+                                    "accumulated": refined_text,
+                                })
+                        else:
+                            # 非流式输出：一次性返回
+                            refined_text = refiner.refine(text)
+                    finally:
+                        if prompt_with_guards != base_prompt_template:
+                            refiner.prompt_template = base_prompt_template
 
                     # 调试：输出精炼后文本
                     on_state({"event": "log", "message": f"精炼后输出: {refined_text}"})
@@ -1105,6 +1516,7 @@ def build_ptt_hotkey_handlers(
                     refine_latency_ms = (time.perf_counter() - t1) * 1000
                     if refined_text.strip():
                         text = refined_text
+                    text = _apply_refine_postprocess(text, rule=refine_postprocess_rule)
                     if args.debug_diagnostics:
                         on_state({"event": "log", "message": (
                             f"text_refine original_len={len(asr.text)}"
@@ -1246,6 +1658,18 @@ def _parse_args_with_config(parser: argparse.ArgumentParser) -> argparse.Namespa
     args.wake_auto_name_variants = _coerce_bool(getattr(args, "wake_auto_name_variants", True), default=True)
     args.wake_auto_prefix_variants = _coerce_bool(getattr(args, "wake_auto_prefix_variants", True), default=True)
     args.wake_allow_name_only = _coerce_bool(getattr(args, "wake_allow_name_only", True), default=True)
+    args.wake_owner_verify = _coerce_bool(getattr(args, "wake_owner_verify", False), default=False)
+    args.wake_owner_profile = str(Path(getattr(args, "wake_owner_profile", "~/.config/recordian/owner_voice_profile.json")).expanduser())
+    owner_sample = str(getattr(args, "wake_owner_sample", "")).strip()
+    args.wake_owner_sample = str(Path(owner_sample).expanduser()) if owner_sample else ""
+    try:
+        args.wake_owner_threshold = min(0.99, max(0.0, float(getattr(args, "wake_owner_threshold", 0.72))))
+    except Exception:
+        args.wake_owner_threshold = 0.72
+    try:
+        args.wake_owner_window_s = max(0.6, float(getattr(args, "wake_owner_window_s", 1.6)))
+    except Exception:
+        args.wake_owner_window_s = 1.6
     args.wake_use_semantic_gate = _coerce_bool(getattr(args, "wake_use_semantic_gate", False), default=False)
     try:
         args.wake_semantic_probe_interval_s = max(0.1, float(getattr(args, "wake_semantic_probe_interval_s", 0.45)))
@@ -1344,6 +1768,11 @@ def _save_runtime_config(args: argparse.Namespace) -> None:
         "wake_auto_name_variants": getattr(args, "wake_auto_name_variants", True),
         "wake_auto_prefix_variants": getattr(args, "wake_auto_prefix_variants", True),
         "wake_allow_name_only": getattr(args, "wake_allow_name_only", True),
+        "wake_owner_verify": getattr(args, "wake_owner_verify", False),
+        "wake_owner_profile": getattr(args, "wake_owner_profile", "~/.config/recordian/owner_voice_profile.json"),
+        "wake_owner_sample": getattr(args, "wake_owner_sample", ""),
+        "wake_owner_threshold": getattr(args, "wake_owner_threshold", 0.72),
+        "wake_owner_window_s": getattr(args, "wake_owner_window_s", 1.6),
         "wake_use_semantic_gate": getattr(args, "wake_use_semantic_gate", False),
         "wake_semantic_probe_interval_s": getattr(args, "wake_semantic_probe_interval_s", 0.45),
         "wake_semantic_window_s": getattr(args, "wake_semantic_window_s", 1.2),
@@ -1805,6 +2234,19 @@ def _update_speech_evidence(
     if threshold == 0.0:
         return evidence, bool(speech_detected_raw)
     return evidence, evidence >= threshold
+
+
+def _owner_gate_level(level: float, *, owner_filter_enabled: bool, owner_active: bool) -> float:
+    value = min(1.0, max(0.0, float(level)))
+    if not owner_filter_enabled:
+        return value
+    if owner_active:
+        return value
+    return 0.0
+
+
+def _should_skip_owner_gated_asr(*, owner_filter_enabled: bool, owner_seen: bool) -> bool:
+    return bool(owner_filter_enabled) and not bool(owner_seen)
 
 
 def _semantic_text_signal_len(text: str) -> int:

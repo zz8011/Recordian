@@ -4,22 +4,31 @@ from pathlib import Path
 import time
 
 from recordian.hotkey_dictate import (
+    _apply_refine_postprocess,
     _apply_target_window,
     _adaptive_vad_threshold,
+    _build_refine_prompt_with_protected_terms,
+    _cleanup_repeat_lite_text,
+    _cleanup_stutter_text,
     _coerce_bool,
     _commit_text,
     _expand_key_name,
+    _extract_refine_postprocess_rule,
     _float_to_pcm16le,
     _is_level_speech_frame,
     _merge_stream_text,
     _normalize_final_text,
+    _owner_gate_level,
     _pick_vad_sample_rate,
     _pcm16le_to_f32,
     _resolve_auto_hard_enter,
     _resample_audio_for_vad,
+    _select_refine_protected_terms,
+    _should_skip_owner_gated_asr,
     _should_auto_stop_semantic_session,
     _semantic_text_has_content,
     _semantic_text_signal_len,
+    _text_contains_term,
     _update_speech_evidence,
     _vad_frame_bytes,
     build_hotkey_handlers,
@@ -129,6 +138,72 @@ def test_normalize_final_text_reduces_simple_repeats() -> None:
     assert _normalize_final_text("你好你好") == "你好"
     assert _normalize_final_text("上海天气天气") == "上海天气"
     assert _normalize_final_text("你好世界") == "你好世界"
+
+
+def test_cleanup_stutter_text_collapses_common_repetitions() -> None:
+    assert _cleanup_stutter_text("要要要要把这个功能做出来。") == "要把这个功能做出来。"
+    assert _cleanup_stutter_text("这个这个我觉得就是就是可以先试试。") == "这个我觉得就是可以先试试。"
+    assert _cleanup_stutter_text("我们我们先处理。") == "我们先处理。"
+    assert _cleanup_stutter_text("我 我 我觉得可以。") == "我觉得可以。"
+    assert _cleanup_stutter_text("然后呢，同时呢，然后a，然后这个语气词还没有优化。") == "语气词还没有优化。"
+    assert _cleanup_stutter_text("嗯，啊，呃，我想继续测试。") == "我想继续测试。"
+    assert _cleanup_stutter_text("看看这个问题。") == "看看这个问题。"
+    assert _cleanup_stutter_text("范冰冰和李冰冰都来了。") == "范冰冰和李冰冰都来了。"
+    assert _cleanup_stutter_text("人人都要努力。") == "人人都要努力。"
+
+
+def test_cleanup_repeat_lite_text_for_space_separated_languages() -> None:
+    assert _cleanup_repeat_lite_text("I I I think this works.") == "I think this works."
+    assert _cleanup_repeat_lite_text("the the issue is fixed") == "the issue is fixed"
+    assert _cleanup_repeat_lite_text("Tom met Lily.") == "Tom met Lily."
+
+
+def test_extract_refine_postprocess_rule_from_prompt_template() -> None:
+    rule, prompt = _extract_refine_postprocess_rule("@postprocess: zh-stutter-lite\n原文：{text}")
+    assert rule == "zh-stutter-lite"
+    assert prompt == "原文：{text}"
+
+    rule, prompt = _extract_refine_postprocess_rule("\n@postprocess: repeat-lite\nLine2")
+    assert rule == "repeat-lite"
+    assert prompt == "Line2"
+
+    rule, prompt = _extract_refine_postprocess_rule("原文：{text}")
+    assert rule == "none"
+    assert prompt == "原文：{text}"
+
+
+def test_apply_refine_postprocess_dispatches_by_rule() -> None:
+    assert _apply_refine_postprocess("要要要把功能做出来。", rule="zh-stutter-lite") == "要把功能做出来。"
+    assert _apply_refine_postprocess("I I agree.", rule="repeat-lite") == "I agree."
+    assert _apply_refine_postprocess("范冰冰", rule="none") == "范冰冰"
+
+
+def test_text_contains_term_supports_ascii_casefold_and_cjk() -> None:
+    assert _text_contains_term("Docker setup is ready", "docker")
+    assert _text_contains_term("范冰冰和李冰冰", "李冰冰")
+    assert not _text_contains_term("hello world", "docker")
+
+
+def test_select_refine_protected_terms_filters_noise_and_keeps_domain_terms() -> None:
+    text = "我们先把 Docker 和 Recordian 的 GitHub 问题处理一下。"
+    hotwords = ["我们", "docker", "Recordian", "GitHub", "这个", "不存在词"]
+    selected = _select_refine_protected_terms(text, hotwords, max_terms=8)
+    assert "docker" in selected
+    assert "Recordian" in selected
+    assert "GitHub" in selected
+    assert "我们" not in selected
+    assert "这个" not in selected
+    assert "不存在词" not in selected
+
+
+def test_build_refine_prompt_with_protected_terms_injects_guard() -> None:
+    base = "请整理文本：{text}"
+    wrapped = _build_refine_prompt_with_protected_terms(base, ["Docker", "Recordian"])
+    assert wrapped is not None
+    assert "Docker、Recordian" in wrapped
+    assert wrapped.endswith(base)
+    assert _build_refine_prompt_with_protected_terms(base, []) == base
+    assert _build_refine_prompt_with_protected_terms(None, ["Docker"]) is None
 
 
 def test_commit_text_handles_generic_exception() -> None:
@@ -263,6 +338,15 @@ def test_build_parser_accepts_voice_wake_options() -> None:
             "--wake-use-semantic-gate",
             "--wake-auto-prefix-variants",
             "--wake-allow-name-only",
+            "--wake-owner-verify",
+            "--wake-owner-profile",
+            "/tmp/owner-profile.json",
+            "--wake-owner-sample",
+            "/tmp/owner-sample.wav",
+            "--wake-owner-threshold",
+            "0.77",
+            "--wake-owner-window-s",
+            "1.9",
             "--wake-semantic-probe-interval-s",
             "0.6",
             "--wake-semantic-window-s",
@@ -299,6 +383,11 @@ def test_build_parser_accepts_voice_wake_options() -> None:
     assert args.wake_use_semantic_gate is True
     assert args.wake_auto_prefix_variants is True
     assert args.wake_allow_name_only is True
+    assert args.wake_owner_verify is True
+    assert args.wake_owner_profile == "/tmp/owner-profile.json"
+    assert args.wake_owner_sample == "/tmp/owner-sample.wav"
+    assert args.wake_owner_threshold == 0.77
+    assert args.wake_owner_window_s == 1.9
     assert args.wake_semantic_probe_interval_s == 0.6
     assert args.wake_semantic_window_s == 1.4
     assert args.wake_semantic_end_silence_s == 1.1
@@ -335,6 +424,11 @@ def test_parse_args_with_config_normalizes_legacy_values(tmp_path: Path, monkeyp
                 "wake_use_semantic_gate": "true",
                 "wake_auto_prefix_variants": "false",
                 "wake_allow_name_only": "0",
+                "wake_owner_verify": "true",
+                "wake_owner_profile": "~/owner_profile.json",
+                "wake_owner_sample": "~/owner_sample.wav",
+                "wake_owner_threshold": 9.9,
+                "wake_owner_window_s": 0.1,
                 "wake_semantic_probe_interval_s": -0.1,
                 "wake_semantic_window_s": 0.1,
                 "wake_semantic_end_silence_s": 0.0,
@@ -368,6 +462,11 @@ def test_parse_args_with_config_normalizes_legacy_values(tmp_path: Path, monkeyp
     assert args.wake_use_semantic_gate is True
     assert args.wake_auto_prefix_variants is False
     assert args.wake_allow_name_only is False
+    assert args.wake_owner_verify is True
+    assert args.wake_owner_profile.endswith("owner_profile.json")
+    assert args.wake_owner_sample.endswith("owner_sample.wav")
+    assert args.wake_owner_threshold == 0.99
+    assert args.wake_owner_window_s == 0.6
     assert args.wake_semantic_probe_interval_s == 0.1
     assert args.wake_semantic_window_s == 0.4
     assert args.wake_semantic_end_silence_s == 0.2
@@ -415,6 +514,20 @@ def test_update_speech_evidence_smooths_transient_spikes() -> None:
             confirm_s=0.18,
         )
     assert confirmed is False
+
+
+def test_owner_gate_level_hides_non_owner_activity() -> None:
+    assert _owner_gate_level(0.66, owner_filter_enabled=False, owner_active=False) == 0.66
+    assert _owner_gate_level(0.66, owner_filter_enabled=True, owner_active=True) == 0.66
+    assert _owner_gate_level(0.66, owner_filter_enabled=True, owner_active=False) == 0.0
+    assert _owner_gate_level(-1.0, owner_filter_enabled=False, owner_active=True) == 0.0
+    assert _owner_gate_level(2.0, owner_filter_enabled=True, owner_active=True) == 1.0
+
+
+def test_should_skip_owner_gated_asr_requires_owner_presence() -> None:
+    assert _should_skip_owner_gated_asr(owner_filter_enabled=True, owner_seen=False) is True
+    assert _should_skip_owner_gated_asr(owner_filter_enabled=True, owner_seen=True) is False
+    assert _should_skip_owner_gated_asr(owner_filter_enabled=False, owner_seen=False) is False
 
 
 def test_semantic_text_has_content_by_effective_chars() -> None:
