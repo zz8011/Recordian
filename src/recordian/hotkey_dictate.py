@@ -348,16 +348,18 @@ def build_hotkey_handlers(
     on_busy: Callable[[dict[str, object]], None],
 ) -> tuple[Callable[[], None], Callable[[], None], threading.Event]:
     """Create trigger and exit handlers for hotkey events."""
-    lock = threading.Lock()
+    lock = threading.RLock()
     stop_event = threading.Event()
     cooldown_s = max(0.0, args.cooldown_ms / 1000.0)
     state = {"last_trigger": 0.0}
 
     def _run_once() -> None:
         now = time.monotonic()
-        if now - state["last_trigger"] < cooldown_s:
-            return
-        state["last_trigger"] = now
+        # 使用锁保护状态读写，避免竞态条件
+        with lock:
+            if now - state["last_trigger"] < cooldown_s:
+                return
+            state["last_trigger"] = now
 
         if not lock.acquire(blocking=False):
             on_busy({"event": "busy", "reason": "dictation_in_progress"})
@@ -1880,6 +1882,34 @@ def _key_to_names(key: object, keyboard_module: Any) -> set[str]:
 
 
 def main() -> None:
+    import sys
+    from recordian.error_tracker import get_error_tracker
+
+    def handle_exception(exc_type, exc_value, exc_traceback):
+        """Global exception handler."""
+        if issubclass(exc_type, KeyboardInterrupt):
+            sys.__excepthook__(exc_type, exc_value, exc_traceback)
+            return
+
+        logger.error("Uncaught exception", exc_info=(exc_type, exc_value, exc_traceback))
+        tracker = get_error_tracker()
+        if tracker:
+            tracker.capture_exception(exc_value)
+
+    sys.excepthook = handle_exception
+
+    try:
+        _main_impl()
+    except Exception as e:
+        logger.error(f"Fatal error in main: {e}", exc_info=True)
+        tracker = get_error_tracker()
+        if tracker:
+            tracker.capture_exception(e)
+        raise
+
+
+def _main_impl() -> None:
+    """Main implementation."""
     parser = build_parser()
     args = _parse_args_with_config(parser)
     if args.save_config:

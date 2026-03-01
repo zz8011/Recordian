@@ -56,7 +56,11 @@ jobs:
         python -m pip install --upgrade pip
         pip install -e ".[dev]"
 
-    - name: Check code style
+    - name: Check code style with ruff
       run: |
-        pip install ruff
-        ruff check src/ tests/ || true
+        ruff check src/ tests/
+
+    - name: Type check with mypy
+      run: |
+        mypy src/recordian --ignore-missing-imports --no-strict-optional
+      continue-on-error: true

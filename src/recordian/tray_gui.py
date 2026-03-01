@@ -2475,9 +2475,32 @@ def _blend_hex(a: str, b: str, ratio: float) -> str:
 
 
 def main() -> None:
-    args = build_parser().parse_args()
-    app = TrayApp(args)
-    app.run()
+    import sys
+    from recordian.error_tracker import get_error_tracker
+
+    def handle_exception(exc_type, exc_value, exc_traceback):
+        """Global exception handler."""
+        if issubclass(exc_type, KeyboardInterrupt):
+            sys.__excepthook__(exc_type, exc_value, exc_traceback)
+            return
+
+        logger.error("Uncaught exception", exc_info=(exc_type, exc_value, exc_traceback))
+        tracker = get_error_tracker()
+        if tracker:
+            tracker.capture_exception(exc_value)
+
+    sys.excepthook = handle_exception
+
+    try:
+        args = build_parser().parse_args()
+        app = TrayApp(args)
+        app.run()
+    except Exception as e:
+        logger.error(f"Fatal error in main: {e}", exc_info=True)
+        tracker = get_error_tracker()
+        if tracker:
+            tracker.capture_exception(e)
+        raise
 
 
 if __name__ == "__main__":

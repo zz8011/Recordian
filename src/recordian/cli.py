@@ -49,6 +49,34 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
+    import sys
+    from recordian.error_tracker import get_error_tracker
+
+    def handle_exception(exc_type, exc_value, exc_traceback):
+        """Global exception handler."""
+        if issubclass(exc_type, KeyboardInterrupt):
+            sys.__excepthook__(exc_type, exc_value, exc_traceback)
+            return
+
+        logger.error("Uncaught exception", exc_info=(exc_type, exc_value, exc_traceback))
+        tracker = get_error_tracker()
+        if tracker:
+            tracker.capture_exception(exc_value)
+
+    sys.excepthook = handle_exception
+
+    try:
+        _main_impl()
+    except Exception as e:
+        logger.error(f"Fatal error in main: {e}", exc_info=True)
+        tracker = get_error_tracker()
+        if tracker:
+            tracker.capture_exception(e)
+        raise
+
+
+def _main_impl() -> None:
+    """Main implementation."""
     parser = build_parser()
     args = parser.parse_args()
 

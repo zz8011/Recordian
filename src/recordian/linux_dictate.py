@@ -440,10 +440,33 @@ def run_dictate_once(
 
 
 def main() -> None:
-    parser = build_parser()
-    args = parser.parse_args()
-    result = run_dictate_once(args)
-    print(json.dumps(asdict(result), ensure_ascii=False, indent=2))
+    import sys
+    from recordian.error_tracker import get_error_tracker
+
+    def handle_exception(exc_type, exc_value, exc_traceback):
+        """Global exception handler."""
+        if issubclass(exc_type, KeyboardInterrupt):
+            sys.__excepthook__(exc_type, exc_value, exc_traceback)
+            return
+
+        logger.error("Uncaught exception", exc_info=(exc_type, exc_value, exc_traceback))
+        tracker = get_error_tracker()
+        if tracker:
+            tracker.capture_exception(exc_value)
+
+    sys.excepthook = handle_exception
+
+    try:
+        parser = build_parser()
+        args = parser.parse_args()
+        result = run_dictate_once(args)
+        print(json.dumps(asdict(result), ensure_ascii=False, indent=2))
+    except Exception as e:
+        logger.error(f"Fatal error in main: {e}", exc_info=True)
+        tracker = get_error_tracker()
+        if tracker:
+            tracker.capture_exception(e)
+        raise
 
 
 if __name__ == "__main__":

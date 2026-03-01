@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from pathlib import Path
 
@@ -7,6 +8,8 @@ from .config import AppConfig
 from .models import ASRResult, CommitResult, SessionContext, SessionState
 from .policy import Pass2Policy
 from .providers.base import ASRProvider
+
+logger = logging.getLogger(__name__)
 
 
 class DictationEngine:
@@ -31,36 +34,46 @@ class DictationEngine:
         hotwords: list[str] | None = None,
         force_high_precision: bool = False,
     ) -> CommitResult:
+        from .error_tracker import get_error_tracker
+
+        tracker = get_error_tracker()
         hotwords = hotwords or []
         state = SessionState.LISTENING
-        pass1 = self.pass1_provider.transcribe_file(wav_path, hotwords=hotwords)
-        state = SessionState.END_DETECTED
 
-        context = SessionContext(
-            hotwords=hotwords,
-            force_high_precision=force_high_precision,
-        )
-        decision = self.policy.evaluate(pass1, context)
+        try:
+            pass1 = self.pass1_provider.transcribe_file(wav_path, hotwords=hotwords)
+            state = SessionState.END_DETECTED
 
-        pass2_result: ASRResult | None = None
-        if decision.run_pass2 and self.pass2_provider is not None:
-            state = SessionState.CORRECTING
-            timeout_ms = (
-                self.config.policy.pass2_timeout_ms_cloud
-                if self.pass2_provider.is_cloud
-                else self.config.policy.pass2_timeout_ms_local
+            context = SessionContext(
+                hotwords=hotwords,
+                force_high_precision=force_high_precision,
             )
-            pass2_result = self._run_pass2_with_timeout(wav_path, hotwords, timeout_ms)
+            decision = self.policy.evaluate(pass1, context)
 
-        final_text = pass2_result.text if pass2_result and pass2_result.text else pass1.text
-        state = SessionState.COMMIT
-        return CommitResult(
-            state=state,
-            text=final_text,
-            pass1_result=pass1,
-            pass2_result=pass2_result,
-            decision=decision,
-        )
+            pass2_result: ASRResult | None = None
+            if decision.run_pass2 and self.pass2_provider is not None:
+                state = SessionState.CORRECTING
+                timeout_ms = (
+                    self.config.policy.pass2_timeout_ms_cloud
+                    if self.pass2_provider.is_cloud
+                    else self.config.policy.pass2_timeout_ms_local
+                )
+                pass2_result = self._run_pass2_with_timeout(wav_path, hotwords, timeout_ms)
+
+            final_text = pass2_result.text if pass2_result and pass2_result.text else pass1.text
+            state = SessionState.COMMIT
+            return CommitResult(
+                state=state,
+                text=final_text,
+                pass1_result=pass1,
+                pass2_result=pass2_result,
+                decision=decision,
+            )
+        except Exception as e:
+            logger.error(f"Transcription error: {e}", exc_info=True)
+            if tracker:
+                tracker.capture_exception(e, context={"wav_path": str(wav_path), "hotwords": hotwords})
+            raise
 
     def _run_pass2_with_timeout(
         self,
