@@ -240,11 +240,61 @@ cat ~/.config/recordian/hotkey.json | grep commit_backend
   - 调试：`stdout`
 
 #### 2. Electron 应用兼容性
-**症状：**
-微信、Obsidian 等 Electron 应用无法接收输入
 
-**解决方案：**
-使用剪贴板模式（已自动处理）
+**症状：**
+微信、Obsidian、VS Code 等 Electron 应用无法接收输入
+
+**自动检测机制：**
+Recordian 会自动检测 Electron 应用并使用最佳输入方式（xdotool-clipboard）。支持的应用包括：
+- 微信（WeChat）
+- VS Code
+- Obsidian
+- Typora
+- Discord
+- Slack
+- 其他基于 Electron 的应用
+
+检测基于 WM_CLASS 属性，结果会缓存 5 秒以提升性能。
+
+**故障排查：**
+
+1. **检查 xprop 是否安装**（X11 环境必需）
+   ```bash
+   which xprop
+   # 如果未安装：
+   sudo apt install x11-utils  # Debian/Ubuntu
+   sudo dnf install xorg-x11-utils  # Fedora
+   ```
+
+2. **验证检测是否工作**
+   ```bash
+   # 获取微信窗口 ID
+   xdotool search --class "WeChatAppEx"
+
+   # 检查 WM_CLASS
+   xprop -id <窗口ID> WM_CLASS
+   ```
+
+3. **Wayland 环境限制**
+   - Wayland 下无法使用 xprop 检测
+   - 自动降级到通用输入方式
+   - 建议使用 X11 会话以获得最佳体验
+
+4. **手动指定后端**（如果自动检测失败）
+   ```bash
+   export RECORDIAN_COMMIT_BACKEND=xdotool-clipboard
+   ```
+
+5. **启用降级机制**（自动尝试多种输入方式）
+   ```bash
+   export RECORDIAN_COMMIT_BACKEND=auto-fallback
+   ```
+   降级链：xdotool-clipboard → xdotool → wtype → stdout
+
+**性能优化：**
+- 检测结果缓存 5 秒，避免重复调用 xprop
+- 缓存最多保存 100 个窗口
+- 检测超时 1 秒，失败时自动降级
 
 #### 3. 焦点窗口丢失
 **检查方法：**
@@ -362,6 +412,101 @@ cat ~/.config/recordian/hotkey.json
 
 # 编辑配置
 vim ~/.config/recordian/hotkey.json
+```
+
+## 常见问题 (FAQ)
+
+### Q1: 为什么微信输入有延迟？
+
+**A**: 这是正常现象。微信等 Electron 应用使用剪贴板粘贴方式输入，流程如下：
+
+1. 设置剪贴板内容（~10ms）
+2. 发送 Ctrl+V 快捷键（~50ms）
+3. 应用响应粘贴（~50-100ms）
+
+总延迟约 100-150ms，比直接键盘输入慢，但这是 Electron 应用的技术限制。
+
+**优化建议**：
+- 使用 `auto` 模式（默认），自动选择最佳方式
+- 确保安装了 `xdotool` 和 `x11-utils`
+- 检查系统负载，高负载会增加延迟
+
+### Q2: 如何禁用自动检测？
+
+**A**: 如果自动检测导致问题，可以手动指定输入方式：
+
+```bash
+# 方法 1: 环境变量
+export RECORDIAN_COMMIT_BACKEND=xdotool-clipboard
+
+# 方法 2: 配置文件
+echo '{"commit_backend": "xdotool-clipboard"}' > ~/.config/recordian/hotkey.json
+```
+
+可用的输入方式：
+- `xdotool-clipboard`: 剪贴板粘贴
+- `xdotool`: 直接键盘输入
+- `wtype`: Wayland 输入
+- `stdout`: 输出到终端
+
+### Q3: 为什么有些 Electron 应用无法识别？
+
+**A**: 可能的原因：
+
+1. **Wayland 环境**：Wayland 下无法使用 xprop 检测，会自动降级
+   - 解决：使用 X11 会话
+
+2. **xprop 未安装**：
+   ```bash
+   sudo apt install x11-utils  # Debian/Ubuntu
+   sudo dnf install xorg-x11-utils  # Fedora
+   ```
+
+3. **应用使用非标准 WM_CLASS**：
+   - 检查应用的 WM_CLASS：
+     ```bash
+     xprop WM_CLASS  # 点击目标窗口
+     ```
+   - 如果不在已知列表中，请提交 Issue
+
+### Q4: 降级机制是什么？
+
+**A**: 使用 `auto-fallback` 模式时，如果主输入方式失败，会自动尝试备用方式：
+
+1. xdotool-clipboard（首选）
+2. xdotool（降级）
+3. wtype（Wayland 降级）
+4. stdout（最后降级）
+
+降级时会显示桌面通知，告知使用的备用方式。
+
+**启用方法**：
+```bash
+export RECORDIAN_COMMIT_BACKEND=auto-fallback
+```
+
+### Q5: 检测缓存会导致问题吗？
+
+**A**: 检测结果缓存 5 秒，通常不会有问题。但如果你在 5 秒内切换到不同类型的窗口，可能使用错误的输入方式。
+
+**解决方法**：
+- 等待 5 秒后再输入
+- 或重启后端清空缓存：
+  ```bash
+  pkill -f recordian-backend
+  ```
+
+缓存设计是为了性能优化，避免每次输入都调用 xprop（~10-50ms 开销）。
+
+### Q6: 为什么终端窗口输入失败？
+
+**A**: 终端窗口需要使用 Ctrl+Shift+V 粘贴，而不是 Ctrl+V。
+
+Recordian 会自动检测终端窗口（gnome-terminal、konsole、xterm 等）并使用正确的快捷键。
+
+如果检测失败，手动指定：
+```bash
+export RECORDIAN_COMMIT_BACKEND=xdotool-clipboard
 ```
 
 ## 获取帮助

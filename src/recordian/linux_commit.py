@@ -188,8 +188,119 @@ class XdotoolClipboardCommitter(TextCommitter):
         return CommitResult(backend=self.backend_name, committed=True, detail=detail)
 
 
+class CommitterWithFallback(TextCommitter):
+    """Wrapper that tries multiple committers with automatic fallback on failure.
+
+    Attempts committers in order until one succeeds or all fail.
+    Useful for handling environments where certain tools may be unavailable.
+
+    Args:
+        committers: List of (committer, description) tuples to try in order
+        notify_on_fallback: Whether to send desktop notification on fallback
+        max_timeout_per_attempt: Maximum time to wait for each attempt (seconds)
+    """
+
+    backend_name = "fallback"
+
+    def __init__(
+        self,
+        committers: list[tuple[TextCommitter, str]],
+        notify_on_fallback: bool = True,
+        max_timeout_per_attempt: float = 2.0,
+    ) -> None:
+        if not committers:
+            raise ValueError("CommitterWithFallback requires at least one committer")
+        self.committers = committers
+        self.notify_on_fallback = notify_on_fallback
+        self.max_timeout_per_attempt = max_timeout_per_attempt
+        # Use first committer's name as primary backend
+        self.backend_name = f"{committers[0][0].backend_name}-fallback"
+
+    def commit(self, text: str) -> CommitResult:
+        """Try each committer in order until one succeeds."""
+        last_error = None
+        attempts = []
+
+        for i, (committer, description) in enumerate(self.committers):
+            try:
+                # Try to commit with timeout protection
+                result = committer.commit(text)
+
+                # If this is not the first committer, we fell back
+                if i > 0:
+                    logger.warning(
+                        f"Fallback to {committer.backend_name} succeeded "
+                        f"after {i} failed attempt(s): {description}"
+                    )
+                    if self.notify_on_fallback:
+                        try:
+                            from .linux_notify import resolve_notifier
+                            notifier = resolve_notifier("auto")
+                            notifier.notify(
+                                title="Recordian 输入降级",
+                                message=f"使用备用方式: {description}",
+                                urgency="low",
+                            )
+                        except Exception as e:
+                            logger.debug(f"Failed to send fallback notification: {e}")
+
+                # Add fallback info to result detail
+                if i > 0:
+                    detail = f"fallback:{i+1}/{len(self.committers)} {result.detail}"
+                    return CommitResult(
+                        backend=self.backend_name,
+                        committed=result.committed,
+                        detail=detail,
+                    )
+                return result
+
+            except Exception as e:
+                last_error = e
+                attempts.append(f"{committer.backend_name}:{type(e).__name__}")
+                logger.debug(
+                    f"Committer {committer.backend_name} failed ({description}): {e}"
+                )
+                continue
+
+        # All committers failed
+        error_msg = f"All {len(self.committers)} committers failed: {', '.join(attempts)}"
+        logger.error(error_msg)
+
+        if self.notify_on_fallback:
+            try:
+                from .linux_notify import resolve_notifier
+                notifier = resolve_notifier("auto")
+                notifier.notify(
+                    title="Recordian 输入失败",
+                    message="所有输入方式均失败，请检查系统配置",
+                    urgency="critical",
+                )
+            except Exception as e:
+                logger.debug(f"Failed to send error notification: {e}")
+
+        raise CommitError(error_msg) from last_error
+
+
 def resolve_committer(backend: str, *, target_window_id: int | None = None) -> TextCommitter:
-    """Resolve text output backend for Linux desktop integration."""
+    """Resolve text output backend for Linux desktop integration.
+
+    Args:
+        backend: Backend name (auto, auto-fallback, xdotool, xdotool-clipboard, wtype, stdout, none)
+        target_window_id: Optional X11 window ID for window-specific routing
+
+    Returns:
+        Configured TextCommitter instance
+
+    Note:
+        In 'auto' mode with target_window_id:
+        - Electron apps (WeChat, VS Code, etc.) → xdotool-clipboard (required)
+        - Terminal windows → xdotool-clipboard (Ctrl+Shift+V support)
+        - Other windows → xdotool-clipboard (preferred for CJK)
+
+        In 'auto-fallback' mode:
+        - Same as 'auto' but with automatic fallback on failure
+        - Tries: xdotool-clipboard → xdotool → wtype → stdout
+    """
     normalized = backend.strip().lower()
     if normalized == "none":
         return NoopCommitter()
@@ -205,8 +316,64 @@ def resolve_committer(backend: str, *, target_window_id: int | None = None) -> T
             target_window_id=target_window_id,
             clipboard_timeout_ms=timeout_ms
         )
-    if normalized == "auto":
+    if normalized in ("auto", "auto-fallback"):
+        # Auto mode: intelligent backend selection based on window type
+        is_electron = False
+        is_terminal = False
+
+        if target_window_id is not None:
+            # Detect window type for smart routing
+            is_electron = _is_electron_window(target_window_id)
+            is_terminal = _is_terminal_window(target_window_id)
+
+            # Log detection results for debugging
+            if is_electron:
+                logger.debug(f"Detected Electron app (wid={target_window_id}), using xdotool-clipboard")
+            elif is_terminal:
+                logger.debug(f"Detected terminal (wid={target_window_id}), using xdotool-clipboard")
+
+        # Build committer list for fallback mode
+        if normalized == "auto-fallback":
+            committers = []
+            timeout_ms = _parse_clipboard_timeout_ms(os.environ.get("RECORDIAN_CLIPBOARD_TIMEOUT_MS"))
+
+            # Try xdotool-clipboard first (best for CJK and Electron)
+            if which("xdotool") and (which("xclip") or which("xsel")):
+                committers.append((
+                    XdotoolClipboardCommitter(target_window_id=target_window_id, clipboard_timeout_ms=timeout_ms),
+                    "xdotool-clipboard"
+                ))
+
+            # Fallback to xdotool type
+            if which("xdotool"):
+                committers.append((
+                    XDoToolCommitter(target_window_id=target_window_id),
+                    "xdotool"
+                ))
+
+            # Fallback to wtype (Wayland)
+            if which("wtype"):
+                committers.append((
+                    WTypeCommitter(),
+                    "wtype"
+                ))
+
+            # Last resort: stdout
+            committers.append((
+                StdoutCommitter(),
+                "stdout"
+            ))
+
+            if len(committers) > 1:
+                return CommitterWithFallback(committers=committers, notify_on_fallback=True)
+            elif committers:
+                return committers[0][0]
+            else:
+                raise CommitError("No text commit backend available")
+
+        # Regular auto mode (no fallback)
         # Prefer xdotool-clipboard: handles CJK and Electron apps correctly on X11.
+        # Required for Electron apps due to complex input controls.
         if which("xdotool") and (which("xclip") or which("xsel")):
             timeout_ms = _parse_clipboard_timeout_ms(os.environ.get("RECORDIAN_CLIPBOARD_TIMEOUT_MS"))
             return XdotoolClipboardCommitter(
@@ -261,6 +428,33 @@ _TERMINAL_WM_CLASSES = {
     "hyper",
 }
 
+# Known Electron app WM_CLASS names (lowercase).
+# These apps often have complex input controls that require special handling.
+_ELECTRON_WM_CLASSES = {
+    # WeChat variants
+    "wechatappex", "wechat", "wechat.exe", "deepin-wine-wechat",
+    # VS Code
+    "code", "vscode", "code - insiders",
+    # Obsidian
+    "obsidian",
+    # Slack
+    "slack",
+    # Discord
+    "discord",
+    # Other common Electron apps
+    "atom",
+    "github desktop",
+    "postman",
+    "notion",
+    "figma",
+}
+
+# Cache for window detection results: {window_id: (is_electron, timestamp)}
+# TTL: 5 seconds, Max size: 100 entries
+_WINDOW_DETECTION_CACHE: dict[int, tuple[bool, float]] = {}
+_CACHE_TTL = 5.0  # seconds
+_CACHE_MAX_SIZE = 100
+
 
 def _is_terminal_window(window_id: int) -> bool:
     """Return True if the given X11 window belongs to a terminal emulator."""
@@ -272,12 +466,93 @@ def _is_terminal_window(window_id: int) -> bool:
             capture_output=True,
             text=True,
             check=False,
+            timeout=1.0,
         )
         # WM_CLASS(STRING) = "gnome-terminal-server", "Gnome-terminal"
+        # Use word boundaries to avoid false matches (e.g., "st" in "wechatappex")
         line = result.stdout.lower()
-        return any(name in line for name in _TERMINAL_WM_CLASSES)
-    except (FileNotFoundError, OSError):
+        # Extract class names from format: WM_CLASS(STRING) = "class1", "class2"
+        if '"' in line:
+            # Parse quoted strings
+            import re
+            classes = re.findall(r'"([^"]+)"', line)
+            return any(cls in _TERMINAL_WM_CLASSES for cls in classes)
         return False
+    except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
+        return False
+
+
+def _is_electron_window(window_id: int) -> bool:
+    """Return True if the given X11 window belongs to an Electron app.
+
+    Electron apps (WeChat, VS Code, Obsidian, etc.) often use custom input
+    controls that require special handling for focus restoration.
+
+    Results are cached for 5 seconds to avoid repeated xprop calls.
+
+    Args:
+        window_id: X11 window ID to check
+
+    Returns:
+        True if the window is an Electron app, False otherwise
+
+    Note:
+        - Returns False on Wayland sessions (xprop unavailable)
+        - Returns False if xprop is not installed
+        - Returns False on timeout or error (fail-safe)
+        - Uses LRU cache with 5s TTL and 100 entry limit
+    """
+    # Check cache first
+    current_time = time.time()
+    if window_id in _WINDOW_DETECTION_CACHE:
+        is_electron, timestamp = _WINDOW_DETECTION_CACHE[window_id]
+        if current_time - timestamp < _CACHE_TTL:
+            return is_electron
+        # Cache expired, remove it
+        del _WINDOW_DETECTION_CACHE[window_id]
+
+    # Check if running on Wayland (xprop doesn't work)
+    if os.environ.get("XDG_SESSION_TYPE") == "wayland":
+        result = False
+        _WINDOW_DETECTION_CACHE[window_id] = (result, current_time)
+        return result
+
+    if not which("xprop"):
+        result = False
+        _WINDOW_DETECTION_CACHE[window_id] = (result, current_time)
+        return result
+
+    try:
+        proc_result = subprocess.run(
+            ["xprop", "-id", str(window_id), "WM_CLASS"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=1.0,
+        )
+        # WM_CLASS(STRING) = "WeChatAppEx", "WeChatAppEx"
+        # Extract class names from format: WM_CLASS(STRING) = "class1", "class2"
+        line = proc_result.stdout.lower()
+        result = False
+        if '"' in line:
+            # Parse quoted strings
+            import re
+            classes = re.findall(r'"([^"]+)"', line)
+            result = any(cls in _ELECTRON_WM_CLASSES for cls in classes)
+    except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
+        result = False
+
+    # Store in cache
+    _WINDOW_DETECTION_CACHE[window_id] = (result, current_time)
+
+    # Enforce cache size limit (simple LRU: remove oldest entries)
+    if len(_WINDOW_DETECTION_CACHE) > _CACHE_MAX_SIZE:
+        # Remove oldest 10% of entries
+        sorted_items = sorted(_WINDOW_DETECTION_CACHE.items(), key=lambda x: x[1][1])
+        for wid, _ in sorted_items[:_CACHE_MAX_SIZE // 10]:
+            del _WINDOW_DETECTION_CACHE[wid]
+
+    return result
 
 
 def _run_command(cmd: list[str]) -> None:

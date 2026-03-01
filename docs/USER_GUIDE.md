@@ -333,6 +333,87 @@ prompt = manager.load_preset("custom")
 - `<shift>`: Shift
 - `<super>`: Super/Win
 
+### 5. 智能输入方式
+
+#### 自动检测 Electron 应用
+
+Recordian 会自动检测目标窗口类型，并选择最佳输入方式：
+
+**支持的 Electron 应用**：
+- 微信（WeChat）
+- VS Code
+- Obsidian
+- Typora
+- Discord
+- Slack
+- 其他基于 Electron 的应用
+
+**检测机制**：
+- 基于 X11 的 WM_CLASS 属性识别
+- 检测结果缓存 5 秒，提升性能
+- Wayland 环境自动降级到通用方式
+
+**输入方式说明**：
+
+| 应用类型 | 输入方式 | 说明 |
+|---------|---------|------|
+| Electron 应用 | xdotool-clipboard | 通过剪贴板粘贴，支持 CJK 字符 |
+| 终端窗口 | xdotool-clipboard | 使用 Ctrl+Shift+V 粘贴 |
+| 其他应用 | xdotool-clipboard | 通用剪贴板方式（推荐） |
+
+#### 配置输入方式
+
+**方法 1: 使用环境变量**
+
+```bash
+# 自动模式（默认，推荐）
+export RECORDIAN_COMMIT_BACKEND=auto
+
+# 自动模式 + 降级机制
+export RECORDIAN_COMMIT_BACKEND=auto-fallback
+
+# 手动指定
+export RECORDIAN_COMMIT_BACKEND=xdotool-clipboard
+```
+
+**方法 2: 在配置文件中设置**
+
+```json
+{
+  "commit_backend": "auto"
+}
+```
+
+**可用的输入方式**：
+
+| 方式 | 说明 | 适用场景 |
+|-----|------|---------|
+| `auto` | 自动检测（推荐） | 大多数场景 |
+| `auto-fallback` | 自动检测 + 降级 | 需要高可靠性 |
+| `xdotool-clipboard` | 剪贴板粘贴 | Electron 应用、CJK 输入 |
+| `xdotool` | 直接键盘输入 | 简单文本输入 |
+| `wtype` | Wayland 输入 | Wayland 环境 |
+| `stdout` | 输出到终端 | 调试 |
+| `none` | 不输出 | 测试 |
+
+#### 降级机制
+
+启用 `auto-fallback` 模式后，如果主输入方式失败，会自动尝试备用方式：
+
+1. xdotool-clipboard（首选）
+2. xdotool（降级）
+3. wtype（Wayland 降级）
+4. stdout（最后降级）
+
+降级时会显示桌面通知，告知使用的备用方式。
+
+#### 性能优化
+
+- 检测结果缓存 5 秒
+- 缓存最多保存 100 个窗口
+- 检测超时 1 秒
+- 失败时自动降级
+
 ---
 
 ## 故障排查

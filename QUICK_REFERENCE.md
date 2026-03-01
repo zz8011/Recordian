@@ -57,9 +57,38 @@ pkill -f recordian && recordian-tray
   "wake_owner_sample": "~/.config/recordian/owner_voice_sample.wav",
   "wake_owner_threshold": 0.72,
   "wake_owner_window_s": 1.6,
-  "commit_backend": "auto"           // 文本上屏方式
+  "commit_backend": "auto"           // 文本上屏方式（推荐 auto 或 auto-fallback）
 }
 ```
+
+### 文本上屏方式 (commit_backend)
+
+**推荐配置**：
+- `auto`（默认）：自动检测窗口类型，选择最佳输入方式
+- `auto-fallback`：自动检测 + 降级机制，失败时自动尝试备用方式
+
+**自动检测支持的应用**：
+- Electron 应用：微信、VS Code、Obsidian、Typora、Discord、Slack
+- 终端窗口：自动使用 Ctrl+Shift+V 粘贴
+- 其他应用：使用通用剪贴板方式
+
+**手动指定方式**：
+- `xdotool-clipboard`：剪贴板粘贴（适合 Electron 应用和 CJK 输入）
+- `xdotool`：直接键盘输入（适合简单文本）
+- `wtype`：Wayland 环境输入
+- `stdout`：输出到终端（调试用）
+- `none`：不输出（测试用）
+
+**降级链（auto-fallback 模式）**：
+1. xdotool-clipboard（首选）
+2. xdotool（降级）
+3. wtype（Wayland 降级）
+4. stdout（最后降级）
+
+**注意**：
+- X11 环境需要安装 `xdotool` 和 `x11-utils`（提供 xprop）
+- Wayland 环境自动降级到 wtype 或 stdout
+- 检测结果缓存 5 秒，提升性能
 
 ### Preset 后处理指令（推荐）
 
