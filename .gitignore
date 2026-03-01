@@ -51,3 +51,7 @@ reference-image.png
 coverage.json
 coverage.xml
 htmlcov/
+
+# Dolt database files (added by bd init)
+.dolt/
+*.db
