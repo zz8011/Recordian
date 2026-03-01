@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from dataclasses import asdict
 import enum
 import json
@@ -13,7 +14,7 @@ from typing import Any, Callable
 from recordian.config import ConfigManager
 
 from .audio_feedback import default_sound_off_path, default_sound_on_path, play_sound
-from .audio import read_wav_mono_f32
+from .audio import read_wav_mono_f32, write_wav_mono_f32
 from .exceptions import ASRError, AudioError, CommitError, RefinerError
 from .linux_commit import get_focused_window_id, resolve_committer, send_hard_enter
 from .linux_notify import Notification, resolve_notifier
@@ -202,6 +203,54 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=2.0,
         help="Auto-stop if no speech is detected after wake",
+    )
+    parser.add_argument(
+        "--wake-speech-confirm-s",
+        type=float,
+        default=0.18,
+        help="Required speech evidence time before considering voice as started",
+    )
+    parser.add_argument(
+        "--wake-auto-name-variants",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Auto-expand common homophone variants for wake names (e.g. 小二 -> 小耳/小尔)",
+    )
+    parser.add_argument(
+        "--wake-use-semantic-gate",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Use lightweight semantic probe (text presence) as side-channel for wake session start/end",
+    )
+    parser.add_argument(
+        "--wake-semantic-probe-interval-s",
+        type=float,
+        default=0.45,
+        help="Semantic probe interval in seconds",
+    )
+    parser.add_argument(
+        "--wake-semantic-window-s",
+        type=float,
+        default=1.2,
+        help="Recent audio window length in seconds for each semantic probe",
+    )
+    parser.add_argument(
+        "--wake-semantic-end-silence-s",
+        type=float,
+        default=1.0,
+        help="Auto-stop if semantic probe sees no text growth for this duration",
+    )
+    parser.add_argument(
+        "--wake-semantic-min-chars",
+        type=int,
+        default=1,
+        help="Minimum effective chars to consider semantic speech detected",
+    )
+    parser.add_argument(
+        "--wake-semantic-timeout-ms",
+        type=int,
+        default=1200,
+        help="Timeout for each semantic probe ASR call",
     )
     parser.add_argument("--sound-on-path", default=str(_DEFAULT_SOUND_ON), help="Global cue sound when recording starts")
     parser.add_argument("--sound-off-path", default=str(_DEFAULT_SOUND_OFF), help="Global cue sound when recording ends")
@@ -484,6 +533,10 @@ def build_ptt_hotkey_handlers(
         "voice_started_ts": 0.0,
         "voice_speech_detected": False,
         "voice_auto_stopping": False,
+        "voice_semantic_enabled": False,
+        "voice_semantic_has_text": False,
+        "voice_semantic_last_text_ts": 0.0,
+        "voice_semantic_last_text": "",
     }
 
     def _get_state(key: str) -> object:
@@ -542,6 +595,10 @@ def build_ptt_hotkey_handlers(
                 "voice_started_ts": time.monotonic(),
                 "voice_speech_detected": False,
                 "voice_auto_stopping": False,
+                "voice_semantic_enabled": trigger_source == "voice_wake" and bool(getattr(args, "wake_use_semantic_gate", False)),
+                "voice_semantic_has_text": False,
+                "voice_semantic_last_text_ts": 0.0,
+                "voice_semantic_last_text": "",
             })
             on_state({"event": "recording_started", "record_backend": recorder_backend, "audio_path": str(audio_path)})
 
@@ -602,13 +659,107 @@ def build_ptt_hotkey_handlers(
                     vad = None
                     vad_init_attempted = False
                     vad_log_emitted = False
+                    try:
+                        wake_speech_confirm_s = max(0.0, float(getattr(args, "wake_speech_confirm_s", 0.18)))
+                    except Exception:
+                        wake_speech_confirm_s = 0.18
+                    speech_evidence_s = 0.0
+                    semantic_enabled = bool(_get_state("voice_semantic_enabled"))
+                    try:
+                        semantic_probe_interval_s = max(0.1, float(getattr(args, "wake_semantic_probe_interval_s", 0.45)))
+                    except Exception:
+                        semantic_probe_interval_s = 0.45
+                    try:
+                        semantic_window_s = max(0.4, float(getattr(args, "wake_semantic_window_s", 1.2)))
+                    except Exception:
+                        semantic_window_s = 1.2
+                    try:
+                        semantic_end_silence_s = max(0.2, float(getattr(args, "wake_semantic_end_silence_s", 1.0)))
+                    except Exception:
+                        semantic_end_silence_s = 1.0
+                    try:
+                        semantic_min_chars = max(1, int(getattr(args, "wake_semantic_min_chars", 1)))
+                    except Exception:
+                        semantic_min_chars = 1
+                    try:
+                        semantic_timeout_ms = max(200, int(getattr(args, "wake_semantic_timeout_ms", 1200)))
+                    except Exception:
+                        semantic_timeout_ms = 1200
+                    semantic_ring_s = max(semantic_window_s * 1.5, 2.0)
+                    semantic_max_samples = max(1, int(sample_rate * semantic_ring_s))
+                    semantic_window_samples = max(1, int(sample_rate * semantic_window_s))
+                    semantic_buffer: list[float] = []
+                    semantic_lock = threading.Lock()
+                    semantic_thread: threading.Thread | None = None
+
+                    def _append_semantic_frame(frame: Any) -> None:
+                        if not semantic_enabled:
+                            return
+                        samples = [float(x) for x in np.asarray(frame, dtype=np.float32).reshape(-1)]
+                        if not samples:
+                            return
+                        with semantic_lock:
+                            semantic_buffer.extend(samples)
+                            overflow = len(semantic_buffer) - semantic_max_samples
+                            if overflow > 0:
+                                del semantic_buffer[:overflow]
+
+                    def _snapshot_semantic_samples() -> list[float]:
+                        with semantic_lock:
+                            if not semantic_buffer:
+                                return []
+                            return semantic_buffer[-semantic_window_samples:].copy()
+
+                    def _semantic_probe_worker() -> None:
+                        if not semantic_enabled:
+                            return
+                        if args.debug_diagnostics:
+                            on_state(
+                                {
+                                    "event": "log",
+                                    "message": (
+                                        "diag semantic_gate enabled"
+                                        f" interval_s={semantic_probe_interval_s:.2f}"
+                                        f" window_s={semantic_window_s:.2f}"
+                                        f" end_silence_s={semantic_end_silence_s:.2f}"
+                                        f" min_chars={semantic_min_chars}"
+                                    ),
+                                }
+                            )
+                        while not stop.wait(semantic_probe_interval_s):
+                            if not bool(_get_state("voice_session_active")):
+                                continue
+                            if bool(_get_state("voice_auto_stopping")):
+                                continue
+                            probe_samples = _snapshot_semantic_samples()
+                            if len(probe_samples) < max(3200, int(sample_rate * 0.25)):
+                                continue
+                            text = _semantic_probe_text(
+                                provider=provider,
+                                samples=probe_samples,
+                                sample_rate=sample_rate,
+                                hotwords=list(getattr(args, "hotword", [])),
+                                timeout_ms=semantic_timeout_ms,
+                            )
+                            now_probe = time.monotonic()
+                            if _semantic_text_has_content(text, min_chars=semantic_min_chars):
+                                _set_state("voice_semantic_has_text", True)
+                                _set_state("voice_semantic_last_text_ts", now_probe)
+                                _set_state("voice_semantic_last_text", text)
+                                _set_state("voice_speech_detected", True)
+                                _set_state("voice_last_speech_ts", now_probe)
+
+                    if semantic_enabled:
+                        semantic_thread = threading.Thread(target=_semantic_probe_worker, daemon=True)
+                        semantic_thread.start()
 
                     def _cb(indata: Any, frames: int, t: Any, status: Any) -> None:
-                        nonlocal noise_floor, smoothed_level, vad, vad_init_attempted, vad_log_emitted
+                        nonlocal noise_floor, smoothed_level, vad, vad_init_attempted, vad_log_emitted, speech_evidence_s
                         if stop.is_set():
                             raise sd.CallbackStop()
 
                         rms = float(np.sqrt(np.mean(indata ** 2)))
+                        _append_semantic_frame(indata)
 
                         # 动态噪声底估计：仅在较安静片段更新，降低环境噪声导致的抖动。
                         if rms < noise_floor * 1.8:
@@ -662,7 +813,7 @@ def build_ptt_hotkey_handlers(
                                 vad_log_emitted = True
 
                             now_ts = time.monotonic()
-                            speech_detected = False
+                            speech_detected_raw = False
                             if vad is not None:
                                 frame = np.ascontiguousarray(indata.reshape(-1), dtype=np.float32)
                                 if sample_rate != vad_sample_rate:
@@ -672,13 +823,22 @@ def build_ptt_hotkey_handlers(
                                     frame_bytes = bytes(vad_pcm_buffer[:vad_frame_bytes])
                                     del vad_pcm_buffer[:vad_frame_bytes]
                                     if vad.is_speech(frame_bytes, vad_sample_rate):
-                                        speech_detected = True
-                            elif level >= 0.08:
-                                speech_detected = True
+                                        speech_detected_raw = True
+                            elif _is_level_speech_frame(level=level, rms=rms, noise_floor=noise_floor):
+                                speech_detected_raw = True
+
+                            block_duration_s = max(0.0, float(frames) / float(sample_rate)) if sample_rate > 0 else 0.0
+                            speech_evidence_s, speech_detected = _update_speech_evidence(
+                                speech_evidence_s,
+                                speech_detected_raw=speech_detected_raw,
+                                frame_duration_s=block_duration_s,
+                                confirm_s=wake_speech_confirm_s,
+                            )
 
                             if speech_detected:
                                 _set_state("voice_last_speech_ts", now_ts)
-                                _set_state("voice_speech_detected", True)
+                                if not semantic_enabled:
+                                    _set_state("voice_speech_detected", True)
 
                     with sd.InputStream(device=device_id, samplerate=sample_rate, channels=1, blocksize=1024, callback=_cb):
                         while not stop.wait(0.05):
@@ -689,6 +849,24 @@ def build_ptt_hotkey_handlers(
                             speech_detected = bool(_get_state("voice_speech_detected"))
                             started_ts = float(_get_state("voice_started_ts"))
                             now_ts = time.monotonic()
+                            if semantic_enabled:
+                                if not bool(_get_state("voice_semantic_has_text")):
+                                    no_speech_timeout_s = max(0.0, float(getattr(args, "wake_no_speech_timeout_s", 2.0)))
+                                    if no_speech_timeout_s > 0 and now_ts - started_ts >= no_speech_timeout_s:
+                                        _set_state("voice_auto_stopping", True)
+                                        on_state({"event": "voice_wake_auto_stop", "reason": "semantic_no_text_timeout"})
+                                        threading.Thread(target=_stop_recording, daemon=True).start()
+                                        break
+                                    continue
+                                if now_ts - started_ts < max(0.0, float(getattr(args, "wake_min_speech_s", 0.5))):
+                                    continue
+                                semantic_last_ts = float(_get_state("voice_semantic_last_text_ts"))
+                                if now_ts - semantic_last_ts < semantic_end_silence_s:
+                                    continue
+                                _set_state("voice_auto_stopping", True)
+                                on_state({"event": "voice_wake_auto_stop", "reason": "semantic_silence"})
+                                threading.Thread(target=_stop_recording, daemon=True).start()
+                                break
                             if not speech_detected:
                                 no_speech_timeout_s = max(0.0, float(getattr(args, "wake_no_speech_timeout_s", 2.0)))
                                 if no_speech_timeout_s > 0 and now_ts - started_ts >= no_speech_timeout_s:
@@ -747,6 +925,10 @@ def build_ptt_hotkey_handlers(
             "recording_state": RecordingState.PROCESSING,
             "voice_session_active": False,
             "voice_auto_stopping": False,
+            "voice_semantic_enabled": False,
+            "voice_semantic_has_text": False,
+            "voice_semantic_last_text_ts": 0.0,
+            "voice_semantic_last_text": "",
         })
 
         try:
@@ -964,6 +1146,32 @@ def _parse_args_with_config(parser: argparse.ArgumentParser) -> argparse.Namespa
         args.wake_no_speech_timeout_s = max(0.0, float(getattr(args, "wake_no_speech_timeout_s", 2.0)))
     except Exception:
         args.wake_no_speech_timeout_s = 2.0
+    try:
+        args.wake_speech_confirm_s = max(0.0, float(getattr(args, "wake_speech_confirm_s", 0.18)))
+    except Exception:
+        args.wake_speech_confirm_s = 0.18
+    args.wake_auto_name_variants = _coerce_bool(getattr(args, "wake_auto_name_variants", True), default=True)
+    args.wake_use_semantic_gate = _coerce_bool(getattr(args, "wake_use_semantic_gate", False), default=False)
+    try:
+        args.wake_semantic_probe_interval_s = max(0.1, float(getattr(args, "wake_semantic_probe_interval_s", 0.45)))
+    except Exception:
+        args.wake_semantic_probe_interval_s = 0.45
+    try:
+        args.wake_semantic_window_s = max(0.4, float(getattr(args, "wake_semantic_window_s", 1.2)))
+    except Exception:
+        args.wake_semantic_window_s = 1.2
+    try:
+        args.wake_semantic_end_silence_s = max(0.2, float(getattr(args, "wake_semantic_end_silence_s", 1.0)))
+    except Exception:
+        args.wake_semantic_end_silence_s = 1.0
+    try:
+        args.wake_semantic_min_chars = max(1, int(getattr(args, "wake_semantic_min_chars", 1)))
+    except Exception:
+        args.wake_semantic_min_chars = 1
+    try:
+        args.wake_semantic_timeout_ms = max(200, int(getattr(args, "wake_semantic_timeout_ms", 1200)))
+    except Exception:
+        args.wake_semantic_timeout_ms = 1200
     args.wake_tokens_type = normalize_tokens_type(str(getattr(args, "wake_tokens_type", "ppinyin")))
     args.config_path = str(Path(args.config_path).expanduser())
     return args
@@ -1023,6 +1231,14 @@ def _save_runtime_config(args: argparse.Namespace) -> None:
         "wake_vad_aggressiveness": getattr(args, "wake_vad_aggressiveness", 2),
         "wake_vad_frame_ms": getattr(args, "wake_vad_frame_ms", 30),
         "wake_no_speech_timeout_s": getattr(args, "wake_no_speech_timeout_s", 2.0),
+        "wake_speech_confirm_s": getattr(args, "wake_speech_confirm_s", 0.18),
+        "wake_auto_name_variants": getattr(args, "wake_auto_name_variants", True),
+        "wake_use_semantic_gate": getattr(args, "wake_use_semantic_gate", False),
+        "wake_semantic_probe_interval_s": getattr(args, "wake_semantic_probe_interval_s", 0.45),
+        "wake_semantic_window_s": getattr(args, "wake_semantic_window_s", 1.2),
+        "wake_semantic_end_silence_s": getattr(args, "wake_semantic_end_silence_s", 1.0),
+        "wake_semantic_min_chars": getattr(args, "wake_semantic_min_chars", 1),
+        "wake_semantic_timeout_ms": getattr(args, "wake_semantic_timeout_ms", 1200),
         "sound_on_path": getattr(args, "sound_on_path", str(_DEFAULT_SOUND_ON)),
         "sound_off_path": getattr(args, "sound_off_path", str(_DEFAULT_SOUND_OFF)),
         "wake_beep_path": getattr(args, "wake_beep_path", ""),
@@ -1444,6 +1660,69 @@ def _adaptive_vad_threshold(base: float, noise_level: float) -> float:
         return base
     ratio = noise_level / base
     return min_thresh + (base - min_thresh) * ratio
+
+
+def _is_level_speech_frame(*, level: float, rms: float, noise_floor: float) -> bool:
+    """Level fallback: require both normalized level and RMS above adaptive noise-aware thresholds."""
+    floor = max(0.0, noise_floor)
+    dynamic_level_threshold = _adaptive_vad_threshold(0.08, floor * 20.0)
+    dynamic_rms_threshold = max(0.0025, floor * 2.2)
+    return level >= dynamic_level_threshold and rms >= dynamic_rms_threshold
+
+
+def _update_speech_evidence(
+    score_s: float,
+    *,
+    speech_detected_raw: bool,
+    frame_duration_s: float,
+    confirm_s: float,
+) -> tuple[float, bool]:
+    """Smooth raw frame-level speech flags to avoid start/stop jitter from transient spikes."""
+    evidence = max(0.0, float(score_s))
+    dt = max(0.0, float(frame_duration_s))
+    threshold = max(0.0, float(confirm_s))
+    if speech_detected_raw:
+        cap = max(threshold * 3.0, dt)
+        evidence = min(cap, evidence + dt)
+    else:
+        evidence = max(0.0, evidence - dt * 1.6)
+    if threshold == 0.0:
+        return evidence, bool(speech_detected_raw)
+    return evidence, evidence >= threshold
+
+
+def _semantic_text_signal_len(text: str) -> int:
+    return sum(1 for ch in text if ch.isalnum() or ("\u4e00" <= ch <= "\u9fff"))
+
+
+def _semantic_text_has_content(text: str, *, min_chars: int) -> bool:
+    return _semantic_text_signal_len(text) >= max(1, int(min_chars))
+
+
+def _semantic_probe_text(
+    *,
+    provider: Any,
+    samples: list[float],
+    sample_rate: int,
+    hotwords: list[str],
+    timeout_ms: int,
+) -> str:
+    if not samples:
+        return ""
+    with TemporaryDirectory(prefix="recordian-semantic-probe-") as temp_dir:
+        wav_path = Path(temp_dir) / "probe.wav"
+        write_wav_mono_f32(wav_path, samples, sample_rate=sample_rate)
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(provider.transcribe_file, wav_path, hotwords=hotwords)
+            try:
+                result = future.result(timeout=max(0.2, timeout_ms / 1000.0))
+            except TimeoutError:
+                future.cancel()
+                return ""
+            except Exception:  # noqa: BLE001
+                return ""
+        text = _normalize_final_text(getattr(result, "text", ""))
+        return text
 
 
 def _pcm16le_to_f32(data: bytes, *, channels: int = 1) -> list:

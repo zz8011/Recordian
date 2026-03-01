@@ -23,6 +23,14 @@ def test_build_wake_phrases_dedup_and_strip() -> None:
     assert phrases == ["嗨小二"]
 
 
+def test_build_wake_phrases_auto_name_variants() -> None:
+    phrases = build_wake_phrases(["嘿"], ["小二"], auto_name_variants=True)
+    assert "嘿小二" in phrases
+    assert "嘿小耳" in phrases
+    assert "嘿小尔" in phrases
+    assert "嘿晓二" in phrases
+
+
 def test_make_wake_runtime_config() -> None:
     args = argparse.Namespace(
         enable_voice_wake=True,
@@ -31,6 +39,7 @@ def test_make_wake_runtime_config() -> None:
         wake_cooldown_s=3.0,
         wake_keyword_score=1.6,
         wake_keyword_threshold=0.24,
+        wake_auto_name_variants=True,
     )
     cfg = make_wake_runtime_config(args)
     assert cfg.enabled is True
@@ -39,6 +48,7 @@ def test_make_wake_runtime_config() -> None:
     assert cfg.cooldown_s == 3.0
     assert cfg.keyword_score == 1.6
     assert cfg.keyword_threshold == 0.24
+    assert cfg.auto_name_variants is True
 
 
 def test_make_wake_runtime_config_accepts_csv_string() -> None:

@@ -9,12 +9,16 @@ from recordian.hotkey_dictate import (
     _commit_text,
     _expand_key_name,
     _float_to_pcm16le,
+    _is_level_speech_frame,
     _merge_stream_text,
     _normalize_final_text,
     _pick_vad_sample_rate,
     _pcm16le_to_f32,
     _resolve_auto_hard_enter,
     _resample_audio_for_vad,
+    _semantic_text_has_content,
+    _semantic_text_signal_len,
+    _update_speech_evidence,
     _vad_frame_bytes,
     build_hotkey_handlers,
     parse_hotkey_spec,
@@ -252,6 +256,19 @@ def test_build_parser_accepts_voice_wake_options() -> None:
             "20",
             "--wake-no-speech-timeout-s",
             "2.5",
+            "--wake-speech-confirm-s",
+            "0.24",
+            "--wake-use-semantic-gate",
+            "--wake-semantic-probe-interval-s",
+            "0.6",
+            "--wake-semantic-window-s",
+            "1.4",
+            "--wake-semantic-end-silence-s",
+            "1.1",
+            "--wake-semantic-min-chars",
+            "2",
+            "--wake-semantic-timeout-ms",
+            "1600",
             "--auto-hard-enter",
             "--sound-on-path",
             "/tmp/on.mp3",
@@ -265,6 +282,13 @@ def test_build_parser_accepts_voice_wake_options() -> None:
     assert args.wake_vad_aggressiveness == 3
     assert args.wake_vad_frame_ms == 20
     assert args.wake_no_speech_timeout_s == 2.5
+    assert args.wake_speech_confirm_s == 0.24
+    assert args.wake_use_semantic_gate is True
+    assert args.wake_semantic_probe_interval_s == 0.6
+    assert args.wake_semantic_window_s == 1.4
+    assert args.wake_semantic_end_silence_s == 1.1
+    assert args.wake_semantic_min_chars == 2
+    assert args.wake_semantic_timeout_ms == 1600
     assert args.auto_hard_enter is True
     assert args.sound_on_path == "/tmp/on.mp3"
     assert args.sound_off_path == "/tmp/off.mp3"
@@ -287,6 +311,13 @@ def test_parse_args_with_config_normalizes_legacy_values(tmp_path: Path, monkeyp
                 "wake_vad_aggressiveness": 9,
                 "wake_vad_frame_ms": 25,
                 "wake_no_speech_timeout_s": -3,
+                "wake_speech_confirm_s": -1.0,
+                "wake_use_semantic_gate": "true",
+                "wake_semantic_probe_interval_s": -0.1,
+                "wake_semantic_window_s": 0.1,
+                "wake_semantic_end_silence_s": 0.0,
+                "wake_semantic_min_chars": 0,
+                "wake_semantic_timeout_ms": 100,
             },
             ensure_ascii=False,
         ),
@@ -306,6 +337,59 @@ def test_parse_args_with_config_normalizes_legacy_values(tmp_path: Path, monkeyp
     assert args.wake_vad_aggressiveness == 2
     assert args.wake_vad_frame_ms == 30
     assert args.wake_no_speech_timeout_s == 0.0
+    assert args.wake_speech_confirm_s == 0.0
+    assert args.wake_use_semantic_gate is True
+    assert args.wake_semantic_probe_interval_s == 0.1
+    assert args.wake_semantic_window_s == 0.4
+    assert args.wake_semantic_end_silence_s == 0.2
+    assert args.wake_semantic_min_chars == 1
+    assert args.wake_semantic_timeout_ms == 200
+
+
+def test_level_speech_frame_requires_signal_and_energy() -> None:
+    assert _is_level_speech_frame(level=0.18, rms=0.01, noise_floor=0.0015) is True
+    assert _is_level_speech_frame(level=0.18, rms=0.001, noise_floor=0.0015) is False
+    assert _is_level_speech_frame(level=0.02, rms=0.02, noise_floor=0.0015) is False
+
+
+def test_update_speech_evidence_smooths_transient_spikes() -> None:
+    score = 0.0
+    confirmed = False
+    for _ in range(6):
+        score, confirmed = _update_speech_evidence(
+            score,
+            speech_detected_raw=True,
+            frame_duration_s=0.064,
+            confirm_s=0.18,
+        )
+    assert confirmed is True
+    assert score > 0.18
+
+    score, confirmed = _update_speech_evidence(
+        score,
+        speech_detected_raw=False,
+        frame_duration_s=0.064,
+        confirm_s=0.18,
+    )
+    assert confirmed is True
+
+    for _ in range(8):
+        score, confirmed = _update_speech_evidence(
+            score,
+            speech_detected_raw=False,
+            frame_duration_s=0.064,
+            confirm_s=0.18,
+        )
+    assert confirmed is False
+
+
+def test_semantic_text_has_content_by_effective_chars() -> None:
+    assert _semantic_text_signal_len("  ，。  ") == 0
+    assert _semantic_text_signal_len("嗯嗯") == 2
+    assert _semantic_text_signal_len("abc-12") == 5
+    assert _semantic_text_has_content("。。", min_chars=1) is False
+    assert _semantic_text_has_content("好", min_chars=1) is True
+    assert _semantic_text_has_content("ok", min_chars=3) is False
 
 
 def test_ptt_and_toggle_concurrent_trigger_no_conflict(monkeypatch) -> None:

@@ -35,6 +35,7 @@ class WakeRuntimeConfig:
     cooldown_s: float
     keyword_score: float
     keyword_threshold: float
+    auto_name_variants: bool = True
 
 
 def normalize_tokens_type(value: str) -> str:
@@ -48,9 +49,45 @@ def normalize_tokens_type(value: str) -> str:
     return "ppinyin"
 
 
-def build_wake_phrases(prefixes: list[str], names: list[str]) -> list[str]:
+_COMMON_NAME_HOMOPHONE_MAP: dict[str, list[str]] = {
+    "二": ["耳", "尔"],
+    "耳": ["二", "尔"],
+    "尔": ["二", "耳"],
+    "小": ["晓"],
+    "晓": ["小"],
+}
+
+
+def _expand_wake_name_variants(name: str) -> list[str]:
+    """Expand common Chinese homophone variants with single-char substitutions."""
+    normalized = name.strip()
+    if not normalized:
+        return []
+    variants: list[str] = [normalized]
+    for idx, ch in enumerate(normalized):
+        for rep in _COMMON_NAME_HOMOPHONE_MAP.get(ch, []):
+            candidate = normalized[:idx] + rep + normalized[idx + 1 :]
+            if candidate and candidate not in variants:
+                variants.append(candidate)
+    return variants
+
+
+def build_wake_phrases(
+    prefixes: list[str],
+    names: list[str],
+    *,
+    auto_name_variants: bool = False,
+) -> list[str]:
     normalized_prefixes = [p.strip() for p in prefixes if p.strip()]
-    normalized_names = [n.strip() for n in names if n.strip()]
+    base_names = [n.strip() for n in names if n.strip()]
+    normalized_names: list[str] = []
+    for base in base_names:
+        if auto_name_variants:
+            for candidate in _expand_wake_name_variants(base):
+                if candidate not in normalized_names:
+                    normalized_names.append(candidate)
+        elif base not in normalized_names:
+            normalized_names.append(base)
     phrases: list[str] = []
     for prefix in normalized_prefixes:
         for name in normalized_names:
@@ -218,7 +255,11 @@ class VoiceWakeService:
                 raise FileNotFoundError(f"keywords_file 不存在: {p}")
             return p
 
-        phrases = build_wake_phrases(self.runtime.prefixes, self.runtime.names)
+        phrases = build_wake_phrases(
+            self.runtime.prefixes,
+            self.runtime.names,
+            auto_name_variants=bool(getattr(self.runtime, "auto_name_variants", True)),
+        )
         if not phrases:
             raise RuntimeError("唤醒词为空，请至少配置一个前缀和一个名字。")
 
@@ -320,4 +361,5 @@ def make_wake_runtime_config(args: argparse.Namespace) -> WakeRuntimeConfig:
         cooldown_s=float(getattr(args, "wake_cooldown_s", 3.0)),
         keyword_score=float(getattr(args, "wake_keyword_score", 1.5)),
         keyword_threshold=float(getattr(args, "wake_keyword_threshold", 0.25)),
+        auto_name_variants=bool(getattr(args, "wake_auto_name_variants", True)),
     )
