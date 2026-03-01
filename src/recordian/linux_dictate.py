@@ -107,6 +107,16 @@ def add_dictate_args(parser: argparse.ArgumentParser) -> None:
         help="Max tokens for Qwen3-ASR generation. Higher = handles longer utterances.",
     )
     parser.add_argument(
+        "--asr-context-preset",
+        default="",
+        help="ASR context preset name. Will load presets/asr-{name}.md",
+    )
+    parser.add_argument(
+        "--asr-context",
+        default="",
+        help="Custom ASR context/hints text appended after preset",
+    )
+    parser.add_argument(
         "--asr-endpoint",
         default="http://localhost:8000/transcribe",
         help="HTTP endpoint for http-cloud ASR provider",
@@ -235,22 +245,23 @@ def create_provider(args: argparse.Namespace) -> ASRProvider:
     raw_lang = getattr(args, "qwen_language", "Chinese")
     language = None if raw_lang == "auto" else raw_lang
 
-    # 处理 ASR context：支持直接文本或 preset 名称
-    asr_context = getattr(args, "asr_context", "")
-    asr_context_preset = getattr(args, "asr_context_preset", "")
-
-    # 如果指定了 preset，从 presets 目录加载
+    # ASR context: merge "asr-*" preset + custom context.
+    # Do not fall back to refine presets (default/formal/...) to avoid accidental override.
+    asr_context_custom = str(getattr(args, "asr_context", "")).strip()
+    asr_context_preset = str(getattr(args, "asr_context_preset", "")).strip()
+    asr_context_preset_text = ""
     if asr_context_preset:
         from .preset_manager import PresetManager
+
         preset_mgr = PresetManager()
+        preset_name = asr_context_preset if asr_context_preset.startswith("asr-") else f"asr-{asr_context_preset}"
         try:
-            asr_context = preset_mgr.load_preset(f"asr-{asr_context_preset}")
+            asr_context_preset_text = preset_mgr.load_preset(preset_name)
         except FileNotFoundError:
-            # 如果 asr-{preset} 不存在，尝试直接使用 preset 名称
-            try:
-                asr_context = preset_mgr.load_preset(asr_context_preset)
-            except FileNotFoundError:
-                pass  # 使用原始 asr_context
+            asr_context_preset_text = ""
+
+    context_parts = [part for part in (asr_context_preset_text, asr_context_custom) if part.strip()]
+    asr_context = "\n".join(context_parts)
 
     return QwenASRProvider(
         model_name=model,

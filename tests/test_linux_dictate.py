@@ -1,8 +1,15 @@
 from pathlib import Path
+import argparse
 
 import pytest
 
-from recordian.linux_dictate import build_arecord_cmd, build_ffmpeg_record_cmd, build_parser, choose_record_backend
+from recordian.linux_dictate import (
+    build_arecord_cmd,
+    build_ffmpeg_record_cmd,
+    build_parser,
+    choose_record_backend,
+    create_provider,
+)
 
 
 def test_build_ffmpeg_record_cmd_ogg() -> None:
@@ -70,6 +77,72 @@ def test_parser_accepts_auto_hard_enter() -> None:
     parser = build_parser()
     args = parser.parse_args(["--auto-hard-enter"])
     assert args.auto_hard_enter is True
+
+
+def test_parser_accepts_asr_context_options() -> None:
+    parser = build_parser()
+    args = parser.parse_args(["--asr-context-preset", "meeting", "--asr-context", "OpenClaw, Recordian"])
+    assert args.asr_context_preset == "meeting"
+    assert args.asr_context == "OpenClaw, Recordian"
+
+
+def test_create_provider_merges_asr_preset_and_custom_context(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    class _FakeProvider:
+        def __init__(self, **kwargs) -> None:  # noqa: ANN003
+            captured.update(kwargs)
+
+    class _PresetManager:
+        def load_preset(self, name: str) -> str:
+            assert name == "asr-meeting"
+            return "会议术语A,会议术语B"
+
+    monkeypatch.setattr("recordian.linux_dictate.QwenASRProvider", _FakeProvider)
+    monkeypatch.setattr("recordian.preset_manager.PresetManager", _PresetManager)
+
+    args = argparse.Namespace(
+        asr_provider="qwen-asr",
+        qwen_model="Qwen/Qwen3-ASR-0.6B",
+        model="Qwen/Qwen3-ASR-1.7B",
+        device="cpu",
+        qwen_language="Chinese",
+        qwen_max_new_tokens=512,
+        asr_context_preset="meeting",
+        asr_context="OpenClaw,Recordian",
+    )
+    create_provider(args)
+    context = str(captured.get("context", ""))
+    assert "会议术语A" in context
+    assert "OpenClaw" in context
+
+
+def test_create_provider_does_not_fallback_to_refine_default_preset(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    class _FakeProvider:
+        def __init__(self, **kwargs) -> None:  # noqa: ANN003
+            captured.update(kwargs)
+
+    class _PresetManager:
+        def load_preset(self, name: str) -> str:
+            raise FileNotFoundError(name)
+
+    monkeypatch.setattr("recordian.linux_dictate.QwenASRProvider", _FakeProvider)
+    monkeypatch.setattr("recordian.preset_manager.PresetManager", _PresetManager)
+
+    args = argparse.Namespace(
+        asr_provider="qwen-asr",
+        qwen_model="Qwen/Qwen3-ASR-0.6B",
+        model="Qwen/Qwen3-ASR-1.7B",
+        device="cpu",
+        qwen_language="Chinese",
+        qwen_max_new_tokens=512,
+        asr_context_preset="default",
+        asr_context="OpenClaw,Recordian",
+    )
+    create_provider(args)
+    assert captured.get("context") == "OpenClaw,Recordian"
 
 
 def test_stop_record_process_ffmpeg_uses_sigint() -> None:

@@ -13,6 +13,7 @@ from typing import Any, Callable
 
 from recordian.config import ConfigManager
 
+from .auto_lexicon import AutoLexicon
 from .audio_feedback import default_sound_off_path, default_sound_on_path, play_sound
 from .audio import read_wav_mono_f32, write_wav_mono_f32
 from .exceptions import ASRError, AudioError, CommitError, RefinerError
@@ -266,6 +267,35 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--wake-sample-rate", type=int, default=16000)
     parser.add_argument("--wake-keyword-score", type=float, default=1.5)
     parser.add_argument("--wake-keyword-threshold", type=float, default=0.25)
+    parser.add_argument(
+        "--enable-auto-lexicon",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Auto-learn personal hotwords from accepted committed text",
+    )
+    parser.add_argument(
+        "--auto-lexicon-db",
+        default="~/.config/recordian/auto_lexicon.db",
+        help="SQLite path for auto hotword lexicon",
+    )
+    parser.add_argument(
+        "--auto-lexicon-max-hotwords",
+        type=int,
+        default=40,
+        help="Max total hotwords sent to ASR (manual + auto)",
+    )
+    parser.add_argument(
+        "--auto-lexicon-min-accepts",
+        type=int,
+        default=2,
+        help="Minimum accepted occurrences before a learned term is used",
+    )
+    parser.add_argument(
+        "--auto-lexicon-max-terms",
+        type=int,
+        default=5000,
+        help="Max learned terms retained in local lexicon",
+    )
     add_dictate_args(parser)
     return parser
 
@@ -395,7 +425,7 @@ def _commit_text(committer: Any, text: str, *, auto_hard_enter: bool = False) ->
 
 
 def _apply_target_window(committer: Any, state: dict[str, object]) -> None:
-    """Set target_window_id on committer if it supports it."""
+    """Set target window on committer when supported."""
     wid = state.get("target_window_id")
     if hasattr(committer, "target_window_id"):
         committer.target_window_id = wid if isinstance(wid, int) else None
@@ -416,6 +446,41 @@ def build_ptt_hotkey_handlers(
     recorder_backend = choose_record_backend(args.record_backend, ffmpeg_bin)
     committer = resolve_committer(args.commit_backend)
     provider = create_provider(args)
+    auto_lexicon: AutoLexicon | None = None
+    if bool(getattr(args, "enable_auto_lexicon", True)):
+        try:
+            auto_lexicon = AutoLexicon(
+                db_path=Path(getattr(args, "auto_lexicon_db", "~/.config/recordian/auto_lexicon.db")),
+                max_hotwords=int(getattr(args, "auto_lexicon_max_hotwords", 40)),
+                min_accepts=int(getattr(args, "auto_lexicon_min_accepts", 2)),
+                max_terms=int(getattr(args, "auto_lexicon_max_terms", 5000)),
+            )
+            if args.debug_diagnostics:
+                on_state(
+                    {
+                        "event": "log",
+                        "message": (
+                            "diag auto_lexicon enabled"
+                            f" db={str(Path(getattr(args, 'auto_lexicon_db', '')).expanduser())}"
+                            f" min_accepts={int(getattr(args, 'auto_lexicon_min_accepts', 2))}"
+                            f" max_hotwords={int(getattr(args, 'auto_lexicon_max_hotwords', 40))}"
+                        ),
+                    }
+                )
+        except Exception as exc:  # noqa: BLE001
+            auto_lexicon = None
+            on_state({"event": "log", "message": f"auto_lexicon_disabled: {type(exc).__name__}: {exc}"})
+
+    def _resolve_hotwords() -> list[str]:
+        base_hotwords = list(getattr(args, "hotword", []))
+        if auto_lexicon is None:
+            return base_hotwords
+        try:
+            return auto_lexicon.compose_hotwords(base_hotwords)
+        except Exception as exc:  # noqa: BLE001
+            if args.debug_diagnostics:
+                on_state({"event": "log", "message": f"diag auto_lexicon_compose_failed: {exc}"})
+            return base_hotwords
 
     # Initialize text refiner if enabled
     refiner = None
@@ -738,7 +803,7 @@ def build_ptt_hotkey_handlers(
                                 provider=provider,
                                 samples=probe_samples,
                                 sample_rate=sample_rate,
-                                hotwords=list(getattr(args, "hotword", [])),
+                                hotwords=_resolve_hotwords(),
                                 timeout_ms=semantic_timeout_ms,
                             )
                             now_probe = time.monotonic()
@@ -967,7 +1032,8 @@ def build_ptt_hotkey_handlers(
                     pass  # 非 WAV 格式或读取失败，跳过静音检测继续正常流程
 
                 t0 = time.perf_counter()
-                asr = provider.transcribe_file(audio_path, hotwords=args.hotword)
+                effective_hotwords = _resolve_hotwords()
+                asr = provider.transcribe_file(audio_path, hotwords=effective_hotwords)
                 transcribe_latency_ms = (time.perf_counter() - t0) * 1000
                 text = _normalize_final_text(asr.text)
 
@@ -1045,8 +1111,17 @@ def build_ptt_hotkey_handlers(
                         f" committed={bool(commit_info.get('committed', False))}"
                         f" commit_backend={commit_info.get('backend', '')}"
                         f" commit_detail={commit_info.get('detail', '')}"
+                        f" hotword_count={len(effective_hotwords)}"
                         f" text={_preview_text(text)}"
                     )})
+                if auto_lexicon is not None and bool(commit_info.get("committed")) and text.strip():
+                    try:
+                        learned_terms = auto_lexicon.observe_accepted(text)
+                        if args.debug_diagnostics:
+                            on_state({"event": "log", "message": f"diag auto_lexicon_learned_terms={learned_terms}"})
+                    except Exception as exc:  # noqa: BLE001
+                        if args.debug_diagnostics:
+                            on_state({"event": "log", "message": f"diag auto_lexicon_learn_failed: {exc}"})
                 on_result({"event": "result", "result": {
                     "audio_path": str(audio_path),
                     "record_backend": recorder_backend,
@@ -1172,6 +1247,20 @@ def _parse_args_with_config(parser: argparse.ArgumentParser) -> argparse.Namespa
         args.wake_semantic_timeout_ms = max(200, int(getattr(args, "wake_semantic_timeout_ms", 1200)))
     except Exception:
         args.wake_semantic_timeout_ms = 1200
+    args.enable_auto_lexicon = _coerce_bool(getattr(args, "enable_auto_lexicon", True), default=True)
+    try:
+        args.auto_lexicon_max_hotwords = max(0, int(getattr(args, "auto_lexicon_max_hotwords", 40)))
+    except Exception:
+        args.auto_lexicon_max_hotwords = 40
+    try:
+        args.auto_lexicon_min_accepts = max(1, int(getattr(args, "auto_lexicon_min_accepts", 2)))
+    except Exception:
+        args.auto_lexicon_min_accepts = 2
+    try:
+        args.auto_lexicon_max_terms = max(100, int(getattr(args, "auto_lexicon_max_terms", 5000)))
+    except Exception:
+        args.auto_lexicon_max_terms = 5000
+    args.auto_lexicon_db = str(Path(getattr(args, "auto_lexicon_db", "~/.config/recordian/auto_lexicon.db")).expanduser())
     args.wake_tokens_type = normalize_tokens_type(str(getattr(args, "wake_tokens_type", "ppinyin")))
     args.config_path = str(Path(args.config_path).expanduser())
     return args
@@ -1253,6 +1342,11 @@ def _save_runtime_config(args: argparse.Namespace) -> None:
         "wake_sample_rate": getattr(args, "wake_sample_rate", 16000),
         "wake_keyword_score": getattr(args, "wake_keyword_score", 1.5),
         "wake_keyword_threshold": getattr(args, "wake_keyword_threshold", 0.25),
+        "enable_auto_lexicon": getattr(args, "enable_auto_lexicon", True),
+        "auto_lexicon_db": getattr(args, "auto_lexicon_db", "~/.config/recordian/auto_lexicon.db"),
+        "auto_lexicon_max_hotwords": getattr(args, "auto_lexicon_max_hotwords", 40),
+        "auto_lexicon_min_accepts": getattr(args, "auto_lexicon_min_accepts", 2),
+        "auto_lexicon_max_terms": getattr(args, "auto_lexicon_max_terms", 5000),
     }
     path = Path(args.config_path)
     ConfigManager.save(path, payload)

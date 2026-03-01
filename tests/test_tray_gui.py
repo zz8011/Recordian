@@ -4,8 +4,11 @@ from pathlib import Path
 from recordian.tray_gui import (
     _parse_bool,
     _blend_hex,
+    _export_auto_lexicon_db,
     _hex_with_alpha,
+    _import_auto_lexicon_db,
     _overlay_hide_delay_seconds,
+    _sqlite_backup,
     _truncate,
 )
 from recordian.waveform_renderer import WaveformRenderer
@@ -70,3 +73,54 @@ def test_tray_app_no_legacy_quick_menu_debug_print() -> None:
     assert "open_quick_menu called" not in source
     assert "Menu position:" not in source
     assert "Menu popup successful" not in source
+
+
+def test_sqlite_backup_roundtrip(tmp_path: Path) -> None:
+    import sqlite3
+
+    src = tmp_path / "src.db"
+    dst = tmp_path / "dst.db"
+
+    conn = sqlite3.connect(str(src))
+    try:
+        conn.execute("CREATE TABLE terms (id INTEGER PRIMARY KEY, term TEXT)")
+        conn.execute("INSERT INTO terms(term) VALUES (?)", ("openclaw",))
+        conn.commit()
+    finally:
+        conn.close()
+
+    _sqlite_backup(src, dst)
+
+    dst_conn = sqlite3.connect(str(dst))
+    try:
+        row = dst_conn.execute("SELECT term FROM terms").fetchone()
+        assert row is not None
+        assert row[0] == "openclaw"
+    finally:
+        dst_conn.close()
+
+
+def test_export_and_import_auto_lexicon_db(tmp_path: Path) -> None:
+    import sqlite3
+
+    db = tmp_path / "auto.db"
+    exported = tmp_path / "backup.db"
+    imported_target = tmp_path / "imported.db"
+
+    conn = sqlite3.connect(str(db))
+    try:
+        conn.execute("CREATE TABLE lexicon_terms (term TEXT PRIMARY KEY, accept_count INTEGER)")
+        conn.execute("INSERT INTO lexicon_terms(term, accept_count) VALUES (?, ?)", ("recordian", 3))
+        conn.commit()
+    finally:
+        conn.close()
+
+    _export_auto_lexicon_db(db, exported)
+    _import_auto_lexicon_db(exported, imported_target)
+
+    check = sqlite3.connect(str(imported_target))
+    try:
+        row = check.execute("SELECT term, accept_count FROM lexicon_terms").fetchone()
+        assert row == ("recordian", 3)
+    finally:
+        check.close()

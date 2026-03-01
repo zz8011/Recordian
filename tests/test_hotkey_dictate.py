@@ -4,6 +4,7 @@ from pathlib import Path
 import time
 
 from recordian.hotkey_dictate import (
+    _apply_target_window,
     _adaptive_vad_threshold,
     _coerce_bool,
     _commit_text,
@@ -274,6 +275,15 @@ def test_build_parser_accepts_voice_wake_options() -> None:
             "/tmp/on.mp3",
             "--sound-off-path",
             "/tmp/off.mp3",
+            "--enable-auto-lexicon",
+            "--auto-lexicon-db",
+            "/tmp/auto_lexicon.db",
+            "--auto-lexicon-max-hotwords",
+            "88",
+            "--auto-lexicon-min-accepts",
+            "3",
+            "--auto-lexicon-max-terms",
+            "6666",
         ]
     )
     assert args.enable_voice_wake is True
@@ -292,6 +302,11 @@ def test_build_parser_accepts_voice_wake_options() -> None:
     assert args.auto_hard_enter is True
     assert args.sound_on_path == "/tmp/on.mp3"
     assert args.sound_off_path == "/tmp/off.mp3"
+    assert args.enable_auto_lexicon is True
+    assert args.auto_lexicon_db == "/tmp/auto_lexicon.db"
+    assert args.auto_lexicon_max_hotwords == 88
+    assert args.auto_lexicon_min_accepts == 3
+    assert args.auto_lexicon_max_terms == 6666
 
 
 def test_parse_args_with_config_normalizes_legacy_values(tmp_path: Path, monkeypatch) -> None:
@@ -318,6 +333,11 @@ def test_parse_args_with_config_normalizes_legacy_values(tmp_path: Path, monkeyp
                 "wake_semantic_end_silence_s": 0.0,
                 "wake_semantic_min_chars": 0,
                 "wake_semantic_timeout_ms": 100,
+                "enable_auto_lexicon": "false",
+                "auto_lexicon_max_hotwords": -10,
+                "auto_lexicon_min_accepts": 0,
+                "auto_lexicon_max_terms": -20,
+                "auto_lexicon_db": "~/tmp/recordian-lexicon.db",
             },
             ensure_ascii=False,
         ),
@@ -344,6 +364,11 @@ def test_parse_args_with_config_normalizes_legacy_values(tmp_path: Path, monkeyp
     assert args.wake_semantic_end_silence_s == 0.2
     assert args.wake_semantic_min_chars == 1
     assert args.wake_semantic_timeout_ms == 200
+    assert args.enable_auto_lexicon is False
+    assert args.auto_lexicon_max_hotwords == 0
+    assert args.auto_lexicon_min_accepts == 1
+    assert args.auto_lexicon_max_terms == 100
+    assert args.auto_lexicon_db.endswith("recordian-lexicon.db")
 
 
 def test_level_speech_frame_requires_signal_and_energy() -> None:
@@ -479,3 +504,15 @@ def test_toggle_mode_concurrent_start_stop_safe(monkeypatch) -> None:
     assert len(events) >= 1
     # 至少有一个 busy 或 result 事件
     assert any(e.get("event") in ("busy", "result") for e in events)
+
+
+def test_apply_target_window_applies_window_anchor() -> None:
+    class _Committer:
+        target_window_id = None
+
+    committer = _Committer()
+    state = {
+        "target_window_id": 456,
+    }
+    _apply_target_window(committer, state)
+    assert committer.target_window_id == 456

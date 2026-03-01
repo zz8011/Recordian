@@ -6,6 +6,31 @@ from .base import ASRProvider, _estimate_english_ratio
 from ..models import ASRResult
 
 
+def _compose_qwen_context(base_context: str, hotwords: list[str], *, max_hotwords: int = 40) -> str:
+    base = (base_context or "").strip()
+    if not hotwords:
+        return base
+
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for raw in hotwords:
+        token = str(raw).strip()
+        if not token or token in seen:
+            continue
+        seen.add(token)
+        deduped.append(token)
+        if len(deduped) >= max(0, int(max_hotwords)):
+            break
+
+    if not deduped:
+        return base
+
+    hotword_hint = "热词参考: " + "、".join(deduped)
+    if not base:
+        return hotword_hint
+    return f"{base}\n{hotword_hint}"
+
+
 class QwenASRProvider(ASRProvider):
     """Qwen3-ASR local transcription provider (transformers backend).
 
@@ -140,9 +165,10 @@ class QwenASRProvider(ASRProvider):
         vad_temp_file = None if processed_audio == str(wav_path) else processed_audio
 
         try:
+            context = _compose_qwen_context(self.context, hotwords)
             results = self._model.transcribe(
                 audio=processed_audio,
-                context=self.context,
+                context=context,
                 language=self.language,
                 return_time_stamps=False,
             )
@@ -168,4 +194,3 @@ class QwenASRProvider(ASRProvider):
                     os.unlink(vad_temp_file)
                 except OSError:
                     pass
-

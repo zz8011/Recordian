@@ -57,9 +57,15 @@ class XDoToolCommitter(TextCommitter):
     """xdotool type — fallback for apps that don't handle clipboard paste well."""
     backend_name = "xdotool"
 
+    def __init__(self, target_window_id: int | None = None) -> None:
+        self.target_window_id = target_window_id
+
     def commit(self, text: str) -> CommitResult:
         if not which("xdotool"):
             raise CommitError("xdotool not found in PATH")
+        if isinstance(self.target_window_id, int):
+            _xdotool_focus_window(self.target_window_id)
+            time.sleep(0.12)
         _run_command(["xdotool", "type", "--delay", "1", "--clearmodifiers", "--", text])
         return CommitResult(backend=self.backend_name, committed=True)
 
@@ -133,7 +139,11 @@ class XdotoolClipboardCommitter(TextCommitter):
     """
     backend_name = "xdotool-clipboard"
 
-    def __init__(self, target_window_id: int | None = None, clipboard_timeout_ms: int = 0) -> None:
+    def __init__(
+        self,
+        target_window_id: int | None = None,
+        clipboard_timeout_ms: int = 0,
+    ) -> None:
         self.target_window_id = target_window_id
         self.clipboard_timeout_ms = clipboard_timeout_ms
         self._clear_timer: threading.Timer | None = None
@@ -188,7 +198,7 @@ def resolve_committer(backend: str, *, target_window_id: int | None = None) -> T
     if normalized == "wtype":
         return WTypeCommitter()
     if normalized == "xdotool":
-        return XDoToolCommitter()
+        return XDoToolCommitter(target_window_id=target_window_id)
     if normalized == "xdotool-clipboard":
         timeout_ms = _parse_clipboard_timeout_ms(os.environ.get("RECORDIAN_CLIPBOARD_TIMEOUT_MS"))
         return XdotoolClipboardCommitter(
@@ -229,7 +239,6 @@ def get_focused_window_id() -> int | None:
         return int(result.stdout.strip())
     except (FileNotFoundError, subprocess.CalledProcessError, ValueError):
         return None
-
 
 # Known terminal emulator WM_CLASS names (lowercase).
 _TERMINAL_WM_CLASSES = {
@@ -338,15 +347,7 @@ def _xdotool_key(shortcut: str, *, window_id: int | None = None) -> None:
     token = shortcut.replace(" ", "").replace("_", "+")
     xdotool_key = token.replace("insert", "Insert")
     if window_id is not None:
-        # Focus the target window first; --window alone is ignored by many apps.
-        try:
-            subprocess.run(
-                ["xdotool", "windowfocus", "--sync", str(window_id)],
-                check=True,
-                capture_output=True,
-            )
-        except (FileNotFoundError, subprocess.CalledProcessError):
-            pass
+        _xdotool_focus_window(window_id)
         time.sleep(0.15)  # Electron apps need more time to transfer focus to input field
     cmd = ["xdotool", "key", "--clearmodifiers", xdotool_key]
     try:
@@ -356,6 +357,17 @@ def _xdotool_key(shortcut: str, *, window_id: int | None = None) -> None:
     except subprocess.CalledProcessError as exc:
         raise CommitError(f"xdotool key failed: {exc}") from exc
 
+
+def _xdotool_focus_window(window_id: int) -> None:
+    # Focus the target window first; --window alone is ignored by many apps.
+    try:
+        subprocess.run(
+            ["xdotool", "windowfocus", "--sync", str(window_id)],
+            check=True,
+            capture_output=True,
+        )
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        pass
 
 def _run_command_with_input(cmd: list[str], text: str) -> None:
     try:
