@@ -1,0 +1,4 @@
+{"author":"zz8011","created_at":"2026-03-01T20:55:24Z","id":1,"issue_id":"Recordian-4jd","text":"INVESTIGATION: 代码库已有 XdotoolClipboardCommitter 类专门处理 Electron 应用和 CJK 文本，使用剪贴板+Ctrl+V 方式。参考 linux_commit.py:135-188"}
+{"author":"zz8011","created_at":"2026-03-01T20:55:35Z","id":2,"issue_id":"Recordian-4jd","text":"PATTERN: 终端检测实现模式可复用 - _is_terminal_window() 使用 xprop 查询 WM_CLASS，维护已知终端列表。参考 linux_commit.py:244-280"}
+{"author":"zz8011","created_at":"2026-03-01T20:55:44Z","id":3,"issue_id":"Recordian-4jd","text":"FACT: Electron 应用需要 150ms 焦点延迟。参考 linux_commit.py:351 注释和 time.sleep(0.15)"}
+{"author":"zz8011","created_at":"2026-03-01T20:55:55Z","id":4,"issue_id":"Recordian-4jd","text":"DECISION: auto 模式已优先使用 xdotool-clipboard，但缺少基于窗口类型的智能选择。参考 linux_commit.py:208-224"}
