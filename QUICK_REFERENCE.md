@@ -30,8 +30,15 @@ pkill -f recordian && recordian-tray
   "input_device": "default",         // 音频输入设备
   "asr_provider": "qwen-asr",        // ASR 提供者
   "qwen_model": "./models/...",      // 模型路径
+  "asr_context_preset": "",          // ASR 预设（无自定义 asr-*.md 时保持空）
+  "asr_context": "Recordian,openclaw", // 手动常用词
   "enable_text_refine": true,        // 文本精炼
   "refine_preset": "default",        // 精炼预设
+  "enable_auto_lexicon": true,       // 自动词库学习
+  "auto_lexicon_db": "~/.config/recordian/auto_lexicon.db", // 自动词库数据库
+  "auto_lexicon_max_hotwords": 40,   // 自动注入热词上限（含手动热词）
+  "auto_lexicon_min_accepts": 2,     // 词条最小采纳次数
+  "auto_lexicon_max_terms": 5000,    // 数据库最大词条
   "enable_voice_wake": false,        // 语音唤醒开关
   "wake_prefix": ["嗨", "嘿"],       // 唤醒前缀
   "wake_name": ["小二"],             // 唤醒名字
@@ -53,6 +60,12 @@ pkill -f recordian && recordian-tray
   - `decoder-epoch-12-avg-2-chunk-16-left-64.onnx`
   - `joiner-epoch-12-avg-2-chunk-16-left-64.onnx`
   - `tokens.txt`
+
+### 常用词数据库导入/导出
+- 菜单路径：托盘 -> `常用词管理...`
+- 按钮：`导出数据库...` / `导入数据库...`
+- 默认数据库：`~/.config/recordian/auto_lexicon.db`
+- 导入后建议重启后端
 
 ## 🎨 动画问题
 

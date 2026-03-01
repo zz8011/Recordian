@@ -208,6 +208,41 @@ ConfigManager.save("~/.config/recordian/config.json", config)
 }
 ```
 
+#### 常用词与自动词库（推荐）
+
+Recordian 支持两层词增强：
+
+1. **手动常用词**：在托盘菜单 `常用词管理...` 中维护 `asr_context`。
+2. **自动词库**：系统会从已成功上屏的文本中自动学习高频词，并在识别时自动注入热词。
+
+常用配置示例（`~/.config/recordian/hotkey.json`）：
+
+```json
+{
+  "asr_context": "Recordian, Claude, openclaw",
+  "enable_auto_lexicon": true,
+  "auto_lexicon_db": "~/.config/recordian/auto_lexicon.db",
+  "auto_lexicon_max_hotwords": 40,
+  "auto_lexicon_min_accepts": 2,
+  "auto_lexicon_max_terms": 5000
+}
+```
+
+#### ASR Context 预设注意事项
+
+- `asr_context_preset` 仅用于 `asr-*.md` 的 ASR 预设。
+- 如果你没有自建 ASR 预设，建议保持 `asr_context_preset` 为空字符串 `""`。
+- 文本精炼使用的 `refine_preset`（如 `default`）与 ASR 预设是两套系统，不冲突。
+
+#### 自动词库数据库导入/导出
+
+在托盘菜单 `常用词管理...` 窗口中，使用：
+
+- `导出数据库...`：备份当前自动词库数据库
+- `导入数据库...`：恢复或迁移自动词库数据库
+
+导入后建议重启后端，以立即刷新内存中的词库缓存。
+
 ### 2. 文本精炼
 
 #### 精炼策略
