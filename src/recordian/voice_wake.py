@@ -36,6 +36,8 @@ class WakeRuntimeConfig:
     keyword_score: float
     keyword_threshold: float
     auto_name_variants: bool = True
+    auto_prefix_variants: bool = True
+    allow_name_only: bool = True
 
 
 def normalize_tokens_type(value: str) -> str:
@@ -49,23 +51,27 @@ def normalize_tokens_type(value: str) -> str:
     return "ppinyin"
 
 
-_COMMON_NAME_HOMOPHONE_MAP: dict[str, list[str]] = {
-    "二": ["耳", "尔"],
-    "耳": ["二", "尔"],
-    "尔": ["二", "耳"],
-    "小": ["晓"],
-    "晓": ["小"],
+_COMMON_PREFIX_HOMOPHONE_MAP: dict[str, list[str]] = {
+    "嘿": ["嗨", "黑"],
+    "嗨": ["嘿", "海"],
 }
 
 
 def _expand_wake_name_variants(name: str) -> list[str]:
-    """Expand common Chinese homophone variants with single-char substitutions."""
+    """Return normalized name list; tone-level variants are expanded at token stage."""
     normalized = name.strip()
+    if not normalized:
+        return []
+    return [normalized]
+
+
+def _expand_wake_prefix_variants(prefix: str) -> list[str]:
+    normalized = prefix.strip()
     if not normalized:
         return []
     variants: list[str] = [normalized]
     for idx, ch in enumerate(normalized):
-        for rep in _COMMON_NAME_HOMOPHONE_MAP.get(ch, []):
+        for rep in _COMMON_PREFIX_HOMOPHONE_MAP.get(ch, []):
             candidate = normalized[:idx] + rep + normalized[idx + 1 :]
             if candidate and candidate not in variants:
                 variants.append(candidate)
@@ -77,8 +83,18 @@ def build_wake_phrases(
     names: list[str],
     *,
     auto_name_variants: bool = False,
+    auto_prefix_variants: bool = False,
+    allow_name_only: bool = False,
 ) -> list[str]:
-    normalized_prefixes = [p.strip() for p in prefixes if p.strip()]
+    base_prefixes = [p.strip() for p in prefixes if p.strip()]
+    normalized_prefixes: list[str] = []
+    for base in base_prefixes:
+        if auto_prefix_variants:
+            for candidate in _expand_wake_prefix_variants(base):
+                if candidate not in normalized_prefixes:
+                    normalized_prefixes.append(candidate)
+        elif base not in normalized_prefixes:
+            normalized_prefixes.append(base)
     base_names = [n.strip() for n in names if n.strip()]
     normalized_names: list[str] = []
     for base in base_names:
@@ -89,6 +105,10 @@ def build_wake_phrases(
         elif base not in normalized_names:
             normalized_names.append(base)
     phrases: list[str] = []
+    if allow_name_only:
+        for name in normalized_names:
+            if name and name not in phrases:
+                phrases.append(name)
     for prefix in normalized_prefixes:
         for name in normalized_names:
             phrase = f"{prefix}{name}"
@@ -107,6 +127,74 @@ def _normalize_list(value: object, *, fallback: list[str]) -> list[str]:
     return list(fallback)
 
 
+def _normalize_tone_token(token: str) -> str:
+    normalized = token.strip().lower()
+    if not normalized:
+        return ""
+    try:
+        from pypinyin.contrib.tone_convert import to_normal
+
+        converted = to_normal(normalized).strip().lower()
+        return converted or normalized
+    except Exception:
+        return normalized
+
+
+def _load_tone_variant_groups(tokens_path: Path) -> dict[str, list[str]]:
+    groups: dict[str, list[str]] = {}
+    try:
+        content = tokens_path.read_text(encoding="utf-8")
+    except Exception:
+        return groups
+    for raw in content.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        token = line.split()[0].strip()
+        if not token or token.startswith("<"):
+            continue
+        key = _normalize_tone_token(token)
+        if not key:
+            continue
+        bucket = groups.setdefault(key, [])
+        if token not in bucket:
+            bucket.append(token)
+    return {key: values for key, values in groups.items() if len(values) > 1}
+
+
+def _expand_row_with_tone_variants(
+    token_row: list[str],
+    *,
+    tone_groups: dict[str, list[str]],
+    max_rows: int = 8,
+    max_positions: int = 3,
+    max_alts_per_pos: int = 2,
+) -> list[list[str]]:
+    rows: list[list[str]] = [list(token_row)]
+    if not tone_groups:
+        return rows
+
+    mutable_positions: list[tuple[int, list[str]]] = []
+    for idx, token in enumerate(token_row):
+        key = _normalize_tone_token(token)
+        alternatives = [candidate for candidate in tone_groups.get(key, []) if candidate != token]
+        if alternatives:
+            mutable_positions.append((idx, alternatives[:max_alts_per_pos]))
+
+    for idx, alternatives in mutable_positions[:max_positions]:
+        base_rows = list(rows)
+        for base in base_rows:
+            for alt in alternatives:
+                candidate = list(base)
+                candidate[idx] = alt
+                if candidate in rows:
+                    continue
+                rows.append(candidate)
+                if len(rows) >= max_rows:
+                    return rows
+    return rows
+
+
 def ensure_keywords_file(
     *,
     phrases: list[str],
@@ -115,13 +203,15 @@ def ensure_keywords_file(
     score: float,
     threshold: float,
     cache_dir: Path,
+    auto_tone_variants: bool = True,
 ) -> Path:
     cache_dir.mkdir(parents=True, exist_ok=True)
     raw_path = cache_dir / "keywords_raw.txt"
     out_path = cache_dir / "keywords.txt"
 
     raw_lines = [f"{phrase} @{phrase} :{score:.2f} #{threshold:.2f}" for phrase in phrases]
-    raw_content = "\n".join(raw_lines) + "\n"
+    raw_header = f"# tokens_type={tokens_type} auto_tone_variants={int(bool(auto_tone_variants))}"
+    raw_content = "\n".join([raw_header, *raw_lines]) + "\n"
 
     def _is_cache_valid() -> bool:
         if not raw_path.exists() or not out_path.exists():
@@ -129,10 +219,14 @@ def ensure_keywords_file(
         try:
             if raw_path.read_text(encoding="utf-8") != raw_content:
                 return False
-            out_lines = [line.strip() for line in out_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+            out_lines = [
+                line.strip()
+                for line in out_path.read_text(encoding="utf-8").splitlines()
+                if line.strip() and not line.strip().startswith("#")
+            ]
         except Exception:  # noqa: BLE001
             return False
-        if len(out_lines) != len(raw_lines):
+        if len(out_lines) < len(raw_lines):
             return False
         return all(" @" in line and " :" in line and " #" in line for line in out_lines)
 
@@ -151,14 +245,22 @@ def ensure_keywords_file(
             tokens_type=tokens_type,
         )
         if len(encoded) == len(phrases):
+            tone_groups: dict[str, list[str]] = {}
+            if bool(auto_tone_variants) and tokens_type in {"ppinyin", "fpinyin"}:
+                tone_groups = _load_tone_variant_groups(tokens_path)
             output_lines: list[str] = []
+            seen_lines: set[str] = set()
             for phrase, row in zip(phrases, encoded):
                 token_items = [str(item).strip() for item in row if str(item).strip()]
                 if not token_items:
                     raise RuntimeError("empty_token_row")
-                output_lines.append(
-                    f"{' '.join(token_items)} @{phrase} :{score:.2f} #{threshold:.2f}"
-                )
+                token_rows = _expand_row_with_tone_variants(token_items, tone_groups=tone_groups)
+                for tokens_row in token_rows:
+                    line = f"{' '.join(tokens_row)} @{phrase} :{score:.2f} #{threshold:.2f}"
+                    if line in seen_lines:
+                        continue
+                    output_lines.append(line)
+                    seen_lines.add(line)
             out_path.write_text("\n".join(output_lines) + "\n", encoding="utf-8")
             if _is_cache_valid():
                 return out_path
@@ -259,9 +361,13 @@ class VoiceWakeService:
             self.runtime.prefixes,
             self.runtime.names,
             auto_name_variants=bool(getattr(self.runtime, "auto_name_variants", True)),
+            auto_prefix_variants=bool(getattr(self.runtime, "auto_prefix_variants", True)),
+            allow_name_only=bool(getattr(self.runtime, "allow_name_only", True)),
         )
         if not phrases:
-            raise RuntimeError("唤醒词为空，请至少配置一个前缀和一个名字。")
+            raise RuntimeError("唤醒词为空，请检查 wake_prefix/wake_name 配置。")
+        preview = ", ".join(phrases[:8])
+        self._emit({"message": f"voice_wake_phrases count={len(phrases)} preview={preview}"})
 
         return ensure_keywords_file(
             phrases=phrases,
@@ -270,6 +376,7 @@ class VoiceWakeService:
             score=self.runtime.keyword_score,
             threshold=self.runtime.keyword_threshold,
             cache_dir=self.cache_dir,
+            auto_tone_variants=bool(getattr(self.runtime, "auto_name_variants", True)),
         )
 
     def _run(self) -> None:
@@ -362,4 +469,6 @@ def make_wake_runtime_config(args: argparse.Namespace) -> WakeRuntimeConfig:
         keyword_score=float(getattr(args, "wake_keyword_score", 1.5)),
         keyword_threshold=float(getattr(args, "wake_keyword_threshold", 0.25)),
         auto_name_variants=bool(getattr(args, "wake_auto_name_variants", True)),
+        auto_prefix_variants=bool(getattr(args, "wake_auto_prefix_variants", True)),
+        allow_name_only=bool(getattr(args, "wake_allow_name_only", True)),
     )

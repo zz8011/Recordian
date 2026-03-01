@@ -215,7 +215,19 @@ def build_parser() -> argparse.ArgumentParser:
         "--wake-auto-name-variants",
         action=argparse.BooleanOptionalAction,
         default=True,
-        help="Auto-expand common homophone variants for wake names (e.g. 小二 -> 小耳/小尔)",
+        help="Auto-expand tone/homophone token variants for configured wake names (generic, not hardcoded words)",
+    )
+    parser.add_argument(
+        "--wake-auto-prefix-variants",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Auto-expand common homophone variants for wake prefixes (e.g. 嘿 -> 嗨/黑)",
+    )
+    parser.add_argument(
+        "--wake-allow-name-only",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Also allow wake by name-only phrase (e.g. 小二) to reduce clipped-prefix misses",
     )
     parser.add_argument(
         "--wake-use-semantic-gate",
@@ -915,23 +927,29 @@ def build_ptt_hotkey_handlers(
                             started_ts = float(_get_state("voice_started_ts"))
                             now_ts = time.monotonic()
                             if semantic_enabled:
-                                if not bool(_get_state("voice_semantic_has_text")):
-                                    no_speech_timeout_s = max(0.0, float(getattr(args, "wake_no_speech_timeout_s", 2.0)))
-                                    if no_speech_timeout_s > 0 and now_ts - started_ts >= no_speech_timeout_s:
-                                        _set_state("voice_auto_stopping", True)
-                                        on_state({"event": "voice_wake_auto_stop", "reason": "semantic_no_text_timeout"})
-                                        threading.Thread(target=_stop_recording, daemon=True).start()
-                                        break
-                                    continue
-                                if now_ts - started_ts < max(0.0, float(getattr(args, "wake_min_speech_s", 0.5))):
-                                    continue
+                                no_speech_timeout_s = max(0.0, float(getattr(args, "wake_no_speech_timeout_s", 2.0)))
+                                min_speech_s = max(0.0, float(getattr(args, "wake_min_speech_s", 0.5)))
+                                acoustic_silence_s = max(0.0, float(getattr(args, "wake_auto_stop_silence_s", 1.0)))
+                                semantic_has_text = bool(_get_state("voice_semantic_has_text"))
                                 semantic_last_ts = float(_get_state("voice_semantic_last_text_ts"))
-                                if now_ts - semantic_last_ts < semantic_end_silence_s:
-                                    continue
-                                _set_state("voice_auto_stopping", True)
-                                on_state({"event": "voice_wake_auto_stop", "reason": "semantic_silence"})
-                                threading.Thread(target=_stop_recording, daemon=True).start()
-                                break
+                                last_speech_ts = float(_get_state("voice_last_speech_ts"))
+                                semantic_reason = _should_auto_stop_semantic_session(
+                                    now_ts=now_ts,
+                                    started_ts=started_ts,
+                                    last_speech_ts=last_speech_ts,
+                                    semantic_has_text=semantic_has_text,
+                                    semantic_last_text_ts=semantic_last_ts,
+                                    no_speech_timeout_s=no_speech_timeout_s,
+                                    min_speech_s=min_speech_s,
+                                    semantic_end_silence_s=semantic_end_silence_s,
+                                    acoustic_silence_s=acoustic_silence_s,
+                                )
+                                if semantic_reason is not None:
+                                    _set_state("voice_auto_stopping", True)
+                                    on_state({"event": "voice_wake_auto_stop", "reason": semantic_reason})
+                                    threading.Thread(target=_stop_recording, daemon=True).start()
+                                    break
+                                continue
                             if not speech_detected:
                                 no_speech_timeout_s = max(0.0, float(getattr(args, "wake_no_speech_timeout_s", 2.0)))
                                 if no_speech_timeout_s > 0 and now_ts - started_ts >= no_speech_timeout_s:
@@ -1226,6 +1244,8 @@ def _parse_args_with_config(parser: argparse.ArgumentParser) -> argparse.Namespa
     except Exception:
         args.wake_speech_confirm_s = 0.18
     args.wake_auto_name_variants = _coerce_bool(getattr(args, "wake_auto_name_variants", True), default=True)
+    args.wake_auto_prefix_variants = _coerce_bool(getattr(args, "wake_auto_prefix_variants", True), default=True)
+    args.wake_allow_name_only = _coerce_bool(getattr(args, "wake_allow_name_only", True), default=True)
     args.wake_use_semantic_gate = _coerce_bool(getattr(args, "wake_use_semantic_gate", False), default=False)
     try:
         args.wake_semantic_probe_interval_s = max(0.1, float(getattr(args, "wake_semantic_probe_interval_s", 0.45)))
@@ -1322,6 +1342,8 @@ def _save_runtime_config(args: argparse.Namespace) -> None:
         "wake_no_speech_timeout_s": getattr(args, "wake_no_speech_timeout_s", 2.0),
         "wake_speech_confirm_s": getattr(args, "wake_speech_confirm_s", 0.18),
         "wake_auto_name_variants": getattr(args, "wake_auto_name_variants", True),
+        "wake_auto_prefix_variants": getattr(args, "wake_auto_prefix_variants", True),
+        "wake_allow_name_only": getattr(args, "wake_allow_name_only", True),
         "wake_use_semantic_gate": getattr(args, "wake_use_semantic_gate", False),
         "wake_semantic_probe_interval_s": getattr(args, "wake_semantic_probe_interval_s", 0.45),
         "wake_semantic_window_s": getattr(args, "wake_semantic_window_s", 1.2),
@@ -1817,6 +1839,44 @@ def _semantic_probe_text(
                 return ""
         text = _normalize_final_text(getattr(result, "text", ""))
         return text
+
+
+def _should_auto_stop_semantic_session(
+    *,
+    now_ts: float,
+    started_ts: float,
+    last_speech_ts: float,
+    semantic_has_text: bool,
+    semantic_last_text_ts: float,
+    no_speech_timeout_s: float,
+    min_speech_s: float,
+    semantic_end_silence_s: float,
+    acoustic_silence_s: float,
+) -> str | None:
+    """Return semantic auto-stop reason, or None when the session should continue."""
+    now = float(now_ts)
+    started = float(started_ts)
+    last_speech = float(last_speech_ts)
+    no_speech_timeout = max(0.0, float(no_speech_timeout_s))
+    min_speech = max(0.0, float(min_speech_s))
+    semantic_end_silence = max(0.2, float(semantic_end_silence_s))
+    acoustic_silence = max(0.0, float(acoustic_silence_s))
+
+    if not semantic_has_text:
+        # Semantic probe can miss text in noisy environments; only timeout after
+        # sustained inactivity from both startup and the latest acoustic speech.
+        inactivity_base = max(started, last_speech)
+        if no_speech_timeout > 0 and now - inactivity_base >= no_speech_timeout:
+            return "semantic_no_text_timeout"
+        return None
+
+    if now - started < min_speech:
+        return None
+    if now - float(semantic_last_text_ts) < semantic_end_silence:
+        return None
+    if now - last_speech < acoustic_silence:
+        return None
+    return "semantic_silence"
 
 
 def _pcm16le_to_f32(data: bytes, *, channels: int = 1) -> list:

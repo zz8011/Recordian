@@ -17,6 +17,7 @@ from recordian.hotkey_dictate import (
     _pcm16le_to_f32,
     _resolve_auto_hard_enter,
     _resample_audio_for_vad,
+    _should_auto_stop_semantic_session,
     _semantic_text_has_content,
     _semantic_text_signal_len,
     _update_speech_evidence,
@@ -260,6 +261,8 @@ def test_build_parser_accepts_voice_wake_options() -> None:
             "--wake-speech-confirm-s",
             "0.24",
             "--wake-use-semantic-gate",
+            "--wake-auto-prefix-variants",
+            "--wake-allow-name-only",
             "--wake-semantic-probe-interval-s",
             "0.6",
             "--wake-semantic-window-s",
@@ -294,6 +297,8 @@ def test_build_parser_accepts_voice_wake_options() -> None:
     assert args.wake_no_speech_timeout_s == 2.5
     assert args.wake_speech_confirm_s == 0.24
     assert args.wake_use_semantic_gate is True
+    assert args.wake_auto_prefix_variants is True
+    assert args.wake_allow_name_only is True
     assert args.wake_semantic_probe_interval_s == 0.6
     assert args.wake_semantic_window_s == 1.4
     assert args.wake_semantic_end_silence_s == 1.1
@@ -328,6 +333,8 @@ def test_parse_args_with_config_normalizes_legacy_values(tmp_path: Path, monkeyp
                 "wake_no_speech_timeout_s": -3,
                 "wake_speech_confirm_s": -1.0,
                 "wake_use_semantic_gate": "true",
+                "wake_auto_prefix_variants": "false",
+                "wake_allow_name_only": "0",
                 "wake_semantic_probe_interval_s": -0.1,
                 "wake_semantic_window_s": 0.1,
                 "wake_semantic_end_silence_s": 0.0,
@@ -359,6 +366,8 @@ def test_parse_args_with_config_normalizes_legacy_values(tmp_path: Path, monkeyp
     assert args.wake_no_speech_timeout_s == 0.0
     assert args.wake_speech_confirm_s == 0.0
     assert args.wake_use_semantic_gate is True
+    assert args.wake_auto_prefix_variants is False
+    assert args.wake_allow_name_only is False
     assert args.wake_semantic_probe_interval_s == 0.1
     assert args.wake_semantic_window_s == 0.4
     assert args.wake_semantic_end_silence_s == 0.2
@@ -415,6 +424,62 @@ def test_semantic_text_has_content_by_effective_chars() -> None:
     assert _semantic_text_has_content("。。", min_chars=1) is False
     assert _semantic_text_has_content("好", min_chars=1) is True
     assert _semantic_text_has_content("ok", min_chars=3) is False
+
+
+def test_semantic_no_text_timeout_waits_when_recent_acoustic_speech() -> None:
+    reason = _should_auto_stop_semantic_session(
+        now_ts=5.0,
+        started_ts=0.0,
+        last_speech_ts=4.2,
+        semantic_has_text=False,
+        semantic_last_text_ts=0.0,
+        no_speech_timeout_s=2.0,
+        min_speech_s=0.5,
+        semantic_end_silence_s=0.85,
+        acoustic_silence_s=1.0,
+    )
+    assert reason is None
+
+    reason = _should_auto_stop_semantic_session(
+        now_ts=5.0,
+        started_ts=0.0,
+        last_speech_ts=2.5,
+        semantic_has_text=False,
+        semantic_last_text_ts=0.0,
+        no_speech_timeout_s=2.0,
+        min_speech_s=0.5,
+        semantic_end_silence_s=0.85,
+        acoustic_silence_s=1.0,
+    )
+    assert reason == "semantic_no_text_timeout"
+
+
+def test_semantic_silence_requires_both_semantic_and_acoustic_gaps() -> None:
+    reason = _should_auto_stop_semantic_session(
+        now_ts=4.0,
+        started_ts=0.0,
+        last_speech_ts=3.5,
+        semantic_has_text=True,
+        semantic_last_text_ts=2.9,
+        no_speech_timeout_s=2.0,
+        min_speech_s=0.5,
+        semantic_end_silence_s=0.85,
+        acoustic_silence_s=1.0,
+    )
+    assert reason is None
+
+    reason = _should_auto_stop_semantic_session(
+        now_ts=4.0,
+        started_ts=0.0,
+        last_speech_ts=2.8,
+        semantic_has_text=True,
+        semantic_last_text_ts=2.9,
+        no_speech_timeout_s=2.0,
+        min_speech_s=0.5,
+        semantic_end_silence_s=0.85,
+        acoustic_silence_s=1.0,
+    )
+    assert reason == "semantic_silence"
 
 
 def test_ptt_and_toggle_concurrent_trigger_no_conflict(monkeypatch) -> None:

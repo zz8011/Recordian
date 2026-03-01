@@ -26,9 +26,21 @@ def test_build_wake_phrases_dedup_and_strip() -> None:
 def test_build_wake_phrases_auto_name_variants() -> None:
     phrases = build_wake_phrases(["嘿"], ["小二"], auto_name_variants=True)
     assert "嘿小二" in phrases
-    assert "嘿小耳" in phrases
-    assert "嘿小尔" in phrases
-    assert "嘿晓二" in phrases
+    assert "嘿小耳" not in phrases
+
+
+def test_build_wake_phrases_auto_prefix_variants_and_name_only() -> None:
+    phrases = build_wake_phrases(
+        ["嘿"],
+        ["小二"],
+        auto_name_variants=False,
+        auto_prefix_variants=True,
+        allow_name_only=True,
+    )
+    assert "小二" in phrases
+    assert "嘿小二" in phrases
+    assert "嗨小二" in phrases
+    assert "黑小二" in phrases
 
 
 def test_make_wake_runtime_config() -> None:
@@ -40,6 +52,8 @@ def test_make_wake_runtime_config() -> None:
         wake_keyword_score=1.6,
         wake_keyword_threshold=0.24,
         wake_auto_name_variants=True,
+        wake_auto_prefix_variants=True,
+        wake_allow_name_only=True,
     )
     cfg = make_wake_runtime_config(args)
     assert cfg.enabled is True
@@ -49,6 +63,8 @@ def test_make_wake_runtime_config() -> None:
     assert cfg.keyword_score == 1.6
     assert cfg.keyword_threshold == 0.24
     assert cfg.auto_name_variants is True
+    assert cfg.auto_prefix_variants is True
+    assert cfg.allow_name_only is True
 
 
 def test_make_wake_runtime_config_accepts_csv_string() -> None:
@@ -63,6 +79,8 @@ def test_make_wake_runtime_config_accepts_csv_string() -> None:
     cfg = make_wake_runtime_config(args)
     assert cfg.prefixes == ["嗨", "嘿"]
     assert cfg.names == ["小二", "乐乐"]
+    assert cfg.auto_prefix_variants is True
+    assert cfg.allow_name_only is True
 
 
 def test_make_wake_model_config() -> None:
@@ -167,3 +185,48 @@ def test_ensure_keywords_file_rebuilds_invalid_cached_output(monkeypatch, tmp_pa
 
     assert out == out_path
     assert out.read_text(encoding="utf-8").strip() == "h āi x iǎo èr @嗨小二 :1.50 #0.25"
+
+
+def test_ensure_keywords_file_expands_tone_variants_generically(monkeypatch, tmp_path: Path) -> None:
+    tokens = tmp_path / "tokens.txt"
+    tokens.write_text(
+        "\n".join(
+            [
+                "<blk> 0",
+                "h 1",
+                "ēi 2",
+                "x 3",
+                "iǎo 4",
+                "iào 5",
+                "èr 6",
+                "ěr 7",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    fake_utils = types.ModuleType("sherpa_onnx.utils")
+
+    def _fake_text2token(*, texts, tokens, tokens_type):  # noqa: ANN001
+        assert texts == ["嘿小二"]
+        assert tokens_type == "ppinyin"
+        return [["h", "ēi", "x", "iǎo", "èr"]]
+
+    fake_utils.text2token = _fake_text2token  # type: ignore[attr-defined]
+    monkeypatch.setitem(__import__("sys").modules, "sherpa_onnx.utils", fake_utils)
+
+    out = ensure_keywords_file(
+        phrases=["嘿小二"],
+        tokens_path=tokens,
+        tokens_type="ppinyin",
+        score=1.5,
+        threshold=0.25,
+        cache_dir=tmp_path / "cache",
+        auto_tone_variants=True,
+    )
+
+    lines = out.read_text(encoding="utf-8").splitlines()
+    assert "h ēi x iǎo èr @嘿小二 :1.50 #0.25" in lines
+    assert "h ēi x iào èr @嘿小二 :1.50 #0.25" in lines
+    assert "h ēi x iǎo ěr @嘿小二 :1.50 #0.25" in lines
