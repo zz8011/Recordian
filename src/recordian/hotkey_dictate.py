@@ -178,6 +178,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--wake-cooldown-s", type=float, default=3.0, help="Cooldown after wake trigger")
     parser.add_argument("--wake-auto-stop-silence-s", type=float, default=1.0, help="Auto-stop after silence")
+    parser.add_argument("--wake-owner-silence-extend-s", type=float, default=0.5, help="Additional silence time for owner voice")
     parser.add_argument("--wake-min-speech-s", type=float, default=0.5, help="Minimum speech duration before auto-stop")
     parser.add_argument(
         "--wake-use-webrtcvad",
@@ -1046,7 +1047,7 @@ def build_ptt_hotkey_handlers(
                                 owner_embedding = list(profile.embedding)
                                 _extract_owner_embedding = _extract_speaker_embedding
                                 _owner_cosine_similarity = _cosine_similarity
-                                owner_audio_chunks = deque()
+                                owner_audio_chunks = deque(maxlen=100)
                                 if args.debug_diagnostics:
                                     on_state(
                                         {

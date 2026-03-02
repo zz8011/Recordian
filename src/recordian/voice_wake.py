@@ -484,7 +484,7 @@ class VoiceWakeService:
         if owner_verify_enabled:
             from collections import deque
 
-            owner_audio_chunks = deque()
+            owner_audio_chunks = deque(maxlen=100)
 
         self._emit({"message": "voice_wake_ready"})
         try:

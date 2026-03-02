@@ -313,6 +313,8 @@ def save_speaker_profile(path: Path, profile: SpeakerProfile) -> None:
         payload["embeddings"] = [[float(v) for v in emb] for emb in profile.embeddings]
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    # Set file permissions to 0o600 (owner read/write only) for security
+    path.chmod(0o600)
 
 
 def load_speaker_profile(path: Path) -> SpeakerProfile | None:
