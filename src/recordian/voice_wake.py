@@ -446,6 +446,17 @@ class VoiceWakeService:
                 if profile is None:
                     owner_verify_enabled = False
                     self._emit({"message": "voice_wake_owner_verify_disabled: profile_not_found"})
+                elif profile.feature_version != 2:
+                    owner_verify_enabled = False
+                    self._emit(
+                        {
+                            "message": (
+                                f"voice_wake_owner_verify_disabled: profile_version_mismatch "
+                                f"(expected=2, got={profile.feature_version}). "
+                                "Please re-enroll owner profile with current version."
+                            )
+                        }
+                    )
                 else:
                     owner_embedding = list(profile.embedding)
                     _extract_speaker_embedding = extract_speaker_embedding

@@ -111,7 +111,7 @@ def test_preemphasis_boundary_cases() -> None:
     """Test pre-emphasis with boundary coefficient values."""
     from recordian.speaker_verify import _apply_preemphasis
 
-    frame = np.array([1.0, 2.0, 3.0], dtype=np.float32)
+    frame = np.array([0.5, 0.6, 0.7], dtype=np.float32)
 
     # α=0.0 (no pre-emphasis)
     no_emphasis = _apply_preemphasis(frame, coeff=0.0)
@@ -119,9 +119,9 @@ def test_preemphasis_boundary_cases() -> None:
 
     # α=1.0 (extreme pre-emphasis, first-order difference)
     full_emphasis = _apply_preemphasis(frame, coeff=1.0)
-    assert full_emphasis[0] == 1.0
-    assert full_emphasis[1] == 1.0  # 2.0 - 1.0*1.0
-    assert full_emphasis[2] == 1.0  # 3.0 - 1.0*2.0
+    assert full_emphasis[0] == 0.5
+    assert abs(full_emphasis[1] - 0.1) < 1e-6  # 0.6 - 1.0*0.5
+    assert abs(full_emphasis[2] - 0.1) < 1e-6  # 0.7 - 1.0*0.6
 
 
 def test_preemphasis_enhances_high_frequency() -> None:

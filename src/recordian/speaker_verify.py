@@ -45,7 +45,7 @@ def _apply_preemphasis(frame, coeff: float = 0.97):
 
     Args:
         frame: Audio frame (numpy array)
-        coeff: Pre-emphasis coefficient (default 0.97)
+        coeff: Pre-emphasis coefficient (default 0.97, should be in [0, 1])
 
     Returns:
         Pre-emphasized frame
@@ -58,7 +58,8 @@ def _apply_preemphasis(frame, coeff: float = 0.97):
     emphasized = np.empty_like(frame)
     emphasized[0] = frame[0]
     emphasized[1:] = frame[1:] - coeff * frame[:-1]
-    return emphasized
+    # Clip to prevent numerical overflow in extreme cases
+    return np.clip(emphasized, -2.0, 2.0)
 
 
 def extract_speaker_embedding(
