@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass
+import functools
 import hashlib
 from pathlib import Path
 from shutil import which
@@ -180,6 +181,7 @@ def _normalize_tone_token(token: str) -> str:
         return normalized
 
 
+@functools.lru_cache(maxsize=1)
 def _load_tone_variant_groups(tokens_path: Path) -> dict[str, list[str]]:
     groups: dict[str, list[str]] = {}
     try:
