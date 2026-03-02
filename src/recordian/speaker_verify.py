@@ -14,6 +14,7 @@ class SpeakerProfile:
     sample_rate: int
     created_at: float
     source: str = ""
+    feature_version: int = 2  # Version 2: with pre-emphasis
 
 
 def _to_float32_mono(samples: Any):
@@ -35,6 +36,29 @@ def _resample_linear(samples, *, src_rate: int, dst_rate: int):
     src_x = np.arange(data.size, dtype=np.float32)
     dst_x = np.linspace(0, data.size - 1, out_len, dtype=np.float32)
     return np.interp(dst_x, src_x, data).astype(np.float32)
+
+
+def _apply_preemphasis(frame, coeff: float = 0.97):
+    """Apply pre-emphasis filter to enhance high-frequency components.
+
+    Formula: y[n] = x[n] - α*x[n-1], where α=0.97
+
+    Args:
+        frame: Audio frame (numpy array)
+        coeff: Pre-emphasis coefficient (default 0.97)
+
+    Returns:
+        Pre-emphasized frame
+    """
+    import numpy as np
+
+    if frame.size == 0:
+        return frame
+
+    emphasized = np.empty_like(frame)
+    emphasized[0] = frame[0]
+    emphasized[1:] = frame[1:] - coeff * frame[:-1]
+    return emphasized
 
 
 def extract_speaker_embedding(
@@ -76,6 +100,8 @@ def extract_speaker_embedding(
         rms = float(np.sqrt(np.mean(frame * frame)))
         if rms < 0.01:
             continue
+        # Apply pre-emphasis to enhance high-frequency components
+        frame = _apply_preemphasis(frame, coeff=0.97)
         spectrum = np.fft.rfft(frame * window, n=n_fft)
         power = np.abs(spectrum).astype(np.float32) ** 2
         spectra.append(np.log1p(power[1:]))  # drop DC
@@ -130,6 +156,7 @@ def save_speaker_profile(path: Path, profile: SpeakerProfile) -> None:
         "created_at": float(profile.created_at),
         "source": str(profile.source),
         "embedding": [float(v) for v in profile.embedding],
+        "feature_version": int(profile.feature_version),
     }
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -148,11 +175,13 @@ def load_speaker_profile(path: Path) -> SpeakerProfile | None:
     sample_rate = int(payload.get("sample_rate", 16000))
     created_at = float(payload.get("created_at", 0.0))
     source = str(payload.get("source", ""))
+    feature_version = int(payload.get("feature_version", 1))  # Default to v1 for old profiles
     return SpeakerProfile(
         embedding=embedding,
         sample_rate=sample_rate,
         created_at=created_at,
         source=source,
+        feature_version=feature_version,
     )
 
 

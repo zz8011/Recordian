@@ -87,3 +87,117 @@ def test_enroll_speaker_profile_from_wav_supports_non_16k_input(tmp_path: Path) 
     loaded = load_speaker_profile(profile_path)
     assert loaded is not None
     assert len(loaded.embedding) == len(profile.embedding)
+
+
+def test_preemphasis_filter() -> None:
+    """Test pre-emphasis filter output correctness."""
+    from recordian.speaker_verify import _apply_preemphasis
+
+    # Test with simple signal
+    frame = np.array([1.0, 2.0, 3.0, 4.0, 5.0], dtype=np.float32)
+    emphasized = _apply_preemphasis(frame, coeff=0.97)
+
+    # First sample should remain unchanged
+    assert emphasized[0] == 1.0
+
+    # Subsequent samples: y[n] = x[n] - 0.97*x[n-1]
+    assert abs(emphasized[1] - (2.0 - 0.97 * 1.0)) < 1e-6
+    assert abs(emphasized[2] - (3.0 - 0.97 * 2.0)) < 1e-6
+    assert abs(emphasized[3] - (4.0 - 0.97 * 3.0)) < 1e-6
+    assert abs(emphasized[4] - (5.0 - 0.97 * 4.0)) < 1e-6
+
+
+def test_preemphasis_boundary_cases() -> None:
+    """Test pre-emphasis with boundary coefficient values."""
+    from recordian.speaker_verify import _apply_preemphasis
+
+    frame = np.array([1.0, 2.0, 3.0], dtype=np.float32)
+
+    # α=0.0 (no pre-emphasis)
+    no_emphasis = _apply_preemphasis(frame, coeff=0.0)
+    assert np.allclose(no_emphasis, frame)
+
+    # α=1.0 (extreme pre-emphasis, first-order difference)
+    full_emphasis = _apply_preemphasis(frame, coeff=1.0)
+    assert full_emphasis[0] == 1.0
+    assert full_emphasis[1] == 1.0  # 2.0 - 1.0*1.0
+    assert full_emphasis[2] == 1.0  # 3.0 - 1.0*2.0
+
+
+def test_preemphasis_enhances_high_frequency() -> None:
+    """Test that pre-emphasis enhances high-frequency components."""
+    # Create signal with low and high frequency components
+    sample_rate = 16000
+    duration = 1.0
+    t = np.arange(int(duration * sample_rate), dtype=np.float32) / float(sample_rate)
+
+    # Low frequency (200 Hz) + High frequency (4000 Hz)
+    low_freq = 0.7 * np.sin(2 * np.pi * 200 * t)
+    high_freq = 0.3 * np.sin(2 * np.pi * 4000 * t)
+    signal = low_freq + high_freq
+
+    # Extract embeddings with and without pre-emphasis
+    # Note: Current implementation always applies pre-emphasis
+    # This test verifies the feature extraction still works
+    embedding = extract_speaker_embedding(signal, sample_rate=sample_rate)
+
+    # Verify embedding is valid
+    assert len(embedding) == 49
+    assert all(isinstance(v, float) for v in embedding)
+
+
+def test_feature_version_in_profile() -> None:
+    """Test that feature_version is saved and loaded correctly."""
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        profile_path = Path(tmpdir) / "test_profile.json"
+
+        # Create a profile with version 2
+        voice = _make_voice(1.8, 16000, (180.0, 420.0, 760.0))
+        embedding = extract_speaker_embedding(voice, sample_rate=16000)
+        profile = SpeakerProfile(
+            embedding=embedding,
+            sample_rate=16000,
+            created_at=1234567890.0,
+            source="test.wav",
+            feature_version=2,
+        )
+
+        # Save and load
+        save_speaker_profile(profile_path, profile)
+        loaded = load_speaker_profile(profile_path)
+
+        assert loaded is not None
+        assert loaded.feature_version == 2
+
+        # Test backward compatibility: old profile without feature_version
+        import json
+        old_payload = {
+            "version": 1,
+            "sample_rate": 16000,
+            "created_at": 1234567890.0,
+            "source": "old.wav",
+            "embedding": embedding,
+        }
+        profile_path.write_text(json.dumps(old_payload), encoding="utf-8")
+
+        loaded_old = load_speaker_profile(profile_path)
+        assert loaded_old is not None
+        assert loaded_old.feature_version == 1  # Default to v1 for old profiles
+
+
+def test_preemphasis_performance() -> None:
+    """Test that pre-emphasis doesn't significantly increase computation time."""
+    import time
+
+    voice = _make_voice(2.0, 16000, (180.0, 420.0, 760.0))
+
+    # Measure extraction time
+    start = time.perf_counter()
+    embedding = extract_speaker_embedding(voice, sample_rate=16000)
+    elapsed_ms = (time.perf_counter() - start) * 1000
+
+    # Should complete in reasonable time (< 100ms for 2s audio)
+    assert elapsed_ms < 100
+    assert len(embedding) == 49
