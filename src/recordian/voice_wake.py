@@ -306,6 +306,10 @@ def ensure_keywords_file(
 
 
 class VoiceWakeService:
+    # Decode loop limits to prevent CPU spikes
+    MAX_DECODE_ITERATIONS = 10  # Normal: 1-3 iterations per frame
+    DECODE_TIMEOUT_S = 0.05  # 50ms timeout for real-time performance
+
     def __init__(
         self,
         *,
@@ -504,8 +508,22 @@ class VoiceWakeService:
                             owner_audio_samples -= int(owner_audio_chunks.popleft().size)
 
                     stream.accept_waveform(self.model.sample_rate, samples)
+
+                    # Decode with iteration and timeout limits to prevent CPU spikes
+                    decode_count = 0
+                    decode_start = time.monotonic()
+
                     while spotter.is_ready(stream):
+                        if time.monotonic() - decode_start > self.DECODE_TIMEOUT_S:
+                            self._emit({"message": "voice_wake_decode_timeout_reset"})
+                            spotter.reset_stream(stream)
+                            break
+                        if decode_count >= self.MAX_DECODE_ITERATIONS:
+                            self._emit({"message": "voice_wake_decode_max_iterations_reset"})
+                            spotter.reset_stream(stream)
+                            break
                         spotter.decode_stream(stream)
+                        decode_count += 1
 
                     result = spotter.get_result(stream).strip()
                     if not result:
