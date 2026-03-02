@@ -5,6 +5,7 @@ from dataclasses import dataclass
 import functools
 import hashlib
 from pathlib import Path
+import re
 from shutil import which
 import subprocess
 import sys
@@ -48,6 +49,36 @@ def verify_model_integrity(model_path: Path) -> bool:
         return actual_hash == expected_hash
     except Exception:  # noqa: BLE001
         return False
+
+
+def validate_config_path(config_value: str, allowed_base: Path, allowed_suffixes: set[str]) -> Path:
+    """Validate configuration file paths to prevent path traversal attacks.
+
+    Args:
+        config_value: Path string from configuration
+        allowed_base: Base directory that paths must be within
+        allowed_suffixes: Set of allowed file extensions (e.g., {'.onnx', '.txt'})
+
+    Returns:
+        Validated and resolved Path object
+
+    Raises:
+        ValueError: If path is outside allowed base or has disallowed suffix
+    """
+    path = Path(config_value).expanduser()
+    resolved = path.resolve()
+
+    # Check if path is within allowed base directory
+    try:
+        resolved.relative_to(allowed_base.resolve())
+    except ValueError:
+        raise ValueError(f"路径不在允许的目录内: {config_value}") from None
+
+    # Check file extension
+    if resolved.suffix not in allowed_suffixes:
+        raise ValueError(f"不允许的文件类型: {resolved.suffix}")
+
+    return resolved
 
 
 @dataclass(slots=True)
@@ -247,7 +278,7 @@ def ensure_keywords_file(
     cache_dir: Path,
     auto_tone_variants: bool = True,
 ) -> Path:
-    cache_dir.mkdir(parents=True, exist_ok=True)
+    cache_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
     raw_path = cache_dir / "keywords_raw.txt"
     out_path = cache_dir / "keywords.txt"
 
@@ -276,6 +307,7 @@ def ensure_keywords_file(
         return out_path
 
     raw_path.write_text(raw_content, encoding="utf-8")
+    raw_path.chmod(0o600)
 
     # Prefer python API: avoids PATH issues when app is launched by desktop entry.
     try:
@@ -304,6 +336,7 @@ def ensure_keywords_file(
                     output_lines.append(line)
                     seen_lines.add(line)
             out_path.write_text("\n".join(output_lines) + "\n", encoding="utf-8")
+            out_path.chmod(0o600)
             if _is_cache_valid():
                 return out_path
     except Exception:
@@ -339,6 +372,7 @@ def ensure_keywords_file(
             "关键词转换失败，请检查 tokens_type 与依赖（ppinyin 需要 pypinyin）。"
             f" detail={detail}"
         )
+    out_path.chmod(0o600)
     return out_path
 
 
@@ -378,8 +412,23 @@ class VoiceWakeService:
         if self._thread is not None:
             self._thread.join(timeout=1.0)
 
+    def _sanitize_log_message(self, message: str) -> str:
+        """Sanitize log messages to prevent sensitive information leakage."""
+        patterns = {
+            r'preview=([^,\s]+)': 'preview=<REDACTED>',
+            r'threshold=(\d+\.\d+)': 'threshold=<REDACTED>',
+            r'/home/[^/\s]+': '/home/<USER>',
+            r'profile_path=([^\s]+)': 'profile_path=<REDACTED>',
+        }
+        sanitized = message
+        for pattern, replacement in patterns.items():
+            sanitized = re.sub(pattern, replacement, sanitized)
+        return sanitized
+
     def _emit(self, payload: dict[str, object]) -> None:
         payload.setdefault("event", "log")
+        if "message" in payload:
+            payload["message"] = self._sanitize_log_message(str(payload["message"]))
         self.on_event(payload)
 
     def _check_model_files(self) -> None:
