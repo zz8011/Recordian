@@ -538,7 +538,7 @@ class VoiceWakeService:
                     profile = enroll_speaker_profile_from_wav(
                         sample_path=sample_path,
                         profile_path=profile_path,
-                        target_rate=self.model.sample_rate,
+                        target_rate=8000,  # Reduced from 16kHz to 8kHz for ~50% CPU reduction
                     )
                     self._emit({"message": f"voice_wake_owner_profile_enrolled: {profile_path}"})
                 if profile is None:
@@ -644,7 +644,7 @@ class VoiceWakeService:
                             candidate_embedding = _extract_speaker_embedding(
                                 verify_samples,
                                 sample_rate=self.model.sample_rate,
-                                target_rate=self.model.sample_rate,
+                                target_rate=8000,  # Reduced from 16kHz to 8kHz for ~50% CPU reduction
                                 noise_suppression=owner_noise_suppression,
                             )
                             # Use max similarity strategy: compare with all enrolled samples
