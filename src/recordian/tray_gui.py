@@ -1762,21 +1762,21 @@ class TrayApp:
                 row,
                 key="wake_encoder",
                 label="Encoder ONNX",
-                value=current.get("wake_encoder", str(wake_model_dir / "encoder-epoch-12-avg-2-chunk-16-left-64.onnx")),
+                value=current.get("wake_encoder", str(wake_model_dir / "encoder-epoch-12-avg-2-chunk-16-left-64.int8.onnx")),
             )
             row = _add_field(
                 sec_wake_model,
                 row,
                 key="wake_decoder",
                 label="Decoder ONNX",
-                value=current.get("wake_decoder", str(wake_model_dir / "decoder-epoch-12-avg-2-chunk-16-left-64.onnx")),
+                value=current.get("wake_decoder", str(wake_model_dir / "decoder-epoch-12-avg-2-chunk-16-left-64.int8.onnx")),
             )
             row = _add_field(
                 sec_wake_model,
                 row,
                 key="wake_joiner",
                 label="Joiner ONNX",
-                value=current.get("wake_joiner", str(wake_model_dir / "joiner-epoch-12-avg-2-chunk-16-left-64.onnx")),
+                value=current.get("wake_joiner", str(wake_model_dir / "joiner-epoch-12-avg-2-chunk-16-left-64.int8.onnx")),
             )
             row = _add_field(
                 sec_wake_model,

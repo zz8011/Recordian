@@ -34,9 +34,9 @@ from .voice_wake import VoiceWakeService, make_wake_model_config, make_wake_runt
 DEFAULT_CONFIG_PATH = "~/.config/recordian/hotkey.json"
 
 _DEFAULT_WAKE_MODEL_DIR = Path(__file__).parent.parent.parent / "models" / "sherpa-onnx-kws-zipformer-wenetspeech-3.3M-2024-01-01"
-_DEFAULT_WAKE_ENCODER = _DEFAULT_WAKE_MODEL_DIR / "encoder-epoch-12-avg-2-chunk-16-left-64.onnx"
-_DEFAULT_WAKE_DECODER = _DEFAULT_WAKE_MODEL_DIR / "decoder-epoch-12-avg-2-chunk-16-left-64.onnx"
-_DEFAULT_WAKE_JOINER = _DEFAULT_WAKE_MODEL_DIR / "joiner-epoch-12-avg-2-chunk-16-left-64.onnx"
+_DEFAULT_WAKE_ENCODER = _DEFAULT_WAKE_MODEL_DIR / "encoder-epoch-12-avg-2-chunk-16-left-64.int8.onnx"
+_DEFAULT_WAKE_DECODER = _DEFAULT_WAKE_MODEL_DIR / "decoder-epoch-12-avg-2-chunk-16-left-64.int8.onnx"
+_DEFAULT_WAKE_JOINER = _DEFAULT_WAKE_MODEL_DIR / "joiner-epoch-12-avg-2-chunk-16-left-64.int8.onnx"
 _DEFAULT_WAKE_TOKENS = _DEFAULT_WAKE_MODEL_DIR / "tokens.txt"
 _DEFAULT_SOUND_ON = default_sound_on_path()
 _DEFAULT_SOUND_OFF = default_sound_off_path()

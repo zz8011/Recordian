@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass
+import hashlib
 from pathlib import Path
 from shutil import which
 import subprocess
@@ -12,6 +13,40 @@ from typing import Callable
 
 
 EventCallback = Callable[[dict[str, object]], None]
+
+# Trusted model hashes for integrity verification
+TRUSTED_MODEL_HASHES = {
+    "encoder-epoch-12-avg-2-chunk-16-left-64.int8.onnx": "dd784973fc9d2fabb3b800d6dcd20fc3b0ca84f8e2415afe54b032878e447f4d",
+    "decoder-epoch-12-avg-2-chunk-16-left-64.int8.onnx": "ed83454004d5bd16d831eaf00adcd181ed7734886aab6ef440f3ffa5aa3cfe3b",
+    "joiner-epoch-12-avg-2-chunk-16-left-64.int8.onnx": "f79760052b87239e325f0567c752ad3130b30d92effb847d4307743c20c59a24",
+}
+
+
+def verify_model_integrity(model_path: Path) -> bool:
+    """Verify model file integrity using SHA256 hash.
+
+    Args:
+        model_path: Path to the model file
+
+    Returns:
+        True if hash matches trusted hash, False otherwise
+    """
+    model_name = model_path.name
+    expected_hash = TRUSTED_MODEL_HASHES.get(model_name)
+
+    if expected_hash is None:
+        # Model not in trusted list, skip verification
+        return True
+
+    try:
+        sha256 = hashlib.sha256()
+        with open(model_path, 'rb') as f:
+            for chunk in iter(lambda: f.read(8192), b''):
+                sha256.update(chunk)
+        actual_hash = sha256.hexdigest()
+        return actual_hash == expected_hash
+    except Exception:  # noqa: BLE001
+        return False
 
 
 @dataclass(slots=True)
@@ -357,6 +392,12 @@ class VoiceWakeService:
             raise FileNotFoundError(
                 "语音唤醒模型文件缺失: " + ", ".join(missing)
             )
+
+        # Verify model integrity for int8 models
+        model_files = [Path(self.model.encoder), Path(self.model.decoder), Path(self.model.joiner)]
+        for model_path in model_files:
+            if not verify_model_integrity(model_path):
+                raise ValueError(f"模型完整性验证失败: {model_path.name}")
 
     def _resolve_keywords_file(self) -> Path:
         explicit = self.model.keywords_file.strip()
