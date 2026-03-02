@@ -527,6 +527,11 @@ class TrayApp:
         except Exception:
             wake_owner_window_s = 1.6
         current["wake_owner_window_s"] = max(0.6, wake_owner_window_s)
+        try:
+            wake_owner_silence_extend_s = float(current.get("wake_owner_silence_extend_s", 0.5))
+        except Exception:
+            wake_owner_silence_extend_s = 0.5
+        current["wake_owner_silence_extend_s"] = max(0.0, wake_owner_silence_extend_s)
 
         if not (hasattr(self, "_glib") and hasattr(self, "_gtk")):
             self.events.put({"event": "log", "message": "GTK 未初始化，无法打开原生设置窗口"})
@@ -1846,6 +1851,14 @@ class TrayApp:
             row = _add_field(
                 sec_wake_model,
                 row,
+                key="wake_owner_silence_extend_s",
+                label="主人静音延长 (s)",
+                value=current.get("wake_owner_silence_extend_s", 0.5),
+                hint="识别为主人时延长静音阈值，避免停顿被打断",
+            )
+            row = _add_field(
+                sec_wake_model,
+                row,
                 key="wake_owner_profile",
                 label="主人声纹特征文件",
                 value=current.get("wake_owner_profile", "~/.config/recordian/owner_voice_profile.json"),
@@ -2184,6 +2197,7 @@ class TrayApp:
                         "wake_owner_profile": str(_get_value("wake_owner_profile")).strip() or "~/.config/recordian/owner_voice_profile.json",
                         "wake_owner_threshold": _parse_float_field("wake_owner_threshold", 0.72),
                         "wake_owner_window_s": _parse_float_field("wake_owner_window_s", 1.6),
+                        "wake_owner_silence_extend_s": _parse_float_field("wake_owner_silence_extend_s", 0.5),
                         "sound_on_path": str(_get_value("sound_on_path")).strip(),
                         "sound_off_path": str(_get_value("sound_off_path")).strip(),
                         # Legacy key kept for backward compatibility; when present it acts as fallback.
@@ -2211,6 +2225,7 @@ class TrayApp:
                     payload["wake_no_speech_timeout_s"] = max(0.0, float(payload["wake_no_speech_timeout_s"]))
                     payload["wake_owner_threshold"] = min(0.99, max(0.0, float(payload["wake_owner_threshold"])))
                     payload["wake_owner_window_s"] = max(0.6, float(payload["wake_owner_window_s"]))
+                    payload["wake_owner_silence_extend_s"] = max(0.0, float(payload["wake_owner_silence_extend_s"]))
                     ConfigManager.save(self.config_path, payload)
                 except ValueError as exc:
                     status_label.set_text(f"保存失败：数值格式不正确 ({exc})")
