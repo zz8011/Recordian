@@ -893,6 +893,7 @@ class TrayApp:
                     )
                     # Show reference text
                     reference_text_view.get_buffer().set_text(reference_texts[step - 1])
+                    reference_frame.show()
                     reference_frame.show_all()
                     status_label.set_text("等待录制")
                     progress_label.set_text(f"进度: {len(samples)}/3 样本")
