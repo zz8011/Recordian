@@ -814,7 +814,6 @@ class TrayApp:
 
             # Reference text area (hidden initially)
             reference_frame = Gtk.Frame(label="参考文本")
-            reference_frame.set_no_show_all(True)
             scroller = Gtk.ScrolledWindow()
             scroller.set_hexpand(True)
             scroller.set_vexpand(True)
@@ -951,7 +950,10 @@ class TrayApp:
                 def _on_record_click(*_args: object) -> None:
                     _stop_recording()
 
-                btn_record.disconnect_by_func(_start_recording)
+                try:
+                    btn_record.disconnect_by_func(_start_recording)
+                except Exception:  # noqa: BLE001
+                    pass
                 btn_record.connect("clicked", _on_record_click)
 
             def _stop_recording() -> None:
@@ -969,7 +971,10 @@ class TrayApp:
                 if not chunks_obj:
                     status_label.set_text("未采集到音频，请重试")
                     btn_record.set_label("开始录制")
-                    btn_record.disconnect_by_func(_stop_recording)
+                    try:
+                        btn_record.disconnect_by_func(_stop_recording)
+                    except Exception:  # noqa: BLE001
+                        pass
                     btn_record.connect("clicked", _start_recording)
                     return
 
@@ -980,7 +985,10 @@ class TrayApp:
                     if samples.size < 16000:  # Less than 1 second at 16kHz
                         status_label.set_text("录音太短，请至少录制1秒")
                         btn_record.set_label("开始录制")
-                        btn_record.disconnect_by_func(_stop_recording)
+                        try:
+                            btn_record.disconnect_by_func(_stop_recording)
+                        except Exception:  # noqa: BLE001
+                            pass
                         btn_record.connect("clicked", _start_recording)
                         return
 
@@ -994,25 +1002,38 @@ class TrayApp:
                         if not quality_ok:
                             status_label.set_text(f"样本质量不足: {reason}，请重新录制")
                             btn_record.set_label("开始录制")
-                            btn_record.disconnect_by_func(_stop_recording)
+                            try:
+                                btn_record.disconnect_by_func(_stop_recording)
+                            except Exception:  # noqa: BLE001
+                                pass
                             btn_record.connect("clicked", _start_recording)
                             return
                     except Exception:  # noqa: BLE001
                         pass  # Skip quality check if not available
 
                     # Save sample
-                    wizard_state.get("samples", []).append(samples)
+                    samples_list = wizard_state.get("samples")
+                    if not isinstance(samples_list, list):
+                        samples_list = []
+                        wizard_state["samples"] = samples_list
+                    samples_list.append(samples)
                     step = int(wizard_state.get("step", 0))
                     status_label.set_text(f"样本 {step} 录制成功 ✓")
                     btn_record.set_label("开始录制")
-                    btn_record.disconnect_by_func(_stop_recording)
+                    try:
+                        btn_record.disconnect_by_func(_stop_recording)
+                    except Exception:  # noqa: BLE001
+                        pass
                     btn_record.connect("clicked", _start_recording)
                     _update_ui()
 
                 except Exception as exc:  # noqa: BLE001
                     status_label.set_text(f"处理失败: {type(exc).__name__}")
                     btn_record.set_label("开始录制")
-                    btn_record.disconnect_by_func(_stop_recording)
+                    try:
+                        btn_record.disconnect_by_func(_stop_recording)
+                    except Exception:  # noqa: BLE001
+                        pass
                     btn_record.connect("clicked", _start_recording)
 
             def _next_step(*_args: object) -> None:
