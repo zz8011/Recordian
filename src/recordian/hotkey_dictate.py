@@ -178,7 +178,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--wake-cooldown-s", type=float, default=3.0, help="Cooldown after wake trigger")
     parser.add_argument("--wake-auto-stop-silence-s", type=float, default=1.0, help="Auto-stop after silence")
-    parser.add_argument("--wake-owner-silence-extend-s", type=float, default=0.5, help="Additional silence time for owner voice")
+    parser.add_argument(
+        "--wake-owner-silence-extend-s",
+        type=float,
+        default=0.5,
+        help="Additional silence time for owner voice (0.0-5.0 seconds)",
+    )
     parser.add_argument("--wake-min-speech-s", type=float, default=0.5, help="Minimum speech duration before auto-stop")
     parser.add_argument(
         "--wake-use-webrtcvad",
@@ -1793,7 +1798,7 @@ def _save_runtime_config(args: argparse.Namespace) -> None:
         "wake_owner_sample": getattr(args, "wake_owner_sample", ""),
         "wake_owner_threshold": getattr(args, "wake_owner_threshold", 0.72),
         "wake_owner_window_s": getattr(args, "wake_owner_window_s", 1.6),
-        "wake_owner_silence_extend_s": getattr(args, "wake_owner_silence_extend_s", 0.5),
+        "wake_owner_silence_extend_s": max(0.0, min(5.0, float(getattr(args, "wake_owner_silence_extend_s", 0.5)))),
         "wake_use_semantic_gate": getattr(args, "wake_use_semantic_gate", False),
         "wake_semantic_probe_interval_s": getattr(args, "wake_semantic_probe_interval_s", 0.45),
         "wake_semantic_window_s": getattr(args, "wake_semantic_window_s", 1.2),
