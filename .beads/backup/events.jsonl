@@ -142,3 +142,4 @@
 {"actor":"zz8011","comment":null,"created_at":"2026-03-02T22:41:08Z","event_type":"closed","id":142,"issue_id":"Recordian-kcr.8.2","new_value":"已修复：使用 umask 防止 TOCTOU，添加跨平台 chmod 异常处理","old_value":""}
 {"actor":"zz8011","comment":null,"created_at":"2026-03-02T22:41:08Z","event_type":"closed","id":143,"issue_id":"Recordian-kcr.8.3","new_value":"已修复：使用 umask 防止 TOCTOU，添加跨平台 chmod 异常处理","old_value":""}
 {"actor":"zz8011","comment":null,"created_at":"2026-03-02T22:42:56Z","event_type":"closed","id":144,"issue_id":"Recordian-kcr.8","new_value":"所有 P1 CRITICAL 问题已修复：TOCTOU 漏洞已消除，Windows 兼容性已添加，竞态条件为误报。测试全部通过。","old_value":""}
+{"actor":"zz8011","comment":null,"created_at":"2026-03-02T23:16:15Z","event_type":"created","id":145,"issue_id":"Recordian-5uh","new_value":"","old_value":""}
