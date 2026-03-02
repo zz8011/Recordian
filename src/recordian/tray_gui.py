@@ -1028,7 +1028,7 @@ class TrayApp:
                     _update_ui()
 
                 except Exception as exc:  # noqa: BLE001
-                    status_label.set_text(f"处理失败: {type(exc).__name__}")
+                    status_label.set_text(f"处理失败: {type(exc).__name__}: {exc}")
                     btn_record.set_label("开始录制")
                     try:
                         btn_record.disconnect_by_func(_stop_recording)
