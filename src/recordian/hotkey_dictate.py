@@ -1901,8 +1901,11 @@ def _key_to_names(key: object, keyboard_module: Any) -> set[str]:
 
 
 def main() -> None:
+    import logging
     import sys
     from recordian.error_tracker import get_error_tracker
+
+    logger = logging.getLogger(__name__)
 
     def handle_exception(exc_type, exc_value, exc_traceback):
         """Global exception handler."""
