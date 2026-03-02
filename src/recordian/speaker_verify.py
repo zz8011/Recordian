@@ -10,11 +10,21 @@ import wave
 
 @dataclass(slots=True)
 class SpeakerProfile:
-    embedding: list[float]
+    embedding: list[float]  # Deprecated: use embeddings for multi-sample profiles
     sample_rate: int
     created_at: float
     source: str = ""
     feature_version: int = 2  # Version 2: with pre-emphasis
+    embeddings: list[list[float]] | None = None  # Multi-sample embeddings (v3+)
+
+    def __post_init__(self):
+        """Ensure embeddings is populated for consistency."""
+        if self.embeddings is None:
+            # Single-sample profile: wrap embedding in list
+            self.embeddings = [self.embedding]
+        elif not self.embeddings:
+            # Empty embeddings: use single embedding
+            self.embeddings = [self.embedding]
 
 
 def _to_float32_mono(samples: Any):
@@ -60,6 +70,64 @@ def _apply_preemphasis(frame, coeff: float = 0.97):
     emphasized[1:] = frame[1:] - coeff * frame[:-1]
     # Clip to prevent numerical overflow in extreme cases
     return np.clip(emphasized, -2.0, 2.0)
+
+
+def _assess_sample_quality(samples: Any, sample_rate: int) -> dict[str, float]:
+    """Assess audio sample quality for speaker enrollment.
+
+    Args:
+        samples: Audio samples (numpy array or compatible)
+        sample_rate: Sample rate in Hz
+
+    Returns:
+        Dictionary with quality metrics:
+        - rms: Root mean square energy (before normalization)
+        - voiced_ratio: Ratio of voiced frames (0.0-1.0)
+        - duration_s: Duration in seconds
+        - is_acceptable: Whether sample meets minimum quality
+    """
+    import numpy as np
+
+    data = _to_float32_mono(samples)
+    if data.size == 0:
+        return {"rms": 0.0, "voiced_ratio": 0.0, "duration_s": 0.0, "is_acceptable": False}
+
+    # Calculate RMS BEFORE normalization (to detect truly quiet samples)
+    rms = float(np.sqrt(np.mean(data * data)))
+
+    # Normalize for voiced ratio calculation
+    peak = float(np.max(np.abs(data)))
+    if peak > 1e-6:
+        data = data / peak
+    else:
+        # Too quiet to be useful
+        return {"rms": rms, "voiced_ratio": 0.0, "duration_s": len(data) / sample_rate, "is_acceptable": False}
+
+    # Calculate voiced ratio using simple energy-based VAD
+    frame_len = 400
+    hop = 160
+    voiced_frames = 0
+    total_frames = 0
+
+    for i in range(0, len(data) - frame_len, hop):
+        frame = data[i : i + frame_len]
+        frame_rms = float(np.sqrt(np.mean(frame * frame)))
+        total_frames += 1
+        if frame_rms > 0.01:  # Simple energy threshold
+            voiced_frames += 1
+
+    voiced_ratio = voiced_frames / total_frames if total_frames > 0 else 0.0
+    duration_s = len(data) / sample_rate
+
+    # Quality thresholds
+    is_acceptable = rms > 0.005 and voiced_ratio > 0.3 and duration_s >= 0.5
+
+    return {
+        "rms": rms,
+        "voiced_ratio": voiced_ratio,
+        "duration_s": duration_s,
+        "is_acceptable": is_acceptable,
+    }
 
 
 def extract_speaker_embedding(
@@ -159,6 +227,9 @@ def save_speaker_profile(path: Path, profile: SpeakerProfile) -> None:
         "embedding": [float(v) for v in profile.embedding],
         "feature_version": int(profile.feature_version),
     }
+    # Save multi-sample embeddings if available
+    if profile.embeddings and len(profile.embeddings) > 1:
+        payload["embeddings"] = [[float(v) for v in emb] for emb in profile.embeddings]
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -167,22 +238,37 @@ def load_speaker_profile(path: Path) -> SpeakerProfile | None:
     if not path.exists():
         return None
     payload = json.loads(path.read_text(encoding="utf-8"))
+
+    # Load primary embedding (required for backward compatibility)
     embedding_raw = payload.get("embedding", [])
     if not isinstance(embedding_raw, list) or not embedding_raw:
         raise ValueError("invalid_profile_embedding")
     embedding = [float(v) for v in embedding_raw]
     if len(embedding) < 8:
         raise ValueError("profile_embedding_too_short")
+
+    # Load multi-sample embeddings if available
+    embeddings = None
+    embeddings_raw = payload.get("embeddings", None)
+    if embeddings_raw and isinstance(embeddings_raw, list):
+        embeddings = [[float(v) for v in emb] for emb in embeddings_raw]
+        # Validate all embeddings
+        for emb in embeddings:
+            if len(emb) < 8:
+                raise ValueError("profile_embedding_too_short")
+
     sample_rate = int(payload.get("sample_rate", 16000))
     created_at = float(payload.get("created_at", 0.0))
     source = str(payload.get("source", ""))
     feature_version = int(payload.get("feature_version", 1))  # Default to v1 for old profiles
+
     return SpeakerProfile(
         embedding=embedding,
         sample_rate=sample_rate,
         created_at=created_at,
         source=source,
         feature_version=feature_version,
+        embeddings=embeddings,
     )
 
 
@@ -230,3 +316,132 @@ def enroll_speaker_profile_from_wav(
     )
     save_speaker_profile(profile_path, profile)
     return profile
+
+
+def enroll_speaker_profile_from_multiple_wavs(
+    *,
+    sample_paths: list[Path],
+    profile_path: Path,
+    target_rate: int = 16000,
+    min_quality_rms: float = 0.005,
+    min_quality_voiced_ratio: float = 0.3,
+) -> SpeakerProfile:
+    """Enroll speaker profile from multiple audio samples.
+
+    Args:
+        sample_paths: List of paths to WAV files (3-5 recommended)
+        profile_path: Path to save the profile
+        target_rate: Target sample rate (default 16000)
+        min_quality_rms: Minimum RMS threshold for quality check
+        min_quality_voiced_ratio: Minimum voiced ratio for quality check
+
+    Returns:
+        SpeakerProfile with multiple embeddings
+
+    Raises:
+        ValueError: If no samples pass quality check or list is empty
+    """
+    if not sample_paths:
+        raise ValueError("sample_paths_empty")
+
+    embeddings = []
+    sources = []
+    rejected_samples = []
+
+    for sample_path in sample_paths:
+        try:
+            samples, sample_rate = _load_wav_any_f32(sample_path)
+
+            # Assess quality
+            quality = _assess_sample_quality(samples, sample_rate)
+            if not quality["is_acceptable"]:
+                rejected_samples.append(
+                    {
+                        "path": str(sample_path),
+                        "reason": f"low_quality (rms={quality['rms']:.4f}, voiced={quality['voiced_ratio']:.2f})",
+                    }
+                )
+                continue
+
+            # Extract embedding
+            embedding = extract_speaker_embedding(samples, sample_rate=sample_rate, target_rate=target_rate)
+            embeddings.append(embedding)
+            sources.append(str(sample_path))
+
+        except Exception as e:
+            rejected_samples.append({"path": str(sample_path), "reason": f"error: {type(e).__name__}"})
+
+    if not embeddings:
+        raise ValueError(f"no_valid_samples (rejected: {rejected_samples})")
+
+    # Use first embedding as primary (for backward compatibility)
+    primary_embedding = embeddings[0]
+    source_summary = f"{len(embeddings)} samples: {', '.join(sources)}"
+
+    profile = SpeakerProfile(
+        embedding=primary_embedding,
+        sample_rate=target_rate,
+        created_at=time.time(),
+        source=source_summary,
+        embeddings=embeddings,
+    )
+    save_speaker_profile(profile_path, profile)
+    return profile
+
+
+def add_speaker_sample(
+    *,
+    profile_path: Path,
+    sample_path: Path,
+    min_quality_rms: float = 0.005,
+    min_quality_voiced_ratio: float = 0.3,
+) -> SpeakerProfile:
+    """Add a new sample to an existing speaker profile.
+
+    Args:
+        profile_path: Path to existing profile
+        sample_path: Path to new WAV sample
+        min_quality_rms: Minimum RMS threshold
+        min_quality_voiced_ratio: Minimum voiced ratio
+
+    Returns:
+        Updated SpeakerProfile
+
+    Raises:
+        ValueError: If profile doesn't exist or sample quality is too low
+    """
+    # Load existing profile
+    profile = load_speaker_profile(profile_path)
+    if profile is None:
+        raise ValueError("profile_not_found")
+
+    # Load and assess new sample
+    samples, sample_rate = _load_wav_any_f32(sample_path)
+    quality = _assess_sample_quality(samples, sample_rate)
+
+    if not quality["is_acceptable"]:
+        raise ValueError(
+            f"sample_quality_too_low (rms={quality['rms']:.4f}, voiced={quality['voiced_ratio']:.2f})"
+        )
+
+    # Extract embedding
+    embedding = extract_speaker_embedding(samples, sample_rate=sample_rate, target_rate=profile.sample_rate)
+
+    # Add to embeddings list
+    updated_embeddings = list(profile.embeddings) if profile.embeddings else [profile.embedding]
+    updated_embeddings.append(embedding)
+
+    # Update profile
+    updated_profile = SpeakerProfile(
+        embedding=profile.embedding,  # Keep original primary embedding
+        sample_rate=profile.sample_rate,
+        created_at=profile.created_at,
+        source=f"{profile.source} + {sample_path}",
+        feature_version=profile.feature_version,
+        embeddings=updated_embeddings,
+    )
+
+    save_speaker_profile(profile_path, updated_profile)
+    return updated_profile
+
+
