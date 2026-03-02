@@ -787,7 +787,7 @@ class TrayApp:
         def _on_gtk_thread() -> bool:
             dialog = Gtk.Dialog(title="声纹注册向导", transient_for=None, flags=0)
             dialog.set_modal(True)
-            dialog.set_default_size(600, 400)
+            dialog.set_default_size(650, 500)
             dialog.set_keep_above(True)
             content = dialog.get_content_area()
             content.set_border_width(12)
@@ -871,14 +871,14 @@ class TrayApp:
                         "欢迎使用声纹注册向导！\n\n"
                         "您需要录制3个语音样本来创建声纹档案。\n"
                         "每个样本建议录制5-10秒，请在安静环境中清晰朗读参考文本。\n\n"
-                        "点击「开始录制」开始第一个样本。"
+                        "点击「下一步」开始。"
                     )
                     reference_frame.hide()
                     status_label.set_text("准备就绪")
                     progress_label.set_text("进度: 0/3 样本")
-                    btn_record.set_label("开始录制")
-                    btn_record.set_sensitive(True)
-                    btn_next.set_sensitive(False)
+                    btn_record.set_visible(False)
+                    btn_next.set_label("下一步")
+                    btn_next.set_sensitive(True)
                 elif 1 <= step <= 3:
                     instruction_label.set_text(
                         f"样本 {step}/3\n\n"
@@ -890,8 +890,10 @@ class TrayApp:
                     reference_frame.show_all()
                     status_label.set_text("等待录制")
                     progress_label.set_text(f"进度: {len(samples)}/3 样本")
+                    btn_record.set_visible(True)
                     btn_record.set_label("开始录制")
                     btn_record.set_sensitive(not wizard_state.get("recording", False))
+                    btn_next.set_label("下一步")
                     btn_next.set_sensitive(len(samples) >= step)
                 elif step == 4:
                     instruction_label.set_text(
