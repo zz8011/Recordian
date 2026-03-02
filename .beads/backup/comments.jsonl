@@ -86,3 +86,5 @@
 {"author":"zz8011","created_at":"2026-03-02T14:15:02Z","id":86,"issue_id":"Recordian-kcr.8","text":"DECISION: 经过检查，状态锁保护已经完整实现。所有对 owner_active 的读取都通过 _get_state() 进行（1205行、1332行），所有写入都通过 _set_state() 进行（1187行）。局部变量 owner_active 仅在单个线程内使用，不存在竞态条件。无需额外修改。"}
 {"author":"zz8011","created_at":"2026-03-02T14:15:55Z","id":87,"issue_id":"Recordian-kcr.8","text":"PATTERN: 安全测试采用多层验证策略：1) 源码检查（inspect.getsource）验证关键代码存在 2) 行为测试验证实际功能 3) 集成测试验证端到端效果。这确保了即使代码重构，安全修复也不会丢失。"}
 {"author":"zz8011","created_at":"2026-03-02T14:18:53Z","id":88,"issue_id":"Recordian-kcr.8","text":"LEARNED: 测试结果显示 384/395 测试通过。11个失败的测试都是已存在的问题（ASR集成测试和并发测试），与本次安全修复无关。所有新增的安全测试（9个）全部通过，验证了修复的正确性。"}
+{"author":"zz8011","created_at":"2026-03-02T15:17:54Z","id":89,"issue_id":"Recordian-5uh","text":"FACT: 用户报告键盘 PTT 模式工作正常，说明麦克风和 ASR 都正常，问题确实在语音唤醒服务本身"}
+{"author":"zz8011","created_at":"2026-03-02T15:21:28Z","id":90,"issue_id":"Recordian-5uh","text":"FACT: 用户确认语音唤醒服务能正常启动，但启动后说话没有反应。结合 PTT 模式正常，问题锁定在：1) 声纹验证阈值太高 (0.72) 2) 关键词检测阈值太高 (0.12) 3) 音频流没有正确传递给 sherpa_onnx spotter"}
