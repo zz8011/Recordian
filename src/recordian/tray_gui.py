@@ -812,6 +812,23 @@ class TrayApp:
             instruction_label.set_xalign(0.0)
             content.pack_start(instruction_label, False, False, 8)
 
+            # Reference text area (hidden initially)
+            reference_frame = Gtk.Frame(label="参考文本")
+            reference_frame.set_no_show_all(True)
+            scroller = Gtk.ScrolledWindow()
+            scroller.set_hexpand(True)
+            scroller.set_vexpand(True)
+            scroller.set_min_content_height(120)
+            reference_text_view = Gtk.TextView()
+            reference_text_view.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
+            reference_text_view.set_editable(False)
+            reference_text_view.set_cursor_visible(False)
+            reference_text_view.set_left_margin(8)
+            reference_text_view.set_right_margin(8)
+            scroller.add(reference_text_view)
+            reference_frame.add(scroller)
+            content.pack_start(reference_frame, True, True, 8)
+
             status_label = Gtk.Label()
             status_label.set_xalign(0.0)
             status_label.set_opacity(0.78)
@@ -837,13 +854,26 @@ class TrayApp:
                 step = int(wizard_state.get("step", 0))
                 samples = wizard_state.get("samples", [])
 
+                # Reference texts for each sample
+                reference_texts = [
+                    "你好，我是 Recordian 的主人，现在在进行主人声纹录制测试。\n"
+                    "今天的语音输入体验很顺畅，我希望在嘈杂环境中依然准确唤醒。",
+
+                    "请把识别结果发送到当前光标位置，并保持自然停顿与正常语速。\n"
+                    "Recordian helps me code faster across different windows and tasks.",
+
+                    "声纹识别技术可以有效区分不同说话人的声音特征。\n"
+                    "通过多样本注册，系统能够更准确地识别主人的声音。"
+                ]
+
                 if step == 0:
                     instruction_label.set_text(
                         "欢迎使用声纹注册向导！\n\n"
                         "您需要录制3个语音样本来创建声纹档案。\n"
-                        "每个样本建议录制5-10秒，请在安静环境中清晰朗读。\n\n"
+                        "每个样本建议录制5-10秒，请在安静环境中清晰朗读参考文本。\n\n"
                         "点击「开始录制」开始第一个样本。"
                     )
+                    reference_frame.hide()
                     status_label.set_text("准备就绪")
                     progress_label.set_text("进度: 0/3 样本")
                     btn_record.set_label("开始录制")
@@ -852,9 +882,12 @@ class TrayApp:
                 elif 1 <= step <= 3:
                     instruction_label.set_text(
                         f"样本 {step}/3\n\n"
-                        "点击「开始录制」，然后清晰朗读任意内容（建议5-10秒）。\n"
-                        "录制完成后点击「停止录制」。"
+                        "请按照下方参考文本朗读并录制。\n"
+                        "点击「开始录制」，朗读完成后点击「停止录制」。"
                     )
+                    # Show reference text
+                    reference_text_view.get_buffer().set_text(reference_texts[step - 1])
+                    reference_frame.show_all()
                     status_label.set_text("等待录制")
                     progress_label.set_text(f"进度: {len(samples)}/3 样本")
                     btn_record.set_label("开始录制")
@@ -866,6 +899,7 @@ class TrayApp:
                         "已成功录制3个样本并创建声纹档案。\n"
                         "声纹验证功能已自动启用。"
                     )
+                    reference_frame.hide()
                     status_label.set_text("注册成功")
                     progress_label.set_text("进度: 3/3 样本 ✓")
                     btn_record.set_visible(False)
