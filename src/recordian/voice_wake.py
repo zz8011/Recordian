@@ -419,7 +419,9 @@ class VoiceWakeService:
         owner_verify_enabled = bool(getattr(self.runtime, "owner_verify_enabled", False))
         owner_threshold = min(0.99, max(0.0, float(getattr(self.runtime, "owner_threshold", 0.72))))
         owner_window_s = max(0.6, float(getattr(self.runtime, "owner_window_s", 1.6)))
-        owner_embedding: list[float] | None = None
+        owner_noise_suppression = int(getattr(self.runtime, "owner_noise_suppression", 1))
+        owner_noise_suppression = max(0, min(2, owner_noise_suppression))  # Clamp to 0-2
+        owner_embeddings: list[list[float]] | None = None
         _extract_speaker_embedding = None
         _cosine_similarity = None
         if owner_verify_enabled:
@@ -446,8 +448,19 @@ class VoiceWakeService:
                 if profile is None:
                     owner_verify_enabled = False
                     self._emit({"message": "voice_wake_owner_verify_disabled: profile_not_found"})
+                elif profile.feature_version != 2:
+                    owner_verify_enabled = False
+                    self._emit(
+                        {
+                            "message": (
+                                f"voice_wake_owner_verify_disabled: profile_version_mismatch "
+                                f"(expected=2, got={profile.feature_version}). "
+                                "Please re-enroll owner profile with current version."
+                            )
+                        }
+                    )
                 else:
-                    owner_embedding = list(profile.embedding)
+                    owner_embeddings = list(profile.embeddings) if profile.embeddings else [profile.embedding]
                     _extract_speaker_embedding = extract_speaker_embedding
                     _cosine_similarity = cosine_similarity
                     self._emit(
@@ -456,6 +469,8 @@ class VoiceWakeService:
                                 "voice_wake_owner_verify_enabled"
                                 f" threshold={owner_threshold:.2f}"
                                 f" window_s={owner_window_s:.2f}"
+                                f" samples={len(owner_embeddings)}"
+                                f" noise_suppression={owner_noise_suppression}"
                             )
                         }
                     )
@@ -469,7 +484,7 @@ class VoiceWakeService:
         if owner_verify_enabled:
             from collections import deque
 
-            owner_audio_chunks = deque()
+            owner_audio_chunks = deque(maxlen=100)
 
         self._emit({"message": "voice_wake_ready"})
         try:
@@ -504,7 +519,7 @@ class VoiceWakeService:
 
                     if (
                         owner_verify_enabled
-                        and owner_embedding is not None
+                        and owner_embeddings is not None
                         and _extract_speaker_embedding is not None
                         and _cosine_similarity is not None
                         and owner_audio_chunks is not None
@@ -520,8 +535,13 @@ class VoiceWakeService:
                                 verify_samples,
                                 sample_rate=self.model.sample_rate,
                                 target_rate=self.model.sample_rate,
+                                noise_suppression=owner_noise_suppression,
                             )
-                            similarity = float(_cosine_similarity(candidate_embedding, owner_embedding))
+                            # Use max similarity strategy: compare with all enrolled samples
+                            similarity = max(
+                                float(_cosine_similarity(candidate_embedding, owner_emb))
+                                for owner_emb in owner_embeddings
+                            )
                         except Exception as exc:  # noqa: BLE001
                             self._emit({"message": f"voice_wake_rejected_speaker: feature_error={type(exc).__name__}"})
                             continue

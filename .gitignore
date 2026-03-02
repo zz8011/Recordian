@@ -55,3 +55,6 @@ htmlcov/
 # Dolt database files (added by bd init)
 .dolt/
 *.db
+
+# Beads (ephemeral task data)
+.beads/
