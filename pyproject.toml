@@ -25,6 +25,7 @@ recordian = "recordian.cli:main"
 recordian-linux-dictate = "recordian.linux_dictate:main"
 recordian-hotkey-dictate = "recordian.hotkey_dictate:main"
 recordian-tray = "recordian.tray_gui:main"
+recordian-wake-diagnose = "recordian.wake_diagnose:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
