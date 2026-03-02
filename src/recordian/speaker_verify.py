@@ -312,9 +312,22 @@ def save_speaker_profile(path: Path, profile: SpeakerProfile) -> None:
     if profile.embeddings and len(profile.embeddings) > 1:
         payload["embeddings"] = [[float(v) for v in emb] for emb in profile.embeddings]
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-    # Set file permissions to 0o600 (owner read/write only) for security
-    path.chmod(0o600)
+
+    # Set umask to ensure file is created with secure permissions (0o600)
+    # This prevents TOCTOU vulnerability between file creation and chmod
+    import os
+    old_umask = os.umask(0o077)  # Ensure only owner can read/write
+    try:
+        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        # Explicitly set permissions (redundant but ensures correctness)
+        try:
+            path.chmod(0o600)
+        except (OSError, NotImplementedError) as e:
+            # Windows doesn't support Unix permissions, log warning but don't fail
+            import logging
+            logging.warning(f"Could not set secure permissions on {path}: {e}")
+    finally:
+        os.umask(old_umask)  # Restore original umask
 
 
 def load_speaker_profile(path: Path) -> SpeakerProfile | None:
