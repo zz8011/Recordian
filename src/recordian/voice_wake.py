@@ -419,6 +419,8 @@ class VoiceWakeService:
         owner_verify_enabled = bool(getattr(self.runtime, "owner_verify_enabled", False))
         owner_threshold = min(0.99, max(0.0, float(getattr(self.runtime, "owner_threshold", 0.72))))
         owner_window_s = max(0.6, float(getattr(self.runtime, "owner_window_s", 1.6)))
+        owner_noise_suppression = int(getattr(self.runtime, "owner_noise_suppression", 1))
+        owner_noise_suppression = max(0, min(2, owner_noise_suppression))  # Clamp to 0-2
         owner_embeddings: list[list[float]] | None = None
         _extract_speaker_embedding = None
         _cosine_similarity = None
@@ -468,6 +470,7 @@ class VoiceWakeService:
                                 f" threshold={owner_threshold:.2f}"
                                 f" window_s={owner_window_s:.2f}"
                                 f" samples={len(owner_embeddings)}"
+                                f" noise_suppression={owner_noise_suppression}"
                             )
                         }
                     )
@@ -532,6 +535,7 @@ class VoiceWakeService:
                                 verify_samples,
                                 sample_rate=self.model.sample_rate,
                                 target_rate=self.model.sample_rate,
+                                noise_suppression=owner_noise_suppression,
                             )
                             # Use max similarity strategy: compare with all enrolled samples
                             similarity = max(

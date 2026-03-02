@@ -130,12 +130,65 @@ def _assess_sample_quality(samples: Any, sample_rate: int) -> dict[str, float]:
     }
 
 
+def _estimate_noise_floor(data: Any, sample_rate: int, window_s: float = 0.5) -> float:
+    """Estimate noise floor from initial audio segment.
+
+    Args:
+        data: Normalized audio samples (float32, mono)
+        sample_rate: Sample rate in Hz
+        window_s: Duration of initial segment to analyze (default 0.5s)
+
+    Returns:
+        Estimated noise floor RMS value
+    """
+    import numpy as np
+
+    window_samples = int(sample_rate * window_s)
+    if data.size < window_samples:
+        window_samples = data.size
+
+    # Analyze initial segment
+    initial_segment = data[:window_samples]
+
+    # Calculate frame-level RMS
+    frame_len = 400
+    hop = 160
+    rms_values = []
+
+    for i in range(0, len(initial_segment) - frame_len, hop):
+        frame = initial_segment[i : i + frame_len]
+        frame_rms = float(np.sqrt(np.mean(frame * frame)))
+        rms_values.append(frame_rms)
+
+    if not rms_values:
+        return 0.005  # Default fallback
+
+    # Use 10th percentile as noise floor estimate (more conservative)
+    noise_floor = float(np.percentile(rms_values, 10))
+    return max(0.003, min(0.02, noise_floor))  # Clamp to reasonable range
+
+
 def extract_speaker_embedding(
     samples: Any,
     *,
     sample_rate: int,
     target_rate: int = 16000,
+    noise_suppression: int = 1,
 ) -> list[float]:
+    """Extract speaker embedding from audio samples.
+
+    Args:
+        samples: Audio samples (numpy array or compatible)
+        sample_rate: Sample rate in Hz
+        target_rate: Target sample rate (default 16000)
+        noise_suppression: Noise suppression level
+            0 = disabled (fixed threshold 0.01)
+            1 = standard (adaptive threshold, noise_floor * 2.5)
+            2 = aggressive (adaptive threshold, noise_floor * 3.5)
+
+    Returns:
+        Normalized embedding vector (49 dimensions)
+    """
     import numpy as np
 
     if sample_rate <= 0 or target_rate <= 0:
@@ -156,6 +209,16 @@ def extract_speaker_embedding(
     if data.size < min_samples:
         raise ValueError("audio_too_short")
 
+    # Determine RMS threshold based on noise suppression level
+    if noise_suppression == 0:
+        rms_threshold = 0.01  # Fixed threshold (legacy behavior)
+    else:
+        noise_floor = _estimate_noise_floor(data, target_rate)
+        if noise_suppression == 1:
+            rms_threshold = noise_floor * 2.5  # Standard
+        else:  # noise_suppression == 2
+            rms_threshold = noise_floor * 3.5  # Aggressive
+
     frame_len = max(200, int(target_rate * 0.025))
     hop = max(80, int(target_rate * 0.010))
     n_fft = 512
@@ -164,16 +227,34 @@ def extract_speaker_embedding(
     window = np.hanning(frame_len).astype(np.float32)
 
     spectra = []
+    total_frames = 0
     for start in range(0, data.size - frame_len + 1, hop):
         frame = data[start : start + frame_len]
+        total_frames += 1
         rms = float(np.sqrt(np.mean(frame * frame)))
-        if rms < 0.01:
+        if rms < rms_threshold:
             continue
         # Apply pre-emphasis to enhance high-frequency components
         frame = _apply_preemphasis(frame, coeff=0.97)
         spectrum = np.fft.rfft(frame * window, n=n_fft)
         power = np.abs(spectrum).astype(np.float32) ** 2
         spectra.append(np.log1p(power[1:]))  # drop DC
+
+    # Ensure minimum 30% of frames are retained to avoid over-suppression
+    min_frames = max(1, int(total_frames * 0.3))
+    if len(spectra) < min_frames:
+        # Fallback: re-extract with lower threshold
+        spectra = []
+        fallback_threshold = rms_threshold * 0.5
+        for start in range(0, data.size - frame_len + 1, hop):
+            frame = data[start : start + frame_len]
+            rms = float(np.sqrt(np.mean(frame * frame)))
+            if rms < fallback_threshold:
+                continue
+            frame = _apply_preemphasis(frame, coeff=0.97)
+            spectrum = np.fft.rfft(frame * window, n=n_fft)
+            power = np.abs(spectrum).astype(np.float32) ** 2
+            spectra.append(np.log1p(power[1:]))
 
     if not spectra:
         raise ValueError("no_voiced_frame")
