@@ -30,3 +30,12 @@
 {"created_at":"2026-03-02T08:11:10Z","created_by":"zz8011","depends_on_id":"Recordian-njl","issue_id":"Recordian-njl.1","type":"parent-child"}
 {"created_at":"2026-03-02T08:11:12Z","created_by":"zz8011","depends_on_id":"Recordian-njl","issue_id":"Recordian-njl.2","type":"parent-child"}
 {"created_at":"2026-03-02T08:11:46Z","created_by":"zz8011","depends_on_id":"Recordian-njl.1","issue_id":"Recordian-njl.2","type":"blocks"}
+{"created_at":"2026-03-02T08:11:48Z","created_by":"zz8011","depends_on_id":"Recordian-njl","issue_id":"Recordian-njl.3","type":"parent-child"}
+{"created_at":"2026-03-02T08:12:22Z","created_by":"zz8011","depends_on_id":"Recordian-njl.2","issue_id":"Recordian-njl.3","type":"blocks"}
+{"created_at":"2026-03-02T08:11:50Z","created_by":"zz8011","depends_on_id":"Recordian-njl","issue_id":"Recordian-njl.4","type":"parent-child"}
+{"created_at":"2026-03-02T08:12:24Z","created_by":"zz8011","depends_on_id":"Recordian-njl","issue_id":"Recordian-njl.5","type":"parent-child"}
+{"created_at":"2026-03-02T08:12:28Z","created_by":"zz8011","depends_on_id":"Recordian-njl.2","issue_id":"Recordian-njl.5","type":"blocks"}
+{"created_at":"2026-03-02T08:12:26Z","created_by":"zz8011","depends_on_id":"Recordian-njl","issue_id":"Recordian-njl.6","type":"parent-child"}
+{"created_at":"2026-03-02T08:12:28Z","created_by":"zz8011","depends_on_id":"Recordian-njl.3","issue_id":"Recordian-njl.6","type":"blocks"}
+{"created_at":"2026-03-02T08:12:28Z","created_by":"zz8011","depends_on_id":"Recordian-njl.4","issue_id":"Recordian-njl.6","type":"blocks"}
+{"created_at":"2026-03-02T08:12:29Z","created_by":"zz8011","depends_on_id":"Recordian-njl.5","issue_id":"Recordian-njl.6","type":"blocks"}
