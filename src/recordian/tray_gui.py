@@ -854,16 +854,22 @@ class TrayApp:
                 step = int(wizard_state.get("step", 0))
                 samples = wizard_state.get("samples", [])
 
-                # Reference texts for each sample
+                # Reference texts for each sample - designed to capture different voice characteristics
                 reference_texts = [
-                    "你好，我是 Recordian 的主人，现在在进行主人声纹录制测试。\n"
-                    "今天的语音输入体验很顺畅，我希望在嘈杂环境中依然准确唤醒。",
+                    # Sample 1: Natural conversational tone, mixed Chinese/English
+                    "你好，我是这台电脑的主人。今天天气不错，我正在测试 Recordian 的声纹识别功能。\n"
+                    "I use voice input every day for coding and writing. "
+                    "希望系统能够准确识别我的声音，即使在有背景噪音的环境中。",
 
-                    "请把识别结果发送到当前光标位置，并保持自然停顿与正常语速。\n"
-                    "Recordian helps me code faster across different windows and tasks.",
+                    # Sample 2: Clear enunciation, technical content, numbers
+                    "现在是第二段录音。请将识别结果发送到光标位置，保持自然的语速和停顿。\n"
+                    "我的工作涉及编程、文档编写和邮件回复。常用的编程语言包括 Python、JavaScript 和 TypeScript。\n"
+                    "今天的日期是 2025 年，版本号是 3.14.159。",
 
-                    "声纹识别技术可以有效区分不同说话人的声音特征。\n"
-                    "通过多样本注册，系统能够更准确地识别主人的声音。"
+                    # Sample 3: Varied pitch and emotion, questions and statements
+                    "这是最后一段测试录音。声纹识别技术真的很神奇！它能区分不同人的声音特征吗？\n"
+                    "当然可以。通过分析音色、音调、语速和发音习惯，系统可以建立独特的声纹模型。\n"
+                    "完成注册后，只有我的声音才能激活语音输入功能。"
                 ]
 
                 if step == 0:
