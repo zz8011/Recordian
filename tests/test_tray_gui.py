@@ -1,19 +1,18 @@
-import json
 from pathlib import Path
 
+from recordian.backend_manager import parse_backend_event_line
+from recordian.config import ConfigManager
 from recordian.tray_gui import (
-    _parse_bool,
     _blend_hex,
     _export_auto_lexicon_db,
     _hex_with_alpha,
     _import_auto_lexicon_db,
     _overlay_hide_delay_seconds,
+    _parse_bool,
     _sqlite_backup,
     _truncate,
 )
 from recordian.waveform_renderer import WaveformRenderer
-from recordian.backend_manager import parse_backend_event_line
-from recordian.config import ConfigManager
 
 
 def test_parse_backend_event_line_json_only() -> None:
@@ -60,6 +59,7 @@ def test_overlay_hide_delay_seconds_matches_renderer_constants() -> None:
 def test_tray_gui_no_mktemp() -> None:
     """tray_gui.py 不应使用不安全的 tempfile.mktemp()"""
     import inspect
+
     from recordian import tray_gui
     source = inspect.getsource(tray_gui)
     assert "mktemp(" not in source, "tray_gui.py 仍在使用不安全的 mktemp()"
@@ -68,6 +68,7 @@ def test_tray_gui_no_mktemp() -> None:
 def test_tray_app_no_legacy_quick_menu_debug_print() -> None:
     """TrayApp 不应残留旧 quick menu 调试语句"""
     import inspect
+
     from recordian.tray_gui import TrayApp
     source = inspect.getsource(TrayApp)
     assert "open_quick_menu called" not in source

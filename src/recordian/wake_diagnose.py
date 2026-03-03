@@ -157,9 +157,9 @@ def check_wake_config(config: dict[str, Any]) -> None:
         if profile_path:
             profile = Path(profile_path).expanduser()
             if profile.exists():
-                print(f"    ✓ 声纹配置文件存在")
+                print("    ✓ 声纹配置文件存在")
             else:
-                print(f"    ✗ 声纹配置文件不存在")
+                print("    ✗ 声纹配置文件不存在")
 
     keyword_score = config.get("wake_keyword_score", 1.5)
     keyword_threshold = config.get("wake_keyword_threshold", 0.12)

@@ -1,8 +1,6 @@
 """测试 CloudLLMRefiner 云端精炼器"""
 from __future__ import annotations
 
-import pytest
-
 
 class TestCloudLLMRefinerInit:
     """测试 CloudLLMRefiner 初始化"""

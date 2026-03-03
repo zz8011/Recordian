@@ -2,10 +2,7 @@
 from __future__ import annotations
 
 import logging
-import tempfile
 from pathlib import Path
-
-import pytest
 
 from recordian.logging_config import (
     configure_from_env,

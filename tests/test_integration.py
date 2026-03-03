@@ -4,14 +4,11 @@
 """
 from __future__ import annotations
 
-import tempfile
 import time
 from pathlib import Path
-from unittest.mock import Mock, patch
 
 import pytest
 
-from recordian.backend_manager import BackendManager
 from recordian.config import ConfigManager
 from recordian.models import ASRResult
 from recordian.preset_manager import PresetManager
@@ -165,8 +162,8 @@ class TestErrorRecovery:
     def test_asr_failure_recovery(self) -> None:
         """测试 ASR 失败恢复"""
         # 模拟 ASR 失败
-        with pytest.raises(Exception):
-            raise Exception("ASR failed")
+        with pytest.raises(ValueError):
+            raise ValueError("ASR failed")
 
         # 验证可以继续处理
         asr_result = ASRResult(text="fallback text", confidence=0.0)

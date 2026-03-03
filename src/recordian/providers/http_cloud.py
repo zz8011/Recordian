@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 import base64
-import json
 from pathlib import Path
 
-from .base import ASRProvider, _estimate_english_ratio
 from ..models import ASRResult
+from .base import ASRProvider, _estimate_english_ratio
 
 
 class HttpCloudProvider(ASRProvider):
@@ -44,8 +43,10 @@ class HttpCloudProvider(ASRProvider):
 
         try:
             import requests
-        except ImportError:
-            raise ImportError("requests library is required for HttpCloudProvider. Install with: pip install requests")
+        except ImportError as exc:
+            raise ImportError(
+                "requests library is required for HttpCloudProvider. Install with: pip install requests"
+            ) from exc
 
         audio_data = wav_path.read_bytes()
         payload = {

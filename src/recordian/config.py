@@ -9,7 +9,6 @@ from typing import Any
 
 from .exceptions import ConfigError
 
-
 # 配置版本号
 CONFIG_VERSION = "1.0"
 
@@ -184,9 +183,9 @@ class ConfigManager:
             return migrated
 
         except json.JSONDecodeError as e:
-            raise ConfigError(f"配置文件 JSON 格式错误: {e}")
+            raise ConfigError(f"配置文件 JSON 格式错误: {e}") from e
         except OSError as e:
-            raise ConfigError(f"读取配置文件失败: {e}")
+            raise ConfigError(f"读取配置文件失败: {e}") from e
 
     @staticmethod
     def save(path: Path | str, config: dict[str, Any]) -> None:
@@ -219,7 +218,7 @@ class ConfigManager:
                 encoding="utf-8"
             )
         except OSError as e:
-            raise ConfigError(f"保存配置文件失败: {e}")
+            raise ConfigError(f"保存配置文件失败: {e}") from e
 
     @staticmethod
     def backup(path: Path | str, max_backups: int = 5) -> Path | None:

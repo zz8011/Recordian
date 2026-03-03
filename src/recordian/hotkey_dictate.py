@@ -1,33 +1,32 @@
 from __future__ import annotations
 
 import argparse
-from concurrent.futures import ThreadPoolExecutor, TimeoutError
-from dataclasses import asdict
 import enum
 import json
-from pathlib import Path
 import threading
-from tempfile import TemporaryDirectory
 import time
-from typing import Any, Callable
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor, TimeoutError
+from dataclasses import asdict
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from typing import Any
 
 from recordian.config import ConfigManager
 
-from .auto_lexicon import AutoLexicon
-from .audio_feedback import default_sound_off_path, default_sound_on_path, play_sound
 from .audio import read_wav_mono_f32, write_wav_mono_f32
-from .exceptions import ASRError, AudioError, CommitError, RefinerError
+from .audio_feedback import default_sound_off_path, default_sound_on_path, play_sound
+from .auto_lexicon import AutoLexicon
 from .linux_commit import get_focused_window_id, resolve_committer, send_hard_enter
-from .linux_notify import Notification, resolve_notifier
 from .linux_dictate import (
     add_dictate_args,
     choose_record_backend,
-    create_committer,
     create_provider,
     run_dictate_once,
     start_record_process,
     stop_record_process,
 )
+from .linux_notify import Notification, resolve_notifier
 from .runtime_deps import ensure_ffmpeg_available
 from .voice_wake import VoiceWakeService, make_wake_model_config, make_wake_runtime_config, normalize_tokens_type
 
@@ -177,7 +176,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Wake-word name, repeatable (e.g., 小二/小三/乐乐)",
     )
     parser.add_argument("--wake-cooldown-s", type=float, default=3.0, help="Cooldown after wake trigger")
-    parser.add_argument("--wake-auto-stop-silence-s", type=float, default=1.0, help="Auto-stop after silence")
+    parser.add_argument("--wake-auto-stop-silence-s", type=float, default=1.5, help="Auto-stop after silence")
     parser.add_argument(
         "--wake-owner-silence-extend-s",
         type=float,
@@ -284,7 +283,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--wake-semantic-end-silence-s",
         type=float,
-        default=1.0,
+        default=1.5,
         help="Auto-stop if semantic probe sees no text growth for this duration",
     )
     parser.add_argument(
@@ -312,7 +311,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--wake-num-threads", type=int, default=2)
     parser.add_argument("--wake-sample-rate", type=int, default=16000)
     parser.add_argument("--wake-keyword-score", type=float, default=1.5)
-    parser.add_argument("--wake-keyword-threshold", type=float, default=0.25)
+    parser.add_argument("--wake-keyword-threshold", type=float, default=0.08)
     parser.add_argument(
         "--enable-auto-lexicon",
         action=argparse.BooleanOptionalAction,
@@ -354,20 +353,21 @@ def build_hotkey_handlers(
     on_busy: Callable[[dict[str, object]], None],
 ) -> tuple[Callable[[], None], Callable[[], None], threading.Event]:
     """Create trigger and exit handlers for hotkey events."""
-    lock = threading.RLock()
+    state_lock = threading.Lock()
+    run_lock = threading.Lock()
     stop_event = threading.Event()
     cooldown_s = max(0.0, args.cooldown_ms / 1000.0)
     state = {"last_trigger": 0.0}
 
     def _run_once() -> None:
         now = time.monotonic()
-        # 使用锁保护状态读写，避免竞态条件
-        with lock:
+        # 使用独立状态锁保护节流读写，避免与运行锁互相干扰
+        with state_lock:
             if now - state["last_trigger"] < cooldown_s:
                 return
             state["last_trigger"] = now
 
-        if not lock.acquire(blocking=False):
+        if not run_lock.acquire(blocking=False):
             on_busy({"event": "busy", "reason": "dictation_in_progress"})
             return
 
@@ -380,7 +380,7 @@ def build_hotkey_handlers(
                 on_error({"event": "error", "error": f"{type(exc).__name__}: {exc}"})
             finally:
                 _play_global_cue(args, "off")
-                lock.release()
+                run_lock.release()
 
         threading.Thread(target=_worker, daemon=True).start()
 
@@ -924,8 +924,8 @@ def build_ptt_hotkey_handlers(
 
             def _level_worker(stop: threading.Event = level_stop) -> None:
                 try:
-                    import sounddevice as sd
                     import numpy as np
+                    import sounddevice as sd
 
                     # 音量计动态参数：适配普通语音输入，避免只有大音量才触发动画。
                     noise_floor = 0.0015
@@ -1027,9 +1027,13 @@ def build_ptt_hotkey_handlers(
 
                             from .speaker_verify import (
                                 cosine_similarity as _cosine_similarity,
+                            )
+                            from .speaker_verify import (
                                 enroll_speaker_profile_from_wav,
-                                extract_speaker_embedding as _extract_speaker_embedding,
                                 load_speaker_profile,
+                            )
+                            from .speaker_verify import (
+                                extract_speaker_embedding as _extract_speaker_embedding,
                             )
 
                             profile_path = Path(
@@ -1286,6 +1290,7 @@ def build_ptt_hotkey_handlers(
 
                     with sd.InputStream(device=device_id, samplerate=sample_rate, channels=1, blocksize=1024, callback=_cb):
                         while not stop.wait(0.05):
+                            # Only auto-stop for voice wake sessions, not hotkey mode
                             if not bool(_get_state("voice_session_active")):
                                 continue
                             if bool(_get_state("voice_auto_stopping")):
@@ -1296,7 +1301,7 @@ def build_ptt_hotkey_handlers(
                             if semantic_enabled:
                                 no_speech_timeout_s = max(0.0, float(getattr(args, "wake_no_speech_timeout_s", 2.0)))
                                 min_speech_s = max(0.0, float(getattr(args, "wake_min_speech_s", 0.5)))
-                                acoustic_silence_s = max(0.0, float(getattr(args, "wake_auto_stop_silence_s", 1.0)))
+                                acoustic_silence_s = max(0.0, float(getattr(args, "wake_auto_stop_silence_s", 1.5)))
                                 semantic_has_text = bool(_get_state("voice_semantic_has_text"))
                                 semantic_last_ts = float(_get_state("voice_semantic_last_text_ts"))
                                 last_speech_ts = float(_get_state("voice_last_speech_ts"))
@@ -1330,7 +1335,7 @@ def build_ptt_hotkey_handlers(
                                 continue
 
                             # Speaker-assisted VAD: adjust silence threshold based on owner status
-                            base_silence_s = max(0.0, float(getattr(args, "wake_auto_stop_silence_s", 1.0)))
+                            base_silence_s = max(0.0, float(getattr(args, "wake_auto_stop_silence_s", 1.5)))
                             owner_filter_enabled = bool(getattr(args, "wake_owner_verify", False))
 
                             if owner_filter_enabled:
@@ -1490,7 +1495,7 @@ def build_ptt_hotkey_handlers(
                             import json
                             config_path = getattr(args, 'config_path', None)
                             if config_path and Path(config_path).exists():
-                                with open(config_path, 'r', encoding='utf-8') as f:
+                                with open(config_path, encoding='utf-8') as f:
                                     current_config = json.load(f)
                                 new_preset = current_config.get('refine_preset', 'default')
                                 old_preset = getattr(args, 'refine_preset', 'default')
@@ -1705,7 +1710,7 @@ def _parse_args_with_config(parser: argparse.ArgumentParser) -> argparse.Namespa
     except Exception:
         args.wake_semantic_window_s = 1.2
     try:
-        args.wake_semantic_end_silence_s = max(0.2, float(getattr(args, "wake_semantic_end_silence_s", 1.0)))
+        args.wake_semantic_end_silence_s = max(0.2, float(getattr(args, "wake_semantic_end_silence_s", 1.5)))
     except Exception:
         args.wake_semantic_end_silence_s = 1.0
     try:
@@ -1783,7 +1788,7 @@ def _save_runtime_config(args: argparse.Namespace) -> None:
         "wake_prefix": wake_runtime.prefixes,
         "wake_name": wake_runtime.names,
         "wake_cooldown_s": getattr(args, "wake_cooldown_s", 3.0),
-        "wake_auto_stop_silence_s": getattr(args, "wake_auto_stop_silence_s", 1.0),
+        "wake_auto_stop_silence_s": getattr(args, "wake_auto_stop_silence_s", 1.5),
         "wake_min_speech_s": getattr(args, "wake_min_speech_s", 0.5),
         "wake_use_webrtcvad": getattr(args, "wake_use_webrtcvad", True),
         "wake_vad_aggressiveness": getattr(args, "wake_vad_aggressiveness", 2),
@@ -1802,9 +1807,10 @@ def _save_runtime_config(args: argparse.Namespace) -> None:
         "wake_use_semantic_gate": getattr(args, "wake_use_semantic_gate", False),
         "wake_semantic_probe_interval_s": getattr(args, "wake_semantic_probe_interval_s", 0.45),
         "wake_semantic_window_s": getattr(args, "wake_semantic_window_s", 1.2),
-        "wake_semantic_end_silence_s": getattr(args, "wake_semantic_end_silence_s", 1.0),
+        "wake_semantic_end_silence_s": getattr(args, "wake_semantic_end_silence_s", 1.5),
         "wake_semantic_min_chars": getattr(args, "wake_semantic_min_chars", 1),
         "wake_semantic_timeout_ms": getattr(args, "wake_semantic_timeout_ms", 1200),
+        "wake_provider": getattr(args, "wake_provider", "cpu"),
         "sound_on_path": getattr(args, "sound_on_path", str(_DEFAULT_SOUND_ON)),
         "sound_off_path": getattr(args, "sound_off_path", str(_DEFAULT_SOUND_OFF)),
         "wake_beep_path": getattr(args, "wake_beep_path", ""),
@@ -1814,11 +1820,11 @@ def _save_runtime_config(args: argparse.Namespace) -> None:
         "wake_tokens": getattr(args, "wake_tokens", str(_DEFAULT_WAKE_TOKENS)),
         "wake_keywords_file": getattr(args, "wake_keywords_file", ""),
         "wake_tokens_type": getattr(args, "wake_tokens_type", "ppinyin"),
-        "wake_provider": getattr(args, "wake_provider", "cpu"),
         "wake_num_threads": getattr(args, "wake_num_threads", 2),
         "wake_sample_rate": getattr(args, "wake_sample_rate", 16000),
+        "wake_energy_threshold": float(getattr(args, "wake_energy_threshold", 0.0001)),
         "wake_keyword_score": getattr(args, "wake_keyword_score", 1.5),
-        "wake_keyword_threshold": getattr(args, "wake_keyword_threshold", 0.25),
+        "wake_keyword_threshold": getattr(args, "wake_keyword_threshold", 0.08),
         "enable_auto_lexicon": getattr(args, "enable_auto_lexicon", True),
         "auto_lexicon_db": getattr(args, "auto_lexicon_db", "~/.config/recordian/auto_lexicon.db"),
         "auto_lexicon_max_hotwords": getattr(args, "auto_lexicon_max_hotwords", 40),
@@ -1908,6 +1914,7 @@ def _key_to_names(key: object, keyboard_module: Any) -> set[str]:
 def main() -> None:
     import logging
     import sys
+
     from recordian.error_tracker import get_error_tracker
 
     logger = logging.getLogger(__name__)

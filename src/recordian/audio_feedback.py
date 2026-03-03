@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from pathlib import Path
-from shutil import which
 import subprocess
 import wave
+from pathlib import Path
+from shutil import which
 
 
 def default_beep_path() -> Path:

@@ -1,10 +1,6 @@
 """热键触发集成测试"""
 from __future__ import annotations
 
-from unittest.mock import Mock, patch
-
-import pytest
-
 from recordian.hotkey_dictate import parse_hotkey_spec
 
 

@@ -1,5 +1,5 @@
-from pathlib import Path
 import argparse
+from pathlib import Path
 
 import pytest
 
@@ -148,6 +148,7 @@ def test_create_provider_does_not_fallback_to_refine_default_preset(monkeypatch)
 def test_stop_record_process_ffmpeg_uses_sigint() -> None:
     import signal
     from unittest.mock import MagicMock
+
     from recordian.linux_dictate import stop_record_process
     proc = MagicMock()
     proc.poll.return_value = None
@@ -158,6 +159,7 @@ def test_stop_record_process_ffmpeg_uses_sigint() -> None:
 def test_stop_record_process_arecord_uses_sigterm() -> None:
     import signal
     from unittest.mock import MagicMock
+
     from recordian.linux_dictate import stop_record_process
     proc = MagicMock()
     proc.poll.return_value = None
@@ -169,6 +171,7 @@ def test_stop_record_process_returns_quickly_when_process_exits() -> None:
     """进程快速退出时应立即返回，不等待完整超时"""
     import time
     from unittest.mock import MagicMock
+
     from recordian.linux_dictate import stop_record_process
 
     mock_proc = MagicMock()

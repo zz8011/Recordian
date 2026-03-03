@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from shutil import which
 import subprocess
 import sys
+from dataclasses import dataclass
+from shutil import which
 
 
 class NotifyError(RuntimeError):

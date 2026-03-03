@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 import logging
 import os
-from shutil import which
 import subprocess
 import sys
 import threading
 import time
+from dataclasses import dataclass
+from shutil import which
 
 from .exceptions import CommitError
 
@@ -646,7 +646,7 @@ def _xdotool_focus_window(window_id: int) -> None:
 
 def _run_command_with_input(cmd: list[str], text: str) -> None:
     try:
-        proc = subprocess.run(cmd, input=text, text=True, capture_output=True, check=True)
+        subprocess.run(cmd, input=text, text=True, capture_output=True, check=True)
     except FileNotFoundError as exc:
         raise CommitError(f"command not found: {cmd[0]}") from exc
     except subprocess.CalledProcessError as exc:

@@ -5,9 +5,10 @@
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 import psutil
 
@@ -259,7 +260,7 @@ class EndToEndBenchmark:
             metrics_refine.duration_ms
         )
 
-        print(f"\nEnd-to-End Pipeline:")
+        print("\nEnd-to-End Pipeline:")
         print(f"  Recording: {metrics_record.duration_ms:.2f}ms")
         print(f"  ASR: {metrics_asr.duration_ms:.2f}ms")
         print(f"  Refinement: {metrics_refine.duration_ms:.2f}ms")

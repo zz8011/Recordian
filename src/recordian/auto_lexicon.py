@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-from pathlib import Path
 import re
 import sqlite3
 import threading
 import time
-
+from pathlib import Path
 
 _ASCII_TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9_.-]{1,31}")
 _CJK_BLOCK_RE = re.compile(r"[\u4e00-\u9fff]+")
@@ -38,7 +37,6 @@ _STOPWORDS = {
     "东西",
     "进行",
     "以及",
-    "然后",
     "the",
     "and",
     "that",

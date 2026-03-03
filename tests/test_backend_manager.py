@@ -3,11 +3,8 @@ from __future__ import annotations
 
 import queue
 import subprocess
-import time
 from pathlib import Path
-from unittest.mock import MagicMock, Mock, patch
-
-import pytest
+from unittest.mock import Mock, patch
 
 from recordian.backend_manager import BackendManager, parse_backend_event_line
 

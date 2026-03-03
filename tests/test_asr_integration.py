@@ -1,9 +1,7 @@
 """ASR 识别集成测试"""
 from __future__ import annotations
 
-import tempfile
 from pathlib import Path
-from unittest.mock import Mock, patch
 
 import pytest
 
@@ -29,6 +27,10 @@ class MockASRProvider(ASRProvider):
             confidence=self.confidence,
             model_name="mock-model",
         )
+
+    @property
+    def provider_name(self) -> str:
+        return "mock"
 
     @property
     def is_cloud(self) -> bool:
@@ -128,6 +130,10 @@ class TestASRIntegration:
         # 创建会超时的 pass2 provider
         class TimeoutProvider(ASRProvider):
             @property
+            def provider_name(self) -> str:
+                return "timeout"
+
+            @property
             def is_cloud(self) -> bool:
                 return True
 
@@ -188,6 +194,10 @@ class TestASRIntegration:
 
         # 创建会抛出异常的 provider
         class ErrorProvider(ASRProvider):
+            @property
+            def provider_name(self) -> str:
+                return "error"
+
             @property
             def is_cloud(self) -> bool:
                 return False

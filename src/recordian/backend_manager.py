@@ -6,9 +6,8 @@ import queue
 import subprocess
 import sys
 import threading
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
-
 
 # 全局进程注册表
 _ACTIVE_BACKEND_PROCESSES: list[subprocess.Popen[str]] = []

@@ -9,13 +9,13 @@
 3. 脚本会在 5 秒后自动输入测试文本到微信
 """
 
+import subprocess
 import sys
 import time
-import subprocess
 
 sys.path.insert(0, 'src')
 
-from recordian.linux_commit import resolve_committer, _is_electron_window, _is_terminal_window
+from recordian.linux_commit import _is_electron_window, _is_terminal_window, resolve_committer
 
 
 def get_wechat_window_id():
@@ -81,7 +81,7 @@ def main():
 
     try:
         result = committer.commit(test_text)
-        print(f"\n✅ 输入成功！")
+        print("\n✅ 输入成功！")
         print(f"   Backend: {result.backend}")
         print(f"   Committed: {result.committed}")
         print(f"   Detail: {result.detail}")

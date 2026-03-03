@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .base import ASRProvider, _estimate_english_ratio
 from ..models import ASRResult
+from .base import ASRProvider, _estimate_english_ratio
 
 
 def _compose_qwen_context(base_context: str, hotwords: list[str], *, max_hotwords: int = 40) -> str:

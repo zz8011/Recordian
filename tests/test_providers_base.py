@@ -3,8 +3,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
 from recordian.models import ASRResult
 from recordian.providers.base import ASRProvider, _estimate_english_ratio
 

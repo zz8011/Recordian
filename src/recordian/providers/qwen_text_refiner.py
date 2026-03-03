@@ -145,7 +145,7 @@ class Qwen3TextRefiner(BaseTextRefiner):
 
         generated_ids = [
             output_ids[len(input_ids):]
-            for input_ids, output_ids in zip(model_inputs.input_ids, generated_ids)
+            for input_ids, output_ids in zip(model_inputs.input_ids, generated_ids, strict=False)
         ]
 
         response = self._tokenizer.batch_decode(generated_ids, skip_special_tokens=True)[0]
@@ -190,9 +190,9 @@ class Qwen3TextRefiner(BaseTextRefiner):
 
         model_inputs = self._tokenizer([text_input], return_tensors="pt").to(self.device)
 
-        import torch
-        from transformers import TextIteratorStreamer
         import threading
+
+        from transformers import TextIteratorStreamer
 
         # 创建流式输出器
         streamer = TextIteratorStreamer(

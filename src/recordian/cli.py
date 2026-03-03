@@ -2,13 +2,15 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 from pathlib import Path
 
 from .config import AppConfig
 from .engine import DictationEngine
 from .linux_commit import CommitError, resolve_committer
 from .providers import HttpCloudProvider
-from .realtime import RealtimeDictationEngine
+
+logger = logging.getLogger(__name__)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -50,6 +52,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     import sys
+
     from recordian.error_tracker import get_error_tracker
 
     def handle_exception(exc_type, exc_value, exc_traceback):

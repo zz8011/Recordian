@@ -1,18 +1,17 @@
 from __future__ import annotations
 
 import argparse
-from dataclasses import dataclass
 import functools
 import hashlib
-from pathlib import Path
 import re
-from shutil import which
 import subprocess
 import sys
 import threading
 import time
-from typing import Callable
-
+from collections.abc import Callable
+from dataclasses import dataclass
+from pathlib import Path
+from shutil import which
 
 EventCallback = Callable[[dict[str, object]], None]
 
@@ -207,9 +206,20 @@ def _normalize_tone_token(token: str) -> str:
         from pypinyin.contrib.tone_convert import to_normal
 
         converted = to_normal(normalized).strip().lower()
-        return converted or normalized
+        if converted:
+            return converted
     except Exception:
-        return normalized
+        pass
+
+    # Fallback when pypinyin isn't available: strip Unicode diacritics so
+    # variants like iǎo/iào are grouped under the same base token.
+    import unicodedata
+
+    stripped = "".join(
+        ch for ch in unicodedata.normalize("NFD", normalized)
+        if unicodedata.category(ch) != "Mn"
+    ).strip().lower()
+    return stripped or normalized
 
 
 @functools.lru_cache(maxsize=1)
@@ -324,7 +334,7 @@ def ensure_keywords_file(
                 tone_groups = _load_tone_variant_groups(tokens_path)
             output_lines: list[str] = []
             seen_lines: set[str] = set()
-            for phrase, row in zip(phrases, encoded):
+            for phrase, row in zip(phrases, encoded, strict=False):
                 token_items = [str(item).strip() for item in row if str(item).strip()]
                 if not token_items:
                     raise RuntimeError("empty_token_row")
@@ -599,6 +609,10 @@ class VoiceWakeService:
                         while owner_audio_samples > owner_max_samples and owner_audio_chunks:
                             owner_audio_samples -= int(owner_audio_chunks.popleft().size)
 
+                    # Energy-based VAD disabled for voice wake to avoid missing wake words
+                    # The KWS model should always run to detect wake words accurately
+                    # VAD is only used during dictation session, not during wake word detection
+
                     stream.accept_waveform(self.model.sample_rate, samples)
 
                     # Decode with iteration and timeout limits to prevent CPU spikes
@@ -697,7 +711,7 @@ def make_wake_runtime_config(args: argparse.Namespace) -> WakeRuntimeConfig:
         names=names,
         cooldown_s=float(getattr(args, "wake_cooldown_s", 3.0)),
         keyword_score=float(getattr(args, "wake_keyword_score", 1.5)),
-        keyword_threshold=float(getattr(args, "wake_keyword_threshold", 0.25)),
+        keyword_threshold=float(getattr(args, "wake_keyword_threshold", 0.08)),
         auto_name_variants=bool(getattr(args, "wake_auto_name_variants", True)),
         auto_prefix_variants=bool(getattr(args, "wake_auto_prefix_variants", True)),
         allow_name_only=bool(getattr(args, "wake_allow_name_only", True)),

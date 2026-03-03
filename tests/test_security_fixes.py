@@ -3,15 +3,13 @@ import os
 import tempfile
 from collections import deque
 from pathlib import Path
-from unittest.mock import Mock, patch
-
-import pytest
 
 
 def test_voice_wake_owner_audio_chunks_has_maxlen():
     """测试 voice_wake.py 中的 owner_audio_chunks 有 maxlen 限制"""
-    from recordian import voice_wake
     import inspect
+
+    from recordian import voice_wake
 
     source = inspect.getsource(voice_wake.VoiceWakeService._run)
     # 检查 deque(maxlen=100) 存在
@@ -20,8 +18,9 @@ def test_voice_wake_owner_audio_chunks_has_maxlen():
 
 def test_hotkey_dictate_owner_audio_chunks_has_maxlen():
     """测试 hotkey_dictate.py 中的 owner_audio_chunks 有 maxlen 限制"""
-    from recordian import hotkey_dictate
     import inspect
+
+    from recordian import hotkey_dictate
 
     source = inspect.getsource(hotkey_dictate.build_ptt_hotkey_handlers)
     # 检查 deque(maxlen=100) 存在
@@ -45,8 +44,9 @@ def test_deque_maxlen_prevents_memory_leak():
 
 def test_speaker_profile_file_permissions():
     """测试声纹文件保存时设置正确的权限 0o600"""
-    from recordian.speaker_verify import save_speaker_profile, SpeakerProfile
     import numpy as np
+
+    from recordian.speaker_verify import SpeakerProfile, save_speaker_profile
 
     with tempfile.TemporaryDirectory() as tmpdir:
         profile_path = Path(tmpdir) / "test_profile.json"
@@ -74,8 +74,9 @@ def test_speaker_profile_file_permissions():
 
 def test_speaker_profile_chmod_in_source():
     """验证 save_speaker_profile 源码中包含 chmod(0o600)"""
-    from recordian import speaker_verify
     import inspect
+
+    from recordian import speaker_verify
 
     source = inspect.getsource(speaker_verify.save_speaker_profile)
     assert "chmod(0o600)" in source or "chmod(384)" in source, "save_speaker_profile 应该调用 chmod(0o600)"
@@ -83,8 +84,9 @@ def test_speaker_profile_chmod_in_source():
 
 def test_state_lock_exists():
     """验证 hotkey_dictate 中存在状态锁"""
-    from recordian import hotkey_dictate
     import inspect
+
+    from recordian import hotkey_dictate
 
     source = inspect.getsource(hotkey_dictate.build_ptt_hotkey_handlers)
     # 检查 state_lock 的创建
@@ -93,8 +95,9 @@ def test_state_lock_exists():
 
 def test_get_set_state_use_lock():
     """验证 _get_state 和 _set_state 使用锁保护"""
-    from recordian import hotkey_dictate
     import inspect
+
+    from recordian import hotkey_dictate
 
     source = inspect.getsource(hotkey_dictate.build_ptt_hotkey_handlers)
 
@@ -108,8 +111,9 @@ def test_get_set_state_use_lock():
 
 def test_wake_owner_silence_extend_s_parameter_defined():
     """验证 wake_owner_silence_extend_s 参数已在 argparse 中定义"""
-    from recordian import hotkey_dictate
     import inspect
+
+    from recordian import hotkey_dictate
 
     source = inspect.getsource(hotkey_dictate.build_parser)
     assert "wake-owner-silence-extend-s" in source, "wake_owner_silence_extend_s 参数应该在 argparse 中定义"

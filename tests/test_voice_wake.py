@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import argparse
-from pathlib import Path
 import types
+from pathlib import Path
 
 from recordian.voice_wake import (
     build_wake_phrases,

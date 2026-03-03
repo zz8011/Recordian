@@ -25,15 +25,17 @@ def test_set_clipboard_text_prefers_xclip(monkeypatch) -> None:
 
 def test_run_command_with_input_no_dead_returncode_check() -> None:
     import inspect
+
     from recordian import linux_commit
     source = inspect.getsource(linux_commit._run_command_with_input)
-    lines = [l for l in source.split("\n") if "returncode != 0" in l]
+    lines = [line for line in source.split("\n") if "returncode != 0" in line]
     assert len(lines) == 0, f"发现死代码: {lines}"
 
 
 def test_xdotool_clipboard_committer_clears_clipboard_after_timeout(monkeypatch):
     """剪贴板应在指定超时后自动清空"""
     import time
+
     from recordian.linux_commit import XdotoolClipboardCommitter
 
     clipboard_calls: list[str] = []
@@ -62,7 +64,6 @@ def test_xdotool_clipboard_committer_clears_clipboard_after_timeout(monkeypatch)
 
 def test_clipboard_timeout_invalid_env_var_uses_default(monkeypatch):
     """无效的环境变量应使用默认值 0（禁用）"""
-    import os
     from recordian.linux_commit import resolve_committer
 
     monkeypatch.setenv("RECORDIAN_CLIPBOARD_TIMEOUT_MS", "invalid")
@@ -74,7 +75,6 @@ def test_clipboard_timeout_invalid_env_var_uses_default(monkeypatch):
 
 def test_clipboard_timeout_negative_value_uses_default(monkeypatch):
     """负数超时应使用默认值 0"""
-    import os
     from recordian.linux_commit import resolve_committer
 
     monkeypatch.setenv("RECORDIAN_CLIPBOARD_TIMEOUT_MS", "-100")
@@ -87,6 +87,7 @@ def test_clipboard_timeout_negative_value_uses_default(monkeypatch):
 def test_xdotool_clipboard_multiple_commits_cancel_previous_timer(monkeypatch):
     """快速连续调用 commit 应取消之前的定时器"""
     import time
+
     from recordian.linux_commit import XdotoolClipboardCommitter
 
     clipboard_calls: list[str] = []
@@ -168,80 +169,80 @@ def test_send_hard_enter_prefers_pynput(monkeypatch) -> None:
 def test_is_electron_window_detects_wechat(monkeypatch):
     """测试检测微信 Electron 应用"""
     from recordian.linux_commit import _is_electron_window
-    
+
     def _fake_run(cmd, **kwargs):
         result = Mock()
         result.stdout = "WM_CLASS(STRING) = \"wechat\", \"WeChatAppEx\"\n_NET_WM_NAME(UTF8_STRING) = \"微信\""
         result.returncode = 0
         return result
-    
+
     monkeypatch.setattr("recordian.linux_commit.which", lambda x: "/usr/bin/" + x)
     monkeypatch.setattr("subprocess.run", _fake_run)
-    
+
     # 清空缓存
     linux_commit._WINDOW_DETECTION_CACHE.clear()
-    
+
     assert _is_electron_window(12345) is True
 
 
 def test_is_electron_window_detects_vscode(monkeypatch):
     """测试检测 VS Code Electron 应用"""
     from recordian.linux_commit import _is_electron_window
-    
+
     def _fake_run(cmd, **kwargs):
         result = Mock()
         result.stdout = "WM_CLASS(STRING) = \"code\", \"Code\"\n_NET_WM_NAME(UTF8_STRING) = \"Visual Studio Code\""
         result.returncode = 0
         return result
-    
+
     monkeypatch.setattr("recordian.linux_commit.which", lambda x: "/usr/bin/" + x)
     monkeypatch.setattr("subprocess.run", _fake_run)
-    
+
     linux_commit._WINDOW_DETECTION_CACHE.clear()
-    
+
     assert _is_electron_window(12345) is True
 
 
 def test_is_electron_window_rejects_firefox(monkeypatch):
     """测试非 Electron 应用返回 False"""
     from recordian.linux_commit import _is_electron_window
-    
+
     def _fake_run(cmd, **kwargs):
         result = Mock()
         result.stdout = "WM_CLASS(STRING) = \"Navigator\", \"Firefox\"\n_NET_WM_NAME(UTF8_STRING) = \"Mozilla Firefox\""
         result.returncode = 0
         return result
-    
+
     monkeypatch.setattr("recordian.linux_commit.which", lambda x: "/usr/bin/" + x)
     monkeypatch.setattr("subprocess.run", _fake_run)
-    
+
     linux_commit._WINDOW_DETECTION_CACHE.clear()
-    
+
     assert _is_electron_window(12345) is False
 
 
 def test_is_electron_window_caches_result(monkeypatch):
     """测试检测结果被缓存"""
     from recordian.linux_commit import _is_electron_window
-    
+
     call_count = {"count": 0}
-    
+
     def _fake_run(cmd, **kwargs):
         call_count["count"] += 1
         result = Mock()
         result.stdout = "WM_CLASS(STRING) = \"wechat\", \"WeChatAppEx\""
         result.returncode = 0
         return result
-    
+
     monkeypatch.setattr("recordian.linux_commit.which", lambda x: "/usr/bin/" + x)
     monkeypatch.setattr("subprocess.run", _fake_run)
-    
+
     linux_commit._WINDOW_DETECTION_CACHE.clear()
-    
+
     # 第一次调用
     assert _is_electron_window(12345) is True
     assert call_count["count"] == 1
-    
+
     # 第二次调用应该使用缓存
     assert _is_electron_window(12345) is True
     assert call_count["count"] == 1
@@ -250,63 +251,63 @@ def test_is_electron_window_caches_result(monkeypatch):
 def test_is_electron_window_handles_xprop_failure(monkeypatch):
     """测试 xprop 失败时返回 False"""
     from recordian.linux_commit import _is_electron_window
-    
+
     def _fake_run(cmd, **kwargs):
         raise subprocess.TimeoutExpired(cmd, 2.0)
-    
+
     monkeypatch.setattr("recordian.linux_commit.which", lambda x: "/usr/bin/" + x)
     monkeypatch.setattr("subprocess.run", _fake_run)
-    
+
     linux_commit._WINDOW_DETECTION_CACHE.clear()
-    
+
     assert _is_electron_window(12345) is False
 
 
 def test_is_electron_window_wayland_returns_false(monkeypatch):
     """测试 Wayland 环境返回 False"""
+
     from recordian.linux_commit import _is_electron_window
-    import os
-    
+
     monkeypatch.setenv("XDG_SESSION_TYPE", "wayland")
-    
+
     linux_commit._WINDOW_DETECTION_CACHE.clear()
-    
+
     assert _is_electron_window(12345) is False
 
 
 def test_is_terminal_window_detects_gnome_terminal(monkeypatch):
     """测试检测 GNOME Terminal"""
     from recordian.linux_commit import _is_terminal_window
-    
+
     def _fake_run(cmd, **kwargs):
         result = Mock()
         result.stdout = "WM_CLASS(STRING) = \"gnome-terminal-server\", \"Gnome-terminal\""
         result.returncode = 0
         return result
-    
+
     monkeypatch.setattr("recordian.linux_commit.which", lambda x: "/usr/bin/" + x)
     monkeypatch.setattr("subprocess.run", _fake_run)
-    
+
     linux_commit._WINDOW_DETECTION_CACHE.clear()
-    
+
     assert _is_terminal_window(12345) is True
 
 
 def test_is_terminal_window_rejects_browser(monkeypatch):
     """测试非终端应用返回 False"""
     from recordian.linux_commit import _is_terminal_window
-    
+
     def _fake_run(cmd, **kwargs):
         result = Mock()
         result.stdout = "WM_CLASS(STRING) = \"Navigator\", \"Firefox\""
         result.returncode = 0
         return result
-    
+
     monkeypatch.setattr("recordian.linux_commit.which", lambda x: "/usr/bin/" + x)
     monkeypatch.setattr("subprocess.run", _fake_run)
-    
+
     linux_commit._WINDOW_DETECTION_CACHE.clear()
-    
+
     assert _is_terminal_window(12345) is False
 
 
@@ -317,17 +318,17 @@ def test_is_terminal_window_rejects_browser(monkeypatch):
 def test_resolve_committer_auto_with_electron_window(monkeypatch):
     """测试 auto 模式检测到 Electron 窗口时使用 xdotool-clipboard"""
     from recordian.linux_commit import resolve_committer
-    
+
     def _fake_is_electron(wid):
         return True
-    
+
     def _fake_is_terminal(wid):
         return False
-    
+
     monkeypatch.setattr("recordian.linux_commit.which", lambda x: "/usr/bin/" + x)
     monkeypatch.setattr("recordian.linux_commit._is_electron_window", _fake_is_electron)
     monkeypatch.setattr("recordian.linux_commit._is_terminal_window", _fake_is_terminal)
-    
+
     committer = resolve_committer("auto", target_window_id=12345)
     assert committer.backend_name == "xdotool-clipboard"
     assert committer.target_window_id == 12345
@@ -335,10 +336,10 @@ def test_resolve_committer_auto_with_electron_window(monkeypatch):
 
 def test_resolve_committer_auto_fallback_creates_fallback_chain(monkeypatch):
     """测试 auto-fallback 模式创建降级链"""
-    from recordian.linux_commit import resolve_committer, CommitterWithFallback
-    
+    from recordian.linux_commit import CommitterWithFallback, resolve_committer
+
     monkeypatch.setattr("recordian.linux_commit.which", lambda x: "/usr/bin/" + x)
-    
+
     committer = resolve_committer("auto-fallback", target_window_id=12345)
     assert isinstance(committer, CommitterWithFallback)
     assert len(committer.committers) >= 2
@@ -351,14 +352,14 @@ def test_resolve_committer_auto_fallback_creates_fallback_chain(monkeypatch):
 def test_committer_with_fallback_succeeds_on_first_try(monkeypatch):
     """测试主方式成功时不触发降级"""
     from recordian.linux_commit import CommitterWithFallback, StdoutCommitter
-    
+
     committer = CommitterWithFallback(
         committers=[
             (StdoutCommitter(), "stdout"),
         ],
         notify_on_fallback=False,
     )
-    
+
     result = committer.commit("测试")
     assert result.committed is False  # stdout 不实际提交
     assert "fallback" not in result.detail
@@ -366,20 +367,20 @@ def test_committer_with_fallback_succeeds_on_first_try(monkeypatch):
 
 def test_committer_with_fallback_falls_back_on_failure(monkeypatch):
     """测试主方式失败时自动降级"""
-    from recordian.linux_commit import (
-        CommitterWithFallback,
-        TextCommitter,
-        CommitResult,
-        StdoutCommitter,
-    )
     from recordian.exceptions import CommitError
-    
+    from recordian.linux_commit import (
+        CommitResult,
+        CommitterWithFallback,
+        StdoutCommitter,
+        TextCommitter,
+    )
+
     class FailingCommitter(TextCommitter):
         backend_name = "failing"
-        
+
         def commit(self, text: str) -> CommitResult:
             raise CommitError("Simulated failure")
-    
+
     committer = CommitterWithFallback(
         committers=[
             (FailingCommitter(), "failing-backend"),
@@ -387,7 +388,7 @@ def test_committer_with_fallback_falls_back_on_failure(monkeypatch):
         ],
         notify_on_fallback=False,
     )
-    
+
     result = committer.commit("测试")
     assert "fallback" in result.detail
     assert "2/2" in result.detail  # 第2个方式成功
@@ -395,19 +396,19 @@ def test_committer_with_fallback_falls_back_on_failure(monkeypatch):
 
 def test_committer_with_fallback_raises_on_all_failures(monkeypatch):
     """测试所有方式失败时抛出异常"""
+    from recordian.exceptions import CommitError
     from recordian.linux_commit import (
+        CommitResult,
         CommitterWithFallback,
         TextCommitter,
-        CommitResult,
     )
-    from recordian.exceptions import CommitError
-    
+
     class FailingCommitter(TextCommitter):
         backend_name = "failing"
-        
+
         def commit(self, text: str) -> CommitResult:
             raise CommitError("Simulated failure")
-    
+
     committer = CommitterWithFallback(
         committers=[
             (FailingCommitter(), "failing-1"),
@@ -415,10 +416,10 @@ def test_committer_with_fallback_raises_on_all_failures(monkeypatch):
         ],
         notify_on_fallback=False,
     )
-    
+
     try:
         committer.commit("测试")
-        assert False, "应该抛出 CommitError"
+        raise AssertionError("应该抛出 CommitError")
     except CommitError as e:
         assert "All 2 committers failed" in str(e)
 
@@ -426,9 +427,9 @@ def test_committer_with_fallback_raises_on_all_failures(monkeypatch):
 def test_committer_with_fallback_requires_at_least_one_committer():
     """测试空 committers 列表抛出异常"""
     from recordian.linux_commit import CommitterWithFallback
-    
+
     try:
         CommitterWithFallback(committers=[])
-        assert False, "应该抛出 ValueError"
+        raise AssertionError("应该抛出 ValueError")
     except ValueError as e:
         assert "at least one committer" in str(e)

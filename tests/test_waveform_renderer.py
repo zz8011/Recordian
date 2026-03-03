@@ -5,7 +5,6 @@ import os
 import queue
 import threading
 import time
-from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 
@@ -22,6 +21,7 @@ class TestWaveformRendererInit:
     def test_init_creates_basic_structure(self) -> None:
         """测试初始化创建基本结构"""
         import tkinter as tk
+
         from recordian.waveform_renderer import WaveformRenderer
 
         root = tk.Tk()
@@ -50,6 +50,7 @@ class TestWaveformRendererInit:
     def test_init_error_handling(self) -> None:
         """测试初始化错误处理"""
         import tkinter as tk
+
         from recordian.waveform_renderer import WaveformRenderer
 
         root = tk.Tk()
@@ -71,6 +72,7 @@ class TestWaveformRendererInit:
     def test_shader_compile_error_captured(self) -> None:
         """测试 shader 编译错误被捕获"""
         import tkinter as tk
+
         from recordian.waveform_renderer import WaveformRenderer
 
         root = tk.Tk()
@@ -95,6 +97,7 @@ class TestWaveformRendererCommandQueue:
     def test_command_queue_blocks_when_full(self) -> None:
         """测试命令队列满时的阻塞行为"""
         import tkinter as tk
+
         from recordian.waveform_renderer import WaveformRenderer
 
         root = tk.Tk()
@@ -124,6 +127,7 @@ class TestWaveformRendererCommandQueue:
     def test_invalid_command_ignored(self) -> None:
         """测试无效命令被忽略"""
         import tkinter as tk
+
         from recordian.waveform_renderer import WaveformRenderer
 
         root = tk.Tk()
@@ -152,6 +156,7 @@ class TestWaveformRendererThreadSafety:
     def test_thread_exit_cleanup(self) -> None:
         """测试线程异常退出时资源被正确清理"""
         import tkinter as tk
+
         from recordian.waveform_renderer import WaveformRenderer
 
         root = tk.Tk()
@@ -179,6 +184,7 @@ class TestWaveformRendererThreadSafety:
     def test_shutdown_waits_for_thread(self) -> None:
         """测试 shutdown 等待线程退出"""
         import tkinter as tk
+
         from recordian.waveform_renderer import WaveformRenderer
 
         root = tk.Tk()
@@ -219,6 +225,7 @@ class TestWaveformRendererStateTransitions:
     def test_state_transition_recording_to_processing(self) -> None:
         """测试从 recording 到 processing 的状态转换"""
         import tkinter as tk
+
         from recordian.waveform_renderer import WaveformRenderer
 
         root = tk.Tk()
@@ -247,6 +254,7 @@ class TestWaveformRendererStateTransitions:
     def test_state_transition_to_error(self) -> None:
         """测试错误状态转换"""
         import tkinter as tk
+
         from recordian.waveform_renderer import WaveformRenderer
 
         root = tk.Tk()

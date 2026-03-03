@@ -2,21 +2,23 @@ from __future__ import annotations
 
 import argparse
 import atexit
-from dataclasses import asdict, dataclass
 import json
+import logging
 import math
-from pathlib import Path
-from shutil import which
 import signal
 import subprocess
-from tempfile import TemporaryDirectory
 import time
+from dataclasses import asdict, dataclass
+from pathlib import Path
+from shutil import which
+from tempfile import TemporaryDirectory
 from typing import Any
 
-from .linux_commit import CommitError, resolve_committer, send_hard_enter
-from .providers import QwenASRProvider, HttpCloudProvider, ASRProvider
+from .linux_commit import resolve_committer, send_hard_enter
+from .providers import ASRProvider, HttpCloudProvider, QwenASRProvider
 from .runtime_deps import ensure_ffmpeg_available
 
+logger = logging.getLogger(__name__)
 
 # 全局进程注册表
 _ACTIVE_PROCESSES: list[subprocess.Popen[Any]] = []
@@ -441,6 +443,7 @@ def run_dictate_once(
 
 def main() -> None:
     import sys
+
     from recordian.error_tracker import get_error_tracker
 
     def handle_exception(exc_type, exc_value, exc_traceback):

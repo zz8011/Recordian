@@ -1,8 +1,6 @@
 """测试 BaseTextRefiner 基类功能"""
 from __future__ import annotations
 
-import pytest
-
 from recordian.providers.base_text_refiner import BaseTextRefiner
 
 
@@ -115,7 +113,6 @@ class TestUpdatePreset:
 
     def test_update_preset_success(self, tmp_path) -> None:
         """测试成功更新 preset"""
-        from recordian.preset_manager import PresetManager
 
         # 创建临时 preset
         preset_dir = tmp_path / "presets"

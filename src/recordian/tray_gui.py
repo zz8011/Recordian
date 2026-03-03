@@ -1,28 +1,24 @@
 from __future__ import annotations
 
 import argparse
-from dataclasses import dataclass
-import json
-import math
-from pathlib import Path
+import logging
 import queue
 import sqlite3
-import subprocess
 import sys
 import threading
-import time
 import tkinter as tk
-from tkinter import ttk
-from typing import Any
 import wave
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
 
+from recordian.audio_feedback import play_sound
+from recordian.backend_manager import BackendManager
 from recordian.config import ConfigManager
-from recordian.backend_manager import BackendManager, parse_backend_event_line
-from recordian.exceptions import CommitError, ConfigError
 from recordian.preset_manager import PresetManager
 from recordian.waveform_renderer import WaveformRenderer
-from recordian.audio_feedback import play_sound
 
+logger = logging.getLogger(__name__)
 
 DEFAULT_CONFIG_PATH = "~/.config/recordian/hotkey.json"
 DEFAULT_AUTO_LEXICON_DB_PATH = "~/.config/recordian/auto_lexicon.db"
@@ -1071,6 +1067,7 @@ class TrayApp:
             def _save_profile() -> None:
                 try:
                     import numpy as np
+
                     from recordian.speaker_verify import enroll_speaker_profile
 
                     config = ConfigManager.load(self.config_path)
@@ -2636,6 +2633,7 @@ def _blend_hex(a: str, b: str, ratio: float) -> str:
 
 def main() -> None:
     import sys
+
     from recordian.error_tracker import get_error_tracker
 
     def handle_exception(exc_type, exc_value, exc_traceback):

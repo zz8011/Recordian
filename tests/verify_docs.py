@@ -4,6 +4,7 @@
 import sys
 from pathlib import Path
 
+
 def check_file(filepath, keywords):
     """检查文件是否包含关键词"""
     try:

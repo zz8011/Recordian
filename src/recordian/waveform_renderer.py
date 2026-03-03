@@ -149,6 +149,7 @@ void main() {
         display = window.display
         try:
             import ctypes
+
             from pyglet.libs.x11 import xlib
             x_display = getattr(window, "_x_display", None)
             if x_display is not None:

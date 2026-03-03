@@ -1,12 +1,12 @@
 import argparse
 import json
-from pathlib import Path
 import time
+from pathlib import Path
 
 from recordian.hotkey_dictate import (
+    _adaptive_vad_threshold,
     _apply_refine_postprocess,
     _apply_target_window,
-    _adaptive_vad_threshold,
     _build_refine_prompt_with_protected_terms,
     _cleanup_repeat_lite_text,
     _cleanup_stutter_text,
@@ -19,15 +19,15 @@ from recordian.hotkey_dictate import (
     _merge_stream_text,
     _normalize_final_text,
     _owner_gate_level,
-    _pick_vad_sample_rate,
     _pcm16le_to_f32,
-    _resolve_auto_hard_enter,
+    _pick_vad_sample_rate,
     _resample_audio_for_vad,
+    _resolve_auto_hard_enter,
     _select_refine_protected_terms,
-    _should_skip_owner_gated_asr,
-    _should_auto_stop_semantic_session,
     _semantic_text_has_content,
     _semantic_text_signal_len,
+    _should_auto_stop_semantic_session,
+    _should_skip_owner_gated_asr,
     _text_contains_term,
     _update_speech_evidence,
     _vad_frame_bytes,
@@ -598,6 +598,7 @@ def test_semantic_silence_requires_both_semantic_and_acoustic_gaps() -> None:
 def test_ptt_and_toggle_concurrent_trigger_no_conflict(monkeypatch) -> None:
     """PTT 和 toggle 并行触发时不应冲突"""
     import time
+
     from recordian.hotkey_dictate import build_hotkey_handlers
     from recordian.linux_dictate import DictateResult
 
@@ -644,6 +645,7 @@ def test_ptt_and_toggle_concurrent_trigger_no_conflict(monkeypatch) -> None:
 def test_toggle_mode_concurrent_start_stop_safe(monkeypatch) -> None:
     """toggle 模式下快速开始-停止不应崩溃"""
     import time
+
     from recordian.hotkey_dictate import build_hotkey_handlers
     from recordian.linux_dictate import DictateResult
 
