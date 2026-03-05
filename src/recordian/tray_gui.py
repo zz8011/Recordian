@@ -2244,7 +2244,12 @@ class TrayApp:
                     _set_status("请先选择预设")
                     return
                 _set_refine_preset_entry(selected)
-                _set_status(f"当前精炼预设已设为：{selected}")
+                try:
+                    # 与托盘菜单行为保持一致：立即写配置并热切换
+                    self.switch_preset(str(selected))
+                    _set_status(f"当前精炼预设已设为：{selected}（热切换）")
+                except Exception as exc:  # noqa: BLE001
+                    _set_status(f"设置失败：{exc}")
 
             preset_combo.connect("changed", lambda *_args: _load_selected_preset())
             btn_create.connect("clicked", _create_preset)

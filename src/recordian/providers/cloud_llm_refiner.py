@@ -70,6 +70,11 @@ class CloudLLMRefiner(BaseTextRefiner):
         else:
             return self._refine_anthropic(text)
 
+    def _sanitize_output(self, text: str) -> str:
+        cleaned = self._remove_think_tags(text)
+        # Some models may echo control tokens from prompts.
+        return cleaned.replace("/no_think", "").strip()
+
     def _refine_anthropic(self, text: str) -> str:
         """使用 Anthropic API 格式"""
         prompt = self._build_prompt(text)
@@ -123,8 +128,7 @@ class CloudLLMRefiner(BaseTextRefiner):
                     output = item.get("text", "").strip()
                     break
 
-        # 移除 <think> 标签
-        return self._remove_think_tags(output)
+        return self._sanitize_output(output)
 
     def _refine_openai(self, text: str) -> str:
         """使用 OpenAI API 格式（Groq, DeepSeek 等）"""
@@ -175,16 +179,11 @@ class CloudLLMRefiner(BaseTextRefiner):
             message = choices[0].get("message", {})
             output = message.get("content", "").strip()
 
-        # 移除 <think> 标签
-        return self._remove_think_tags(output)
+        return self._sanitize_output(output)
 
     def _refine_ollama(self, text: str) -> str:
         """使用 Ollama 原生 API 格式"""
         prompt = self._build_prompt(text)
-
-        # 根据 enable_thinking 参数决定是否添加 /no_think 标记
-        if not self.enable_thinking and "/no_think" not in prompt:
-            prompt = prompt + " /no_think"
 
         try:
             import requests
@@ -232,8 +231,7 @@ class CloudLLMRefiner(BaseTextRefiner):
         message = result.get("message", {})
         output = message.get("content", "").strip()
 
-        # 移除 <think> 标签
-        return self._remove_think_tags(output)
+        return self._sanitize_output(output)
 
     def _build_prompt(self, text: str) -> str:
         """构建文本精炼 prompt"""
