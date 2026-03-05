@@ -120,8 +120,13 @@ def add_dictate_args(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument(
         "--asr-endpoint",
-        default="http://localhost:8000/transcribe",
-        help="HTTP endpoint for http-cloud ASR provider",
+        default="http://127.0.0.1:8000/v1/audio/transcriptions",
+        help="HTTP endpoint for http-cloud ASR provider (OpenAI/vLLM: /v1/audio/transcriptions)",
+    )
+    parser.add_argument(
+        "--asr-api-key",
+        default="",
+        help="API key for http-cloud ASR provider (sent as Bearer token)",
     )
     parser.add_argument(
         "--asr-timeout-s",
@@ -232,9 +237,21 @@ def create_provider(args: argparse.Namespace) -> ASRProvider:
 
     if asr_provider == "http-cloud":
         # Use HTTP cloud provider
-        endpoint = getattr(args, "asr_endpoint", "http://localhost:8000/transcribe")
+        endpoint = getattr(args, "asr_endpoint", "http://127.0.0.1:8000/v1/audio/transcriptions")
+        api_key = str(getattr(args, "asr_api_key", "")).strip() or None
         timeout_s = getattr(args, "asr_timeout_s", 30)
-        return HttpCloudProvider(endpoint=endpoint, timeout_s=timeout_s)
+        model_name = str(
+            getattr(args, "qwen_model", "")
+            or getattr(args, "model", "Qwen/Qwen3-ASR-1.7B")
+        ).strip() or "Qwen/Qwen3-ASR-1.7B"
+        language = str(getattr(args, "qwen_language", "")).strip()
+        return HttpCloudProvider(
+            endpoint=endpoint,
+            api_key=api_key,
+            timeout_s=timeout_s,
+            model_name=model_name,
+            language=language,
+        )
 
     # Default to Qwen ASR provider
     # --qwen-model takes priority; fall back to --model; last resort: default

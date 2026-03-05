@@ -47,6 +47,20 @@ cd Recordian
 ./install.sh
 ```
 
+安装脚本默认**不拉取外部模型**。如果你希望安装时顺带拉取外部 ASR 模型，可选：
+
+```bash
+./install.sh --pull-external-model
+```
+
+也可自定义模型 ID / 下载目录：
+
+```bash
+./install.sh --pull-external-model \
+  --external-model-id Qwen/Qwen3-ASR-1.7B \
+  --external-model-dir ./models/Qwen3-ASR-1.7B
+```
+
 或手动安装（不使用安装脚本）：
 
 ```bash

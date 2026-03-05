@@ -3,6 +3,56 @@
 
 set -e
 
+show_help() {
+    cat <<'EOF'
+用法: ./install.sh [选项]
+
+选项:
+  --pull-external-model       安装完成后拉取外部 ASR 模型
+  --external-model-id <id>    外部模型 ID（默认: Qwen/Qwen3-ASR-1.7B）
+  --external-model-dir <dir>  外部模型下载目录（默认: ./models/Qwen3-ASR-1.7B）
+  -h, --help                  显示帮助
+EOF
+}
+
+PULL_EXTERNAL_MODEL=0
+EXTERNAL_MODEL_ID="Qwen/Qwen3-ASR-1.7B"
+EXTERNAL_MODEL_DIR=""
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --pull-external-model)
+            PULL_EXTERNAL_MODEL=1
+            shift
+            ;;
+        --external-model-id)
+            if [ $# -lt 2 ]; then
+                echo "错误: --external-model-id 需要一个参数"
+                exit 1
+            fi
+            EXTERNAL_MODEL_ID="${2:-}"
+            shift 2
+            ;;
+        --external-model-dir)
+            if [ $# -lt 2 ]; then
+                echo "错误: --external-model-dir 需要一个参数"
+                exit 1
+            fi
+            EXTERNAL_MODEL_DIR="${2:-}"
+            shift 2
+            ;;
+        -h|--help)
+            show_help
+            exit 0
+            ;;
+        *)
+            echo "错误: 未知参数 $1"
+            show_help
+            exit 1
+            ;;
+    esac
+done
+
 echo "=== Recordian 安装程序 ==="
 echo ""
 
@@ -68,6 +118,9 @@ fi
 # 获取脚本所在目录
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 cd "$SCRIPT_DIR"
+if [ -z "$EXTERNAL_MODEL_DIR" ]; then
+    EXTERNAL_MODEL_DIR="$SCRIPT_DIR/models/Qwen3-ASR-1.7B"
+fi
 
 # 检查虚拟环境
 if [ ! -d ".venv" ]; then
@@ -80,6 +133,22 @@ source .venv/bin/activate
 
 echo "安装依赖..."
 pip install -e ".[gui,hotkey,qwen-asr,wake]"
+
+if [ "$PULL_EXTERNAL_MODEL" -eq 1 ]; then
+    echo ""
+    echo "下载外部 ASR 模型: $EXTERNAL_MODEL_ID"
+    pip install modelscope
+    modelscope download --model "$EXTERNAL_MODEL_ID" --local_dir "$EXTERNAL_MODEL_DIR"
+    echo "✅ 外部模型下载完成: $EXTERNAL_MODEL_DIR"
+else
+    echo ""
+    echo "可选: 拉取外部 ASR 模型（默认不拉取）"
+    echo "  方式 1: 重新运行安装脚本并加参数"
+    echo "    ./install.sh --pull-external-model"
+    echo "  方式 2: 手动执行"
+    echo "    pip install modelscope"
+    echo "    modelscope download --model \"$EXTERNAL_MODEL_ID\" --local_dir \"$EXTERNAL_MODEL_DIR\""
+fi
 
 # 创建桌面启动器
 DESKTOP_FILE="$HOME/.local/share/applications/recordian.desktop"

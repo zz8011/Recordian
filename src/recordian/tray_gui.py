@@ -1456,7 +1456,14 @@ class TrayApp:
                 kind="combo",
                 options=("qwen-asr", "http-cloud"),
             )
-            row = _add_field(sec_asr, row, key="qwen_model", label="Qwen ASR 模型路径", value=current.get("qwen_model", ""))
+            row = _add_field(
+                sec_asr,
+                row,
+                key="qwen_model",
+                label="ASR 模型（路径或模型ID）",
+                value=current.get("qwen_model", ""),
+                hint="qwen-asr: 本地模型路径；http-cloud: 远端服务的 model 名称（如 Qwen/Qwen3-ASR-0.6B）",
+            )
             row = _add_field(
                 sec_asr,
                 row,
@@ -1472,8 +1479,17 @@ class TrayApp:
                 row,
                 key="asr_endpoint",
                 label="HTTP ASR Endpoint",
-                value=current.get("asr_endpoint", "http://localhost:8000/transcribe"),
-                hint="仅 asr_provider=http-cloud 时生效",
+                value=current.get("asr_endpoint", "http://127.0.0.1:8000/v1/audio/transcriptions"),
+                hint="仅 asr_provider=http-cloud 时生效。vLLM/OpenAI 兼容接口示例：/v1/audio/transcriptions",
+            )
+            row = _add_field(
+                sec_asr,
+                row,
+                key="asr_api_key",
+                label="HTTP ASR API Key",
+                value=current.get("asr_api_key", ""),
+                hint="仅 asr_provider=http-cloud 时生效（留空表示不带鉴权头）",
+                secret=True,
             )
             row = _add_field(sec_asr, row, key="asr_timeout_s", label="HTTP ASR Timeout (s)", value=current.get("asr_timeout_s", 30.0))
             row = _add_field(
@@ -2352,7 +2368,8 @@ class TrayApp:
                         "qwen_max_new_tokens": _parse_int_field("qwen_max_new_tokens", 1024),
                         "asr_context_preset": str(_get_value("asr_context_preset")).strip(),
                         "asr_context": str(_get_value("asr_context")).strip(),
-                        "asr_endpoint": str(_get_value("asr_endpoint")).strip() or "http://localhost:8000/transcribe",
+                        "asr_endpoint": str(_get_value("asr_endpoint")).strip() or "http://127.0.0.1:8000/v1/audio/transcriptions",
+                        "asr_api_key": str(_get_value("asr_api_key")).strip(),
                         "asr_timeout_s": _parse_float_field("asr_timeout_s", 30.0),
                         "device": str(_get_value("device")).strip() or "cuda",
                         "enable_text_refine": bool(_get_value("enable_text_refine")),
