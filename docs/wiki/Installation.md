@@ -13,8 +13,9 @@
 - Python 3.12
 
 ### 依赖项
-- PyAudio (音频录制)
-- PyQt6 (GUI 界面)
+- sounddevice / numpy (音频采集与处理)
+- AppIndicator3 + GTK3 绑定（托盘图标）
+- xdotool / xclip / libnotify（上屏与通知）
 - 其他依赖见 `pyproject.toml`
 
 ---
@@ -37,7 +38,7 @@ cd Recordian
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
 # 安装项目依赖
-uv sync
+uv sync --extra gui --extra hotkey --extra qwen-asr --extra wake
 ```
 
 #### 使用 pip
@@ -50,7 +51,7 @@ source .venv/bin/activate  # Linux/macOS
 .venv\Scripts\activate  # Windows
 
 # 安装依赖
-pip install -e .
+pip install -e ".[gui,hotkey,qwen-asr,wake]"
 ```
 
 ### 3. 系统依赖
@@ -60,22 +61,23 @@ pip install -e .
 ```bash
 sudo apt-get update
 sudo apt-get install -y \
-    portaudio19-dev \
-    python3-pyqt6 \
+    python3-gi \
+    gir1.2-appindicator3-0.1 \
     xdotool \
-    xclip
+    xclip \
+    libnotify-bin
 ```
 
 #### macOS
 
 ```bash
-brew install portaudio
+echo "当前托盘模式主要面向 Linux，macOS 建议使用命令行模式运行"
 ```
 
 #### Arch Linux
 
 ```bash
-sudo pacman -S portaudio python-pyqt6
+sudo pacman -S python-gobject libappindicator-gtk3 xdotool xclip libnotify
 ```
 
 ---
@@ -129,29 +131,27 @@ pytest
 # 托盘 GUI 模式
 uv run recordian-tray
 
-# 命令行模式
-uv run recordian-cli
+# 命令行单次录音模式
+uv run recordian-linux-dictate
 
 # 热键模式
-uv run recordian-hotkey
+uv run recordian-hotkey-dictate
 ```
 
 ---
 
 ## 故障排查
 
-### PyAudio 安装失败
+### 系统依赖缺失（托盘/通知/上屏）
 
 **Ubuntu/Debian**:
 ```bash
-sudo apt-get install portaudio19-dev python3-dev
-pip install pyaudio
+sudo apt-get install -y python3-gi gir1.2-appindicator3-0.1 xdotool xclip libnotify-bin
 ```
 
 **macOS**:
 ```bash
-brew install portaudio
-pip install pyaudio
+echo "当前托盘模式主要面向 Linux，macOS 建议使用命令行模式运行"
 ```
 
 ### 权限问题

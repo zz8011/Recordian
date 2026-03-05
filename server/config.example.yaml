@@ -10,10 +10,10 @@ asr:
 # 文本精炼配置 - 使用服务器的 Ollama
 text_refine:
   provider: cloud-llm
-  api_base: http://192.168.5.225:11434/v1
+  api_base: http://192.168.5.225:11434
   api_key: dummy  # Ollama 不需要真实 API key
-  model: qwen2.5:7b
-  api_format: openai
+  model: qwen3-1.7b-gpu:latest
+  api_format: ollama
   temperature: 0.1
   max_tokens: 512
 

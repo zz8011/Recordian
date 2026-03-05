@@ -47,6 +47,14 @@ cd Recordian
 ./install.sh
 ```
 
+或手动安装（不使用安装脚本）：
+
+```bash
+uv sync --extra gui --extra hotkey --extra qwen-asr --extra wake
+# 或
+pip install -e ".[gui,hotkey,qwen-asr,wake]"
+```
+
 下载 ASR 模型（必需，约 3.5GB）：
 
 ```bash

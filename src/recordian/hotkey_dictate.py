@@ -217,6 +217,62 @@ def build_parser() -> argparse.ArgumentParser:
         help="Required speech evidence time before considering voice as started",
     )
     parser.add_argument(
+        "--wake-stats",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Emit wake loop profiling stats events (for CPU baseline measurement)",
+    )
+    parser.add_argument(
+        "--wake-pre-vad",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Gate wake KWS decode by WebRTC VAD in standby mode",
+    )
+    parser.add_argument(
+        "--wake-pre-vad-aggressiveness",
+        type=int,
+        default=3,
+        choices=[0, 1, 2, 3],
+        help="WebRTC VAD aggressiveness for wake standby gating (0=loose, 3=strict)",
+    )
+    parser.add_argument(
+        "--wake-pre-vad-frame-ms",
+        type=int,
+        default=30,
+        choices=[10, 20, 30],
+        help="WebRTC VAD frame size in ms for wake standby gating",
+    )
+    parser.add_argument(
+        "--wake-pre-vad-enter-frames",
+        type=int,
+        default=4,
+        help="Consecutive speech frames needed to open wake KWS gate",
+    )
+    parser.add_argument(
+        "--wake-pre-vad-hangover-ms",
+        type=int,
+        default=120,
+        help="Keep wake KWS gate open for this long after last speech frame",
+    )
+    parser.add_argument(
+        "--wake-pre-roll-ms",
+        type=int,
+        default=300,
+        help="Audio pre-roll sent to KWS when wake gate opens",
+    )
+    parser.add_argument(
+        "--wake-decode-budget-per-cycle",
+        type=int,
+        default=1,
+        help="Max wake KWS decode calls per audio read cycle",
+    )
+    parser.add_argument(
+        "--wake-decode-budget-per-sec",
+        type=float,
+        default=16.0,
+        help="Token-bucket budget for wake KWS decode calls per second",
+    )
+    parser.add_argument(
         "--wake-auto-name-variants",
         action=argparse.BooleanOptionalAction,
         default=True,
@@ -1010,6 +1066,13 @@ def build_ptt_hotkey_handlers(
                     owner_filter_enabled = bool(_get_state("voice_owner_filter_enabled"))
                     owner_threshold = min(0.99, max(0.0, float(getattr(args, "wake_owner_threshold", 0.72))))
                     owner_window_s = max(0.6, float(getattr(args, "wake_owner_window_s", 1.6)))
+                    # Hysteresis around owner threshold to reduce gate flapping:
+                    # open quickly (>= threshold), close conservatively (< threshold - margin, twice).
+                    owner_deactivate_margin = 0.06
+                    owner_activate_confirm = 1
+                    owner_deactivate_confirm = 2
+                    owner_pass_streak = 0
+                    owner_fail_streak = 0
                     owner_verify_interval_s = 0.35
                     owner_min_samples = max(3200, int(sample_rate * 0.35))
                     owner_max_samples = max(1, int(sample_rate * owner_window_s))
@@ -1017,7 +1080,7 @@ def build_ptt_hotkey_handlers(
                     owner_audio_samples = 0
                     owner_last_verify_ts = 0.0
                     owner_last_active = False
-                    owner_embedding: list[float] | None = None
+                    owner_embeddings: list[list[float]] | None = None
                     _extract_owner_embedding = None
                     _owner_cosine_similarity = None
 
@@ -1052,8 +1115,52 @@ def build_ptt_hotkey_handlers(
                             if profile is None:
                                 owner_filter_enabled = False
                                 on_state({"event": "log", "message": "voice_owner_filter_disabled: profile_not_found"})
+                            elif int(getattr(profile, "feature_version", 1)) != 2:
+                                old_profile_version = int(getattr(profile, "feature_version", 1))
+                                if sample_path is not None and sample_path.exists():
+                                    profile = enroll_speaker_profile_from_wav(
+                                        sample_path=sample_path,
+                                        profile_path=profile_path,
+                                        target_rate=sample_rate,
+                                    )
+                                    on_state(
+                                        {
+                                            "event": "log",
+                                            "message": (
+                                                "voice_owner_profile_reenrolled: "
+                                                f"{profile_path} (old_version={old_profile_version})"
+                                            ),
+                                        }
+                                    )
+                                    owner_embeddings = list(profile.embeddings) if profile.embeddings else [list(profile.embedding)]
+                                    _extract_owner_embedding = _extract_speaker_embedding
+                                    _owner_cosine_similarity = _cosine_similarity
+                                    owner_audio_chunks = deque(maxlen=100)
+                                    if args.debug_diagnostics:
+                                        on_state(
+                                            {
+                                                "event": "log",
+                                                "message": (
+                                                    "diag voice_owner_filter enabled"
+                                                    f" threshold={owner_threshold:.2f}"
+                                                    f" window_s={owner_window_s:.2f}"
+                                                ),
+                                            }
+                                        )
+                                else:
+                                    owner_filter_enabled = False
+                                    on_state(
+                                        {
+                                            "event": "log",
+                                            "message": (
+                                                "voice_owner_filter_disabled: profile_version_mismatch "
+                                                f"(expected=2, got={old_profile_version}). "
+                                                "Please re-enroll owner profile with current version."
+                                            ),
+                                        }
+                                    )
                             else:
-                                owner_embedding = list(profile.embedding)
+                                owner_embeddings = list(profile.embeddings) if profile.embeddings else [list(profile.embedding)]
                                 _extract_owner_embedding = _extract_speaker_embedding
                                 _owner_cosine_similarity = _cosine_similarity
                                 owner_audio_chunks = deque(maxlen=100)
@@ -1143,6 +1250,7 @@ def build_ptt_hotkey_handlers(
                     def _cb(indata: Any, frames: int, t: Any, status: Any) -> None:
                         nonlocal noise_floor, smoothed_level, vad, vad_init_attempted, vad_log_emitted
                         nonlocal speech_evidence_s, owner_audio_samples, owner_last_verify_ts, owner_last_active
+                        nonlocal owner_pass_streak, owner_fail_streak
                         if stop.is_set():
                             raise sd.CallbackStop()
 
@@ -1164,7 +1272,7 @@ def build_ptt_hotkey_handlers(
                         owner_active = True
                         if (
                             owner_filter_enabled
-                            and owner_embedding is not None
+                            and owner_embeddings is not None
                             and _extract_owner_embedding is not None
                             and _owner_cosine_similarity is not None
                             and owner_audio_chunks is not None
@@ -1178,7 +1286,7 @@ def build_ptt_hotkey_handlers(
                             if now_owner - owner_last_verify_ts >= owner_verify_interval_s:
                                 owner_last_verify_ts = now_owner
                                 owner_score = -1.0
-                                owner_active = False
+                                owner_active = bool(_get_state("voice_owner_active"))
                                 if owner_audio_samples >= owner_min_samples:
                                     try:
                                         verify_samples = np.concatenate(list(owner_audio_chunks))
@@ -1189,8 +1297,27 @@ def build_ptt_hotkey_handlers(
                                             sample_rate=sample_rate,
                                             target_rate=sample_rate,
                                         )
-                                        owner_score = float(_owner_cosine_similarity(candidate_embedding, owner_embedding))
-                                        owner_active = owner_score >= owner_threshold
+                                        owner_score = max(
+                                            float(_owner_cosine_similarity(candidate_embedding, owner_embedding))
+                                            for owner_embedding in owner_embeddings
+                                        )
+                                        owner_upper = owner_threshold
+                                        owner_lower = max(0.0, owner_threshold - owner_deactivate_margin)
+                                        prev_owner_active = bool(_get_state("voice_owner_active"))
+                                        if owner_score >= owner_upper:
+                                            owner_pass_streak = min(owner_activate_confirm, owner_pass_streak + 1)
+                                            owner_fail_streak = 0
+                                        elif owner_score < owner_lower:
+                                            owner_fail_streak = min(owner_deactivate_confirm, owner_fail_streak + 1)
+                                            owner_pass_streak = 0
+                                        else:
+                                            owner_pass_streak = 0
+                                            owner_fail_streak = 0
+
+                                        if prev_owner_active:
+                                            owner_active = owner_fail_streak < owner_deactivate_confirm
+                                        else:
+                                            owner_active = owner_pass_streak >= owner_activate_confirm
                                     except Exception:
                                         owner_active = False
                                 _set_state("voice_owner_active", owner_active)
@@ -1685,9 +1812,47 @@ def _parse_args_with_config(parser: argparse.ArgumentParser) -> argparse.Namespa
         args.wake_speech_confirm_s = max(0.0, float(getattr(args, "wake_speech_confirm_s", 0.18)))
     except Exception:
         args.wake_speech_confirm_s = 0.18
+    args.wake_pre_vad = _coerce_bool(getattr(args, "wake_pre_vad", True), default=True)
+    try:
+        wake_pre_vad_aggr = int(getattr(args, "wake_pre_vad_aggressiveness", 3))
+    except Exception:
+        wake_pre_vad_aggr = 3
+    if wake_pre_vad_aggr not in {0, 1, 2, 3}:
+        args.wake_pre_vad_aggressiveness = 3
+    else:
+        args.wake_pre_vad_aggressiveness = wake_pre_vad_aggr
+    try:
+        wake_pre_vad_frame_ms = int(getattr(args, "wake_pre_vad_frame_ms", 30))
+    except Exception:
+        wake_pre_vad_frame_ms = 30
+    if wake_pre_vad_frame_ms not in {10, 20, 30}:
+        args.wake_pre_vad_frame_ms = 30
+    else:
+        args.wake_pre_vad_frame_ms = wake_pre_vad_frame_ms
+    try:
+        args.wake_pre_vad_enter_frames = max(1, int(getattr(args, "wake_pre_vad_enter_frames", 4)))
+    except Exception:
+        args.wake_pre_vad_enter_frames = 4
+    try:
+        args.wake_pre_vad_hangover_ms = max(0, int(getattr(args, "wake_pre_vad_hangover_ms", 120)))
+    except Exception:
+        args.wake_pre_vad_hangover_ms = 120
+    try:
+        args.wake_pre_roll_ms = max(0, int(getattr(args, "wake_pre_roll_ms", 300)))
+    except Exception:
+        args.wake_pre_roll_ms = 300
+    try:
+        args.wake_decode_budget_per_cycle = max(1, int(getattr(args, "wake_decode_budget_per_cycle", 1)))
+    except Exception:
+        args.wake_decode_budget_per_cycle = 1
+    try:
+        args.wake_decode_budget_per_sec = max(1.0, float(getattr(args, "wake_decode_budget_per_sec", 16.0)))
+    except Exception:
+        args.wake_decode_budget_per_sec = 16.0
     args.wake_auto_name_variants = _coerce_bool(getattr(args, "wake_auto_name_variants", True), default=True)
     args.wake_auto_prefix_variants = _coerce_bool(getattr(args, "wake_auto_prefix_variants", True), default=True)
     args.wake_allow_name_only = _coerce_bool(getattr(args, "wake_allow_name_only", True), default=True)
+    args.wake_stats = _coerce_bool(getattr(args, "wake_stats", False), default=False)
     args.wake_owner_verify = _coerce_bool(getattr(args, "wake_owner_verify", False), default=False)
     args.wake_owner_profile = str(Path(getattr(args, "wake_owner_profile", "~/.config/recordian/owner_voice_profile.json")).expanduser())
     owner_sample = str(getattr(args, "wake_owner_sample", "")).strip()
@@ -1795,6 +1960,15 @@ def _save_runtime_config(args: argparse.Namespace) -> None:
         "wake_vad_frame_ms": getattr(args, "wake_vad_frame_ms", 30),
         "wake_no_speech_timeout_s": getattr(args, "wake_no_speech_timeout_s", 2.0),
         "wake_speech_confirm_s": getattr(args, "wake_speech_confirm_s", 0.18),
+        "wake_stats": getattr(args, "wake_stats", False),
+        "wake_pre_vad": getattr(args, "wake_pre_vad", True),
+        "wake_pre_vad_aggressiveness": getattr(args, "wake_pre_vad_aggressiveness", 3),
+        "wake_pre_vad_frame_ms": getattr(args, "wake_pre_vad_frame_ms", 30),
+        "wake_pre_vad_enter_frames": getattr(args, "wake_pre_vad_enter_frames", 4),
+        "wake_pre_vad_hangover_ms": getattr(args, "wake_pre_vad_hangover_ms", 120),
+        "wake_pre_roll_ms": getattr(args, "wake_pre_roll_ms", 300),
+        "wake_decode_budget_per_cycle": getattr(args, "wake_decode_budget_per_cycle", 1),
+        "wake_decode_budget_per_sec": getattr(args, "wake_decode_budget_per_sec", 16.0),
         "wake_auto_name_variants": getattr(args, "wake_auto_name_variants", True),
         "wake_auto_prefix_variants": getattr(args, "wake_auto_prefix_variants", True),
         "wake_allow_name_only": getattr(args, "wake_allow_name_only", True),

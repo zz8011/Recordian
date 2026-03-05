@@ -22,7 +22,11 @@ echo "检查系统依赖..."
 MISSING_DEPS=()
 
 # 检查 AppIndicator3（托盘图标）
-if ! python3 -c "import gi; gi.require_version('AppIndicator3', '0.1')" 2>/dev/null; then
+if ! python3 -c "import gi" 2>/dev/null; then
+    MISSING_DEPS+=("python3-gi")
+fi
+
+if ! python3 -c "import gi; gi.require_version('AppIndicator3', '0.1'); from gi.repository import AppIndicator3" 2>/dev/null; then
     MISSING_DEPS+=("gir1.2-appindicator3-0.1")
 fi
 
@@ -75,7 +79,7 @@ echo "激活虚拟环境..."
 source .venv/bin/activate
 
 echo "安装依赖..."
-pip install -e .[gui,hotkey,qwen-asr]
+pip install -e ".[gui,hotkey,qwen-asr,wake]"
 
 # 创建桌面启动器
 DESKTOP_FILE="$HOME/.local/share/applications/recordian.desktop"

@@ -8,6 +8,7 @@ import subprocess
 import sys
 import threading
 import time
+from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -109,6 +110,15 @@ class WakeRuntimeConfig:
     owner_sample_path: str = ""
     owner_threshold: float = 0.72
     owner_window_s: float = 1.6
+    stats_enabled: bool = False
+    pre_vad_enabled: bool = True
+    pre_vad_aggressiveness: int = 3
+    pre_vad_frame_ms: int = 30
+    pre_vad_enter_frames: int = 4
+    pre_vad_hangover_ms: int = 120
+    pre_roll_ms: int = 300
+    decode_budget_per_cycle: int = 1
+    decode_budget_per_sec: float = 16.0
 
 
 def normalize_tokens_type(value: str) -> str:
@@ -296,6 +306,37 @@ def ensure_keywords_file(
     raw_header = f"# tokens_type={tokens_type} auto_tone_variants={int(bool(auto_tone_variants))}"
     raw_content = "\n".join([raw_header, *raw_lines]) + "\n"
 
+    required_phrase_set = {phrase.strip() for phrase in phrases if phrase.strip()}
+
+    def _is_outfile_usable(path: Path, *, require_exact_phrases: bool = False) -> bool:
+        if not path.exists():
+            return False
+        try:
+            out_lines = []
+            alias_set: set[str] = set()
+            for raw in path.read_text(encoding="utf-8").splitlines():
+                line = raw.strip()
+                if not line or line.startswith("#"):
+                    continue
+                out_lines.append(line)
+                if " @" in line and " :" in line:
+                    alias = line.split(" @", 1)[1].split(" :", 1)[0].strip()
+                    if alias:
+                        alias_set.add(alias)
+        except Exception:  # noqa: BLE001
+            return False
+        if not out_lines:
+            return False
+        if not all(" @" in line and " :" in line and " #" in line for line in out_lines):
+            return False
+        if required_phrase_set:
+            if require_exact_phrases:
+                if alias_set != required_phrase_set:
+                    return False
+            elif not required_phrase_set.issubset(alias_set):
+                return False
+        return True
+
     def _is_cache_valid() -> bool:
         if not raw_path.exists() or not out_path.exists():
             return False
@@ -360,6 +401,11 @@ def ensure_keywords_file(
             cli_bin = str(candidate)
 
     if cli_bin is None:
+        if _is_outfile_usable(out_path, require_exact_phrases=True):
+            return out_path
+        bundled_keywords = tokens_path.parent / "keywords.txt"
+        if _is_outfile_usable(bundled_keywords, require_exact_phrases=True):
+            return bundled_keywords
         raise RuntimeError(
             "关键词转换失败：未找到 sherpa-onnx-cli，且 python API 不可用。"
             " 请安装 sherpa-onnx 和 pypinyin。"
@@ -377,6 +423,11 @@ def ensure_keywords_file(
     ]
     proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
     if proc.returncode != 0 or not _is_cache_valid():
+        if _is_outfile_usable(out_path, require_exact_phrases=True):
+            return out_path
+        bundled_keywords = tokens_path.parent / "keywords.txt"
+        if _is_outfile_usable(bundled_keywords, require_exact_phrases=True):
+            return bundled_keywords
         detail = (proc.stderr or proc.stdout or "").strip()
         raise RuntimeError(
             "关键词转换失败，请检查 tokens_type 与依赖（ppinyin 需要 pypinyin）。"
@@ -390,6 +441,7 @@ class VoiceWakeService:
     # Decode loop limits to prevent CPU spikes
     MAX_DECODE_ITERATIONS = 10  # Normal: 1-3 iterations per frame
     DECODE_TIMEOUT_S = 0.05  # 50ms timeout for real-time performance
+    STATS_EMIT_INTERVAL_S = 2.0
 
     def __init__(
         self,
@@ -522,11 +574,24 @@ class VoiceWakeService:
             return
 
         samples_per_read = int(self.model.sample_rate * 0.1)
+        pre_vad_enabled = bool(getattr(self.runtime, "pre_vad_enabled", True))
+        pre_vad_aggressiveness = max(0, min(3, int(getattr(self.runtime, "pre_vad_aggressiveness", 3))))
+        pre_vad_frame_ms = int(getattr(self.runtime, "pre_vad_frame_ms", 30))
+        if pre_vad_frame_ms not in {10, 20, 30}:
+            pre_vad_frame_ms = 30
+        pre_vad_enter_frames = max(1, int(getattr(self.runtime, "pre_vad_enter_frames", 4)))
+        pre_vad_hangover_ms = max(0, int(getattr(self.runtime, "pre_vad_hangover_ms", 120)))
+        pre_vad_hangover_s = pre_vad_hangover_ms / 1000.0
+        pre_roll_ms = max(0, int(getattr(self.runtime, "pre_roll_ms", 300)))
+        pre_roll_s = pre_roll_ms / 1000.0
+        decode_budget_per_cycle = max(1, int(getattr(self.runtime, "decode_budget_per_cycle", 1)))
+        decode_budget_per_sec = max(1.0, float(getattr(self.runtime, "decode_budget_per_sec", 16.0)))
+
         owner_verify_enabled = bool(getattr(self.runtime, "owner_verify_enabled", False))
         owner_threshold = min(0.99, max(0.0, float(getattr(self.runtime, "owner_threshold", 0.72))))
         owner_window_s = max(0.6, float(getattr(self.runtime, "owner_window_s", 1.6)))
         owner_noise_suppression = int(getattr(self.runtime, "owner_noise_suppression", 1))
-        owner_noise_suppression = max(0, min(2, owner_noise_suppression))  # Clamp to 0-2
+        owner_noise_suppression = max(0, min(2, owner_noise_suppression))
         owner_embeddings: list[list[float]] | None = None
         _extract_speaker_embedding = None
         _cosine_similarity = None
@@ -539,7 +604,9 @@ class VoiceWakeService:
                     load_speaker_profile,
                 )
 
-                profile_path = Path(str(getattr(self.runtime, "owner_profile_path", "~/.config/recordian/owner_voice_profile.json"))).expanduser()
+                profile_path = Path(
+                    str(getattr(self.runtime, "owner_profile_path", "~/.config/recordian/owner_voice_profile.json"))
+                ).expanduser()
                 sample_path_raw = str(getattr(self.runtime, "owner_sample_path", "")).strip()
                 sample_path = Path(sample_path_raw).expanduser() if sample_path_raw else None
 
@@ -548,7 +615,7 @@ class VoiceWakeService:
                     profile = enroll_speaker_profile_from_wav(
                         sample_path=sample_path,
                         profile_path=profile_path,
-                        target_rate=8000,  # Reduced from 16kHz to 8kHz for ~50% CPU reduction
+                        target_rate=8000,
                     )
                     self._emit({"message": f"voice_wake_owner_profile_enrolled: {profile_path}"})
                 if profile is None:
@@ -588,11 +655,81 @@ class VoiceWakeService:
         owner_audio_samples = 0
         owner_max_samples = max(samples_per_read, int(self.model.sample_rate * owner_window_s))
         if owner_verify_enabled:
-            from collections import deque
-
             owner_audio_chunks = deque(maxlen=100)
 
+        pre_vad = None
+        if pre_vad_enabled:
+            try:
+                import webrtcvad
+
+                pre_vad = webrtcvad.Vad(pre_vad_aggressiveness)
+                self._emit(
+                    {
+                        "message": (
+                            "voice_wake_pre_vad_enabled"
+                            f" aggressiveness={pre_vad_aggressiveness}"
+                            f" frame_ms={pre_vad_frame_ms}"
+                            f" enter_frames={pre_vad_enter_frames}"
+                            f" hangover_ms={pre_vad_hangover_ms}"
+                            f" pre_roll_ms={pre_roll_ms}"
+                        )
+                    }
+                )
+            except Exception as exc:  # noqa: BLE001
+                pre_vad_enabled = False
+                self._emit({"message": f"voice_wake_pre_vad_disabled: {type(exc).__name__}: {exc}"})
+
+        pre_vad_frame_samples = max(1, int(self.model.sample_rate * pre_vad_frame_ms / 1000))
+        pre_vad_frame_bytes = pre_vad_frame_samples * 2
+        pre_vad_pcm_buffer = bytearray()
+        pre_roll_samples = max(samples_per_read, int(self.model.sample_rate * pre_roll_s))
+        pre_roll_chunks: deque[object] = deque()
+        pre_roll_total_samples = 0
+        speech_run_frames = 0
+        gate_hangover_deadline = 0.0
+        kws_gate_open = not pre_vad_enabled
+
+        decode_budget_tokens = float(decode_budget_per_sec)
+        decode_budget_last_refill_ts = time.monotonic()
+        self._emit(
+            {
+                "message": (
+                    "voice_wake_decode_budget"
+                    f" per_cycle={decode_budget_per_cycle}"
+                    f" per_sec={decode_budget_per_sec:.1f}"
+                )
+            }
+        )
         self._emit({"message": "voice_wake_ready"})
+
+        stats_enabled = bool(getattr(self.runtime, "stats_enabled", False))
+        stats_started_ts = time.monotonic()
+        stats_last_emit_ts = stats_started_ts
+        stats_last_frames = 0
+        stats_last_decodes = 0
+        stats_last_wake_hits = 0
+        stats = {
+            "frames_total": 0,
+            "frames_vad_pass": 0,
+            "decode_calls": 0,
+            "decode_resets_timeout": 0,
+            "decode_resets_max_iter": 0,
+            "wake_hits": 0,
+        }
+        cpu_process = None
+        if stats_enabled:
+            try:
+                import psutil
+
+                cpu_process = psutil.Process()
+                cpu_process.cpu_percent(None)
+            except Exception:
+                cpu_process = None
+
+        def _to_pcm16le(chunk: object) -> bytes:
+            clipped = np.clip(np.asarray(chunk, dtype=np.float32), -1.0, 1.0)
+            return (clipped * 32767.0).astype(np.int16, copy=False).tobytes()
+
         try:
             with sd.InputStream(
                 channels=1,
@@ -603,40 +740,132 @@ class VoiceWakeService:
                 while not self._stop.is_set():
                     audio, _ = mic.read(samples_per_read)
                     samples = np.ascontiguousarray(audio.reshape(-1))
+                    now = time.monotonic()
+                    stats["frames_total"] += 1
+
+                    elapsed_s = now - decode_budget_last_refill_ts
+                    if elapsed_s > 0:
+                        decode_budget_tokens = min(
+                            decode_budget_per_sec,
+                            decode_budget_tokens + elapsed_s * decode_budget_per_sec,
+                        )
+                        decode_budget_last_refill_ts = now
+
                     if owner_verify_enabled and owner_audio_chunks is not None:
                         owner_audio_chunks.append(samples.copy())
                         owner_audio_samples += int(samples.size)
                         while owner_audio_samples > owner_max_samples and owner_audio_chunks:
                             owner_audio_samples -= int(owner_audio_chunks.popleft().size)
 
-                    # Energy-based VAD disabled for voice wake to avoid missing wake words
-                    # The KWS model should always run to detect wake words accurately
-                    # VAD is only used during dictation session, not during wake word detection
+                    feed_current_chunk = True
+                    if pre_vad_enabled and pre_vad is not None:
+                        cached = samples.copy()
+                        pre_roll_chunks.append(cached)
+                        pre_roll_total_samples += int(cached.size)
+                        while pre_roll_total_samples > pre_roll_samples and pre_roll_chunks:
+                            removed_chunk = pre_roll_chunks.popleft()
+                            pre_roll_total_samples -= int(removed_chunk.size)
 
-                    stream.accept_waveform(self.model.sample_rate, samples)
+                        block_has_speech = False
+                        pre_vad_pcm_buffer.extend(_to_pcm16le(samples))
+                        while len(pre_vad_pcm_buffer) >= pre_vad_frame_bytes:
+                            frame_bytes = bytes(pre_vad_pcm_buffer[:pre_vad_frame_bytes])
+                            del pre_vad_pcm_buffer[:pre_vad_frame_bytes]
+                            if pre_vad.is_speech(frame_bytes, self.model.sample_rate):
+                                block_has_speech = True
 
-                    # Decode with iteration and timeout limits to prevent CPU spikes
-                    decode_count = 0
-                    decode_start = time.monotonic()
+                        if block_has_speech:
+                            speech_run_frames = min(pre_vad_enter_frames, speech_run_frames + 1)
+                            gate_hangover_deadline = now + pre_vad_hangover_s
+                        else:
+                            speech_run_frames = 0
 
-                    while spotter.is_ready(stream):
-                        if time.monotonic() - decode_start > self.DECODE_TIMEOUT_S:
-                            self._emit({"message": "voice_wake_decode_timeout_reset"})
+                        if not kws_gate_open and speech_run_frames >= pre_vad_enter_frames:
+                            kws_gate_open = True
+                            for buffered_chunk in pre_roll_chunks:
+                                stream.accept_waveform(self.model.sample_rate, buffered_chunk)
+                            pre_roll_chunks.clear()
+                            pre_roll_total_samples = 0
+                            feed_current_chunk = False
+                        elif kws_gate_open and not block_has_speech and now > gate_hangover_deadline:
+                            kws_gate_open = False
                             spotter.reset_stream(stream)
-                            break
-                        if decode_count >= self.MAX_DECODE_ITERATIONS:
-                            self._emit({"message": "voice_wake_decode_max_iterations_reset"})
-                            spotter.reset_stream(stream)
-                            break
-                        spotter.decode_stream(stream)
-                        decode_count += 1
+                            feed_current_chunk = False
 
-                    result = spotter.get_result(stream).strip()
+                    if kws_gate_open:
+                        if feed_current_chunk:
+                            stream.accept_waveform(self.model.sample_rate, samples)
+                        stats["frames_vad_pass"] += 1
+
+                    result = ""
+                    if kws_gate_open:
+                        decode_count = 0
+                        decode_start = time.monotonic()
+                        while spotter.is_ready(stream):
+                            if time.monotonic() - decode_start > self.DECODE_TIMEOUT_S:
+                                self._emit({"message": "voice_wake_decode_timeout_reset"})
+                                stats["decode_resets_timeout"] += 1
+                                spotter.reset_stream(stream)
+                                break
+                            if decode_count >= self.MAX_DECODE_ITERATIONS:
+                                self._emit({"message": "voice_wake_decode_max_iterations_reset"})
+                                stats["decode_resets_max_iter"] += 1
+                                spotter.reset_stream(stream)
+                                break
+                            if decode_count >= decode_budget_per_cycle or decode_budget_tokens < 1.0:
+                                break
+                            spotter.decode_stream(stream)
+                            decode_budget_tokens = max(0.0, decode_budget_tokens - 1.0)
+                            stats["decode_calls"] += 1
+                            decode_count += 1
+                        result = spotter.get_result(stream).strip()
+
+                    now = time.monotonic()
+                    if stats_enabled and now - stats_last_emit_ts >= self.STATS_EMIT_INTERVAL_S:
+                        interval_s = max(1e-6, now - stats_last_emit_ts)
+                        total_elapsed_s = max(1e-6, now - stats_started_ts)
+                        current_frames = int(stats["frames_total"])
+                        current_decodes = int(stats["decode_calls"])
+                        current_wake_hits = int(stats["wake_hits"])
+                        interval_frames = current_frames - stats_last_frames
+                        interval_decodes = current_decodes - stats_last_decodes
+                        interval_wake_hits = current_wake_hits - stats_last_wake_hits
+                        payload: dict[str, object] = {
+                            "event": "voice_wake_stats",
+                            "uptime_s": round(total_elapsed_s, 3),
+                            "interval_s": round(interval_s, 3),
+                            "frames_total": current_frames,
+                            "frames_vad_pass": int(stats["frames_vad_pass"]),
+                            "frames_vad_pass_ratio": (
+                                round(float(stats["frames_vad_pass"]) / float(current_frames), 4)
+                                if current_frames > 0
+                                else 0.0
+                            ),
+                            "frames_per_s": round(interval_frames / interval_s, 2),
+                            "decode_calls": current_decodes,
+                            "decode_calls_per_s": round(interval_decodes / interval_s, 2),
+                            "decode_resets_timeout": int(stats["decode_resets_timeout"]),
+                            "decode_resets_max_iter": int(stats["decode_resets_max_iter"]),
+                            "wake_hits": current_wake_hits,
+                            "wake_hits_per_h": round(interval_wake_hits * 3600.0 / interval_s, 2),
+                            "kws_gate_open": kws_gate_open,
+                            "decode_budget_tokens": round(decode_budget_tokens, 2),
+                        }
+                        if cpu_process is not None:
+                            try:
+                                payload["cpu_percent"] = round(float(cpu_process.cpu_percent(None)), 2)
+                            except Exception:
+                                pass
+                        self._emit(payload)
+                        stats_last_emit_ts = now
+                        stats_last_frames = current_frames
+                        stats_last_decodes = current_decodes
+                        stats_last_wake_hits = current_wake_hits
+
                     if not result:
                         continue
 
                     spotter.reset_stream(stream)
-                    now = time.monotonic()
                     if now - self._last_trigger < max(0.0, self.runtime.cooldown_s):
                         self._emit({"message": f"voice_wake_ignored_in_cooldown: {result}"})
                         continue
@@ -658,10 +887,9 @@ class VoiceWakeService:
                             candidate_embedding = _extract_speaker_embedding(
                                 verify_samples,
                                 sample_rate=self.model.sample_rate,
-                                target_rate=8000,  # Reduced from 16kHz to 8kHz for ~50% CPU reduction
+                                target_rate=8000,
                                 noise_suppression=owner_noise_suppression,
                             )
-                            # Use max similarity strategy: compare with all enrolled samples
                             similarity = max(
                                 float(_cosine_similarity(candidate_embedding, owner_emb))
                                 for owner_emb in owner_embeddings
@@ -681,6 +909,7 @@ class VoiceWakeService:
                             )
                             continue
 
+                    stats["wake_hits"] += 1
                     self._last_trigger = now
                     self._emit({"event": "voice_wake_triggered", "keyword": result})
                     self.on_wake(result)
@@ -720,4 +949,13 @@ def make_wake_runtime_config(args: argparse.Namespace) -> WakeRuntimeConfig:
         owner_sample_path=str(getattr(args, "wake_owner_sample", "")),
         owner_threshold=float(getattr(args, "wake_owner_threshold", 0.72)),
         owner_window_s=float(getattr(args, "wake_owner_window_s", 1.6)),
+        stats_enabled=bool(getattr(args, "wake_stats", False)),
+        pre_vad_enabled=bool(getattr(args, "wake_pre_vad", True)),
+        pre_vad_aggressiveness=int(getattr(args, "wake_pre_vad_aggressiveness", 3)),
+        pre_vad_frame_ms=int(getattr(args, "wake_pre_vad_frame_ms", 30)),
+        pre_vad_enter_frames=int(getattr(args, "wake_pre_vad_enter_frames", 4)),
+        pre_vad_hangover_ms=int(getattr(args, "wake_pre_vad_hangover_ms", 120)),
+        pre_roll_ms=int(getattr(args, "wake_pre_roll_ms", 300)),
+        decode_budget_per_cycle=int(getattr(args, "wake_decode_budget_per_cycle", 1)),
+        decode_budget_per_sec=float(getattr(args, "wake_decode_budget_per_sec", 16.0)),
     )

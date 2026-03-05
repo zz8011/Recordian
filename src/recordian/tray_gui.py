@@ -479,6 +479,47 @@ class TrayApp:
         except Exception:
             wake_speech_confirm_s = 0.18
         current["wake_speech_confirm_s"] = max(0.0, wake_speech_confirm_s)
+        current["wake_stats"] = bool(current.get("wake_stats", False))
+        current["wake_pre_vad"] = bool(current.get("wake_pre_vad", True))
+        try:
+            wake_pre_vad_aggr = int(current.get("wake_pre_vad_aggressiveness", 3))
+        except Exception:
+            wake_pre_vad_aggr = 3
+        if wake_pre_vad_aggr not in {0, 1, 2, 3}:
+            wake_pre_vad_aggr = 3
+        current["wake_pre_vad_aggressiveness"] = wake_pre_vad_aggr
+        try:
+            wake_pre_vad_frame_ms = int(current.get("wake_pre_vad_frame_ms", 30))
+        except Exception:
+            wake_pre_vad_frame_ms = 30
+        if wake_pre_vad_frame_ms not in {10, 20, 30}:
+            wake_pre_vad_frame_ms = 30
+        current["wake_pre_vad_frame_ms"] = wake_pre_vad_frame_ms
+        try:
+            wake_pre_vad_enter_frames = int(current.get("wake_pre_vad_enter_frames", 4))
+        except Exception:
+            wake_pre_vad_enter_frames = 4
+        current["wake_pre_vad_enter_frames"] = max(1, wake_pre_vad_enter_frames)
+        try:
+            wake_pre_vad_hangover_ms = int(current.get("wake_pre_vad_hangover_ms", 120))
+        except Exception:
+            wake_pre_vad_hangover_ms = 120
+        current["wake_pre_vad_hangover_ms"] = max(0, wake_pre_vad_hangover_ms)
+        try:
+            wake_pre_roll_ms = int(current.get("wake_pre_roll_ms", 300))
+        except Exception:
+            wake_pre_roll_ms = 300
+        current["wake_pre_roll_ms"] = max(0, wake_pre_roll_ms)
+        try:
+            wake_decode_budget_per_cycle = int(current.get("wake_decode_budget_per_cycle", 1))
+        except Exception:
+            wake_decode_budget_per_cycle = 1
+        current["wake_decode_budget_per_cycle"] = max(1, wake_decode_budget_per_cycle)
+        try:
+            wake_decode_budget_per_sec = float(current.get("wake_decode_budget_per_sec", 16.0))
+        except Exception:
+            wake_decode_budget_per_sec = 16.0
+        current["wake_decode_budget_per_sec"] = max(1.0, wake_decode_budget_per_sec)
         current["wake_auto_name_variants"] = bool(current.get("wake_auto_name_variants", True))
         current["wake_auto_prefix_variants"] = bool(current.get("wake_auto_prefix_variants", True))
         current["wake_allow_name_only"] = bool(current.get("wake_allow_name_only", True))
@@ -1869,6 +1910,168 @@ class TrayApp:
                 value=current.get("wake_keyword_threshold", 0.25),
             )
 
+            sec_wake_advanced = _create_section(tab_wake, "高级调优")
+            row = 0
+            row = _add_field(
+                sec_wake_advanced,
+                row,
+                key="wake_stats",
+                label="输出唤醒统计",
+                value=current.get("wake_stats", False),
+                kind="bool",
+                default_bool=False,
+                hint="周期输出 voice_wake_stats 事件（排查 CPU 用）",
+            )
+            row = _add_field(
+                sec_wake_advanced,
+                row,
+                key="wake_pre_vad",
+                label="待机 pre-VAD 门控",
+                value=current.get("wake_pre_vad", True),
+                kind="bool",
+                default_bool=True,
+                hint="先过 VAD 再进入 KWS 解码，通常可降低 CPU",
+            )
+            row = _add_field(
+                sec_wake_advanced,
+                row,
+                key="wake_pre_vad_aggressiveness",
+                label="pre-VAD 灵敏度",
+                value=str(current.get("wake_pre_vad_aggressiveness", 3)),
+                kind="combo",
+                options=("0", "1", "2", "3"),
+                hint="3 更严格，背景噪声下更稳",
+            )
+            row = _add_field(
+                sec_wake_advanced,
+                row,
+                key="wake_pre_vad_frame_ms",
+                label="pre-VAD 帧长 (ms)",
+                value=str(current.get("wake_pre_vad_frame_ms", 30)),
+                kind="combo",
+                options=("10", "20", "30"),
+            )
+            row = _add_field(
+                sec_wake_advanced,
+                row,
+                key="wake_pre_vad_enter_frames",
+                label="pre-VAD 进入帧数",
+                value=current.get("wake_pre_vad_enter_frames", 4),
+                hint="连续判定为语音多少帧后，打开 KWS 门",
+            )
+            row = _add_field(
+                sec_wake_advanced,
+                row,
+                key="wake_pre_vad_hangover_ms",
+                label="pre-VAD 挂起时长 (ms)",
+                value=current.get("wake_pre_vad_hangover_ms", 120),
+                hint="最后一帧语音后，额外保持门打开的时长",
+            )
+            row = _add_field(
+                sec_wake_advanced,
+                row,
+                key="wake_pre_roll_ms",
+                label="pre-roll (ms)",
+                value=current.get("wake_pre_roll_ms", 300),
+                hint="门打开时回放前序音频长度，减少截断漏检",
+            )
+            row = _add_field(
+                sec_wake_advanced,
+                row,
+                key="wake_decode_budget_per_cycle",
+                label="每周期解码预算",
+                value=current.get("wake_decode_budget_per_cycle", 1),
+                hint="单个音频读取周期内最多解码次数",
+            )
+            row = _add_field(
+                sec_wake_advanced,
+                row,
+                key="wake_decode_budget_per_sec",
+                label="每秒解码预算",
+                value=current.get("wake_decode_budget_per_sec", 16.0),
+                hint="token bucket 速率上限（越低 CPU 越省）",
+            )
+            row = _add_field(
+                sec_wake_advanced,
+                row,
+                key="wake_auto_name_variants",
+                label="自动扩展名字变体",
+                value=current.get("wake_auto_name_variants", True),
+                kind="bool",
+                default_bool=True,
+            )
+            row = _add_field(
+                sec_wake_advanced,
+                row,
+                key="wake_auto_prefix_variants",
+                label="自动扩展前缀变体",
+                value=current.get("wake_auto_prefix_variants", True),
+                kind="bool",
+                default_bool=True,
+            )
+            row = _add_field(
+                sec_wake_advanced,
+                row,
+                key="wake_allow_name_only",
+                label="允许名字单独唤醒",
+                value=current.get("wake_allow_name_only", True),
+                kind="bool",
+                default_bool=True,
+            )
+            row = _add_field(
+                sec_wake_advanced,
+                row,
+                key="wake_speech_confirm_s",
+                label="开口确认时长 (s)",
+                value=current.get("wake_speech_confirm_s", 0.18),
+                hint="累计语音证据达到该时长，判定已开口",
+            )
+            row = _add_field(
+                sec_wake_advanced,
+                row,
+                key="wake_use_semantic_gate",
+                label="启用语义门控",
+                value=current.get("wake_use_semantic_gate", False),
+                kind="bool",
+                default_bool=False,
+                hint="通过轻量语义探测辅助判断开始/结束",
+            )
+            row = _add_field(
+                sec_wake_advanced,
+                row,
+                key="wake_semantic_probe_interval_s",
+                label="语义探测间隔 (s)",
+                value=current.get("wake_semantic_probe_interval_s", 0.45),
+            )
+            row = _add_field(
+                sec_wake_advanced,
+                row,
+                key="wake_semantic_window_s",
+                label="语义探测窗口 (s)",
+                value=current.get("wake_semantic_window_s", 1.2),
+            )
+            row = _add_field(
+                sec_wake_advanced,
+                row,
+                key="wake_semantic_end_silence_s",
+                label="语义静音结束 (s)",
+                value=current.get("wake_semantic_end_silence_s", 1.0),
+            )
+            row = _add_field(
+                sec_wake_advanced,
+                row,
+                key="wake_semantic_min_chars",
+                label="语义最小字符数",
+                value=current.get("wake_semantic_min_chars", 1),
+            )
+            _add_field(
+                sec_wake_advanced,
+                row,
+                key="wake_semantic_timeout_ms",
+                label="语义探测超时 (ms)",
+                value=current.get("wake_semantic_timeout_ms", 1200),
+            )
+
             status_label = Gtk.Label(label="已载入当前配置。")
             status_label.set_xalign(0.0)
             status_label.set_opacity(0.78)
@@ -2080,6 +2283,8 @@ class TrayApp:
             btn_record_owner_sample.connect("clicked", lambda *_: self.open_speaker_enrollment_wizard())
 
             def _save(*, restart_backend: bool) -> None:
+                latest_config: dict[str, object] = {}
+
                 def _parse_int_field(key: str, default: int) -> int:
                     raw = str(_get_value(key)).strip()
                     return int(raw) if raw else default
@@ -2094,19 +2299,8 @@ class TrayApp:
                         return list(default)
                     return [item.strip() for item in raw.split(",") if item.strip()]
 
-                def _parse_int_current(key: str, default: int) -> int:
-                    try:
-                        return int(current.get(key, default))
-                    except Exception:
-                        return default
-
-                def _parse_float_current(key: str, default: float) -> float:
-                    try:
-                        return float(current.get(key, default))
-                    except Exception:
-                        return default
-
                 try:
+                    latest_config = ConfigManager.load(self.config_path)
                     record_format = str(_get_value("record_format")).strip().lower() or "ogg"
                     if record_format == "mp3":
                         record_format = "ogg"
@@ -2135,7 +2329,7 @@ class TrayApp:
                         "hotkey": str(_get_value("hotkey")).strip(),
                         "stop_hotkey": str(_get_value("stop_hotkey")).strip(),
                         "toggle_hotkey": str(_get_value("toggle_hotkey")).strip(),
-                        "exit_hotkey": str(current.get("exit_hotkey", "<ctrl>+<alt>+q")).strip(),
+                        "exit_hotkey": str(latest_config.get("exit_hotkey", "<ctrl>+<alt>+q")).strip(),
                         "cooldown_ms": _parse_int_field("cooldown_ms", 300),
                         "trigger_mode": str(_get_value("trigger_mode")).strip() or "ptt",
                         "notify_backend": str(_get_value("notify_backend")).strip() or "auto",
@@ -2179,16 +2373,25 @@ class TrayApp:
                         "wake_vad_aggressiveness": _parse_int_field("wake_vad_aggressiveness", 2),
                         "wake_vad_frame_ms": _parse_int_field("wake_vad_frame_ms", 30),
                         "wake_no_speech_timeout_s": _parse_float_field("wake_no_speech_timeout_s", 2.0),
-                        "wake_speech_confirm_s": _parse_float_current("wake_speech_confirm_s", 0.18),
-                        "wake_auto_name_variants": bool(current.get("wake_auto_name_variants", True)),
-                        "wake_auto_prefix_variants": bool(current.get("wake_auto_prefix_variants", True)),
-                        "wake_allow_name_only": bool(current.get("wake_allow_name_only", True)),
-                        "wake_use_semantic_gate": bool(current.get("wake_use_semantic_gate", False)),
-                        "wake_semantic_probe_interval_s": _parse_float_current("wake_semantic_probe_interval_s", 0.45),
-                        "wake_semantic_window_s": _parse_float_current("wake_semantic_window_s", 1.2),
-                        "wake_semantic_end_silence_s": _parse_float_current("wake_semantic_end_silence_s", 1.0),
-                        "wake_semantic_min_chars": _parse_int_current("wake_semantic_min_chars", 1),
-                        "wake_semantic_timeout_ms": _parse_int_current("wake_semantic_timeout_ms", 1200),
+                        "wake_speech_confirm_s": _parse_float_field("wake_speech_confirm_s", 0.18),
+                        "wake_stats": bool(_get_value("wake_stats")),
+                        "wake_pre_vad": bool(_get_value("wake_pre_vad")),
+                        "wake_pre_vad_aggressiveness": _parse_int_field("wake_pre_vad_aggressiveness", 3),
+                        "wake_pre_vad_frame_ms": _parse_int_field("wake_pre_vad_frame_ms", 30),
+                        "wake_pre_vad_enter_frames": _parse_int_field("wake_pre_vad_enter_frames", 4),
+                        "wake_pre_vad_hangover_ms": _parse_int_field("wake_pre_vad_hangover_ms", 120),
+                        "wake_pre_roll_ms": _parse_int_field("wake_pre_roll_ms", 300),
+                        "wake_decode_budget_per_cycle": _parse_int_field("wake_decode_budget_per_cycle", 1),
+                        "wake_decode_budget_per_sec": _parse_float_field("wake_decode_budget_per_sec", 16.0),
+                        "wake_auto_name_variants": bool(_get_value("wake_auto_name_variants")),
+                        "wake_auto_prefix_variants": bool(_get_value("wake_auto_prefix_variants")),
+                        "wake_allow_name_only": bool(_get_value("wake_allow_name_only")),
+                        "wake_use_semantic_gate": bool(_get_value("wake_use_semantic_gate")),
+                        "wake_semantic_probe_interval_s": _parse_float_field("wake_semantic_probe_interval_s", 0.45),
+                        "wake_semantic_window_s": _parse_float_field("wake_semantic_window_s", 1.2),
+                        "wake_semantic_end_silence_s": _parse_float_field("wake_semantic_end_silence_s", 1.0),
+                        "wake_semantic_min_chars": _parse_int_field("wake_semantic_min_chars", 1),
+                        "wake_semantic_timeout_ms": _parse_int_field("wake_semantic_timeout_ms", 1200),
                         "wake_owner_verify": bool(_get_value("wake_owner_verify")),
                         "wake_owner_sample": str(_get_value("wake_owner_sample")).strip(),
                         "wake_owner_profile": str(_get_value("wake_owner_profile")).strip() or "~/.config/recordian/owner_voice_profile.json",
@@ -2198,7 +2401,7 @@ class TrayApp:
                         "sound_on_path": str(_get_value("sound_on_path")).strip(),
                         "sound_off_path": str(_get_value("sound_off_path")).strip(),
                         # Legacy key kept for backward compatibility; when present it acts as fallback.
-                        "wake_beep_path": str(current.get("wake_beep_path", "")).strip(),
+                        "wake_beep_path": str(latest_config.get("wake_beep_path", "")).strip(),
                         "wake_encoder": str(_get_value("wake_encoder")).strip(),
                         "wake_decoder": str(_get_value("wake_decoder")).strip(),
                         "wake_joiner": str(_get_value("wake_joiner")).strip(),
@@ -2210,20 +2413,37 @@ class TrayApp:
                         "wake_sample_rate": _parse_int_field("wake_sample_rate", 16000),
                         "wake_keyword_score": _parse_float_field("wake_keyword_score", 1.5),
                         "wake_keyword_threshold": _parse_float_field("wake_keyword_threshold", 0.25),
-                        "hub": current.get("hub", "ms"),
-                        "remote_code": current.get("remote_code", ""),
-                        "hotword": current.get("hotword", []),
-                        "enable_streaming_refine": current.get("enable_streaming_refine", False),
+                        "hub": latest_config.get("hub", "ms"),
+                        "remote_code": latest_config.get("remote_code", ""),
+                        "hotword": latest_config.get("hotword", []),
+                        "enable_streaming_refine": latest_config.get("enable_streaming_refine", False),
                     }
                     if payload["wake_vad_aggressiveness"] not in {0, 1, 2, 3}:
                         payload["wake_vad_aggressiveness"] = 2
                     if payload["wake_vad_frame_ms"] not in {10, 20, 30}:
                         payload["wake_vad_frame_ms"] = 30
+                    if payload["wake_pre_vad_aggressiveness"] not in {0, 1, 2, 3}:
+                        payload["wake_pre_vad_aggressiveness"] = 3
+                    if payload["wake_pre_vad_frame_ms"] not in {10, 20, 30}:
+                        payload["wake_pre_vad_frame_ms"] = 30
                     payload["wake_no_speech_timeout_s"] = max(0.0, float(payload["wake_no_speech_timeout_s"]))
+                    payload["wake_speech_confirm_s"] = max(0.0, float(payload["wake_speech_confirm_s"]))
+                    payload["wake_pre_vad_enter_frames"] = max(1, int(payload["wake_pre_vad_enter_frames"]))
+                    payload["wake_pre_vad_hangover_ms"] = max(0, int(payload["wake_pre_vad_hangover_ms"]))
+                    payload["wake_pre_roll_ms"] = max(0, int(payload["wake_pre_roll_ms"]))
+                    payload["wake_decode_budget_per_cycle"] = max(1, int(payload["wake_decode_budget_per_cycle"]))
+                    payload["wake_decode_budget_per_sec"] = max(1.0, float(payload["wake_decode_budget_per_sec"]))
+                    payload["wake_semantic_probe_interval_s"] = max(0.1, float(payload["wake_semantic_probe_interval_s"]))
+                    payload["wake_semantic_window_s"] = max(0.4, float(payload["wake_semantic_window_s"]))
+                    payload["wake_semantic_end_silence_s"] = max(0.2, float(payload["wake_semantic_end_silence_s"]))
+                    payload["wake_semantic_min_chars"] = max(1, int(payload["wake_semantic_min_chars"]))
+                    payload["wake_semantic_timeout_ms"] = max(200, int(payload["wake_semantic_timeout_ms"]))
                     payload["wake_owner_threshold"] = min(0.99, max(0.0, float(payload["wake_owner_threshold"])))
                     payload["wake_owner_window_s"] = max(0.6, float(payload["wake_owner_window_s"]))
                     payload["wake_owner_silence_extend_s"] = max(0.0, float(payload["wake_owner_silence_extend_s"]))
-                    ConfigManager.save(self.config_path, payload)
+                    merged_config = dict(latest_config)
+                    merged_config.update(payload)
+                    ConfigManager.save(self.config_path, merged_config)
                 except ValueError as exc:
                     status_label.set_text(f"保存失败：数值格式不正确 ({exc})")
                     return

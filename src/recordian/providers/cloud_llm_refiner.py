@@ -207,6 +207,9 @@ class CloudLLMRefiner(BaseTextRefiner):
                 }
             ],
             "stream": False,
+            # Qwen3.5 reasoning models on Ollama may put output in `thinking`
+            # unless `think` is explicitly disabled.
+            "think": bool(self.enable_thinking),
             "options": {
                 "num_predict": self.max_tokens,
                 "temperature": self.temperature,

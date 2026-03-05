@@ -29,7 +29,7 @@ uv run recordian-tray
 ### 2. 热键模式
 
 ```bash
-uv run recordian-hotkey
+uv run recordian-hotkey-dictate
 ```
 
 **特点**:
@@ -41,7 +41,7 @@ uv run recordian-hotkey
 ### 3. 命令行模式
 
 ```bash
-uv run recordian-cli
+uv run recordian-linux-dictate
 ```
 
 **特点**:
@@ -61,7 +61,7 @@ uv run recordian-cli
    ```
 
 2. **触发录音**
-   - 默认热键: `Ctrl+Space`
+   - 默认热键: `右 Ctrl`（按住说话）
    - 或点击托盘图标选择"开始录音"
 
 3. **说话**
@@ -69,7 +69,7 @@ uv run recordian-cli
    - 支持中英文混合
 
 4. **停止录音**
-   - 再次按 `Ctrl+Space`
+   - 松开 `右 Ctrl`
    - 或等待自动停止（静音检测）
 
 5. **查看结果**
@@ -89,7 +89,7 @@ uv run recordian-cli
 5. 点击"保存"
 
 **推荐热键**:
-- `Ctrl+Space` (默认)
+- `右 Ctrl` (默认)
 - `Alt+Space`
 - `F1`
 - `Ctrl+Shift+V`
