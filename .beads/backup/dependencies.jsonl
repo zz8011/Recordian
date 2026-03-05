@@ -7,6 +7,7 @@
 {"created_at":"2026-03-02T04:54:55Z","created_by":"zz8011","depends_on_id":"Recordian-4jd.3","issue_id":"Recordian-4jd.4","type":"blocks"}
 {"created_at":"2026-03-02T04:54:44Z","created_by":"zz8011","depends_on_id":"Recordian-4jd","issue_id":"Recordian-4jd.5","type":"parent-child"}
 {"created_at":"2026-03-02T04:54:55Z","created_by":"zz8011","depends_on_id":"Recordian-4jd.4","issue_id":"Recordian-4jd.5","type":"blocks"}
+{"created_at":"2026-03-06T04:28:49Z","created_by":"zz8011","depends_on_id":"Recordian-kay","issue_id":"Recordian-4l3","type":"discovered-from"}
 {"created_at":"2026-03-02T23:16:40Z","created_by":"zz8011","depends_on_id":"Recordian-5uh","issue_id":"Recordian-5uh.1","type":"parent-child"}
 {"created_at":"2026-03-02T23:16:43Z","created_by":"zz8011","depends_on_id":"Recordian-5uh","issue_id":"Recordian-5uh.2","type":"parent-child"}
 {"created_at":"2026-03-02T23:17:21Z","created_by":"zz8011","depends_on_id":"Recordian-5uh.1","issue_id":"Recordian-5uh.2","type":"blocks"}
