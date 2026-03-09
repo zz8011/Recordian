@@ -51,6 +51,16 @@ class TestCloudLLMRefinerInit:
         )
         assert refiner.api_format == "openai"
 
+    def test_api_format_auto_detection_openai_for_local_v1_gateway(self) -> None:
+        """测试自动识别局域网 OpenAI 兼容 /v1 网关"""
+        from recordian.providers.cloud_llm_refiner import CloudLLMRefiner
+
+        refiner = CloudLLMRefiner(
+            api_base="http://192.168.5.111:8018/v1",
+            api_key="test-key",
+        )
+        assert refiner.api_format == "openai"
+
     def test_api_format_auto_detection_anthropic(self) -> None:
         """测试自动检测 Anthropic API 格式"""
         from recordian.providers.cloud_llm_refiner import CloudLLMRefiner
@@ -86,4 +96,3 @@ class TestCloudLLMRefinerInit:
 
         result = refiner.refine("   ")
         assert result == ""
-

@@ -1,6 +1,29 @@
 from __future__ import annotations
 
+from urllib.parse import urlparse
+
 from .base_text_refiner import BaseTextRefiner
+
+
+def _detect_api_format(api_base: str) -> str:
+    normalized = api_base.rstrip("/")
+    lowered = normalized.lower()
+
+    if ":11434" in lowered:
+        return "ollama"
+
+    parsed = urlparse(normalized)
+    path = parsed.path.rstrip("/")
+    if (
+        "groq.com" in lowered
+        or "openai.com" in lowered
+        or "deepseek.com" in lowered
+        or path == "/v1"
+        or path.endswith("/v1")
+    ):
+        return "openai"
+
+    return "anthropic"
 
 
 class CloudLLMRefiner(BaseTextRefiner):
@@ -37,13 +60,7 @@ class CloudLLMRefiner(BaseTextRefiner):
 
         # 自动检测 API 格式
         if api_format == "auto":
-            if ":11434" in api_base:
-                # Ollama 原生 API
-                self.api_format = "ollama"
-            elif "groq.com" in api_base.lower() or "openai.com" in api_base.lower() or "deepseek.com" in api_base.lower():
-                self.api_format = "openai"
-            else:
-                self.api_format = "anthropic"
+            self.api_format = _detect_api_format(api_base)
         else:
             self.api_format = api_format
 
