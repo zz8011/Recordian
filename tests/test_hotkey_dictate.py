@@ -479,6 +479,27 @@ def test_parse_args_with_config_normalizes_legacy_values(tmp_path: Path, monkeyp
     assert args.auto_lexicon_db.endswith("recordian-lexicon.db")
 
 
+def test_parse_args_accepts_auto_fallback_commit_backend(monkeypatch) -> None:
+    from recordian.hotkey_dictate import _parse_args_with_config, build_parser
+
+    monkeypatch.setattr("sys.argv", ["recordian-hotkey-dictate", "--commit-backend", "auto-fallback"])
+    args = _parse_args_with_config(build_parser())
+
+    assert args.commit_backend == "auto-fallback"
+
+
+def test_parse_args_with_config_preserves_auto_fallback_commit_backend(tmp_path: Path, monkeypatch) -> None:
+    from recordian.hotkey_dictate import _parse_args_with_config, build_parser
+
+    cfg = tmp_path / "hotkey.json"
+    cfg.write_text(json.dumps({"commit_backend": "auto-fallback"}), encoding="utf-8")
+
+    monkeypatch.setattr("sys.argv", ["recordian-hotkey-dictate", "--config-path", str(cfg)])
+    args = _parse_args_with_config(build_parser())
+
+    assert args.commit_backend == "auto-fallback"
+
+
 def test_level_speech_frame_requires_signal_and_energy() -> None:
     assert _is_level_speech_frame(level=0.18, rms=0.01, noise_floor=0.0015) is True
     assert _is_level_speech_frame(level=0.18, rms=0.001, noise_floor=0.0015) is False

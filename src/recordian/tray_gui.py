@@ -6,6 +6,7 @@ import queue
 import sqlite3
 import sys
 import threading
+import time
 import tkinter as tk
 import wave
 from dataclasses import dataclass
@@ -134,6 +135,10 @@ class TrayApp:
             on_menu_update=self._update_tray_menu,
         )
         self._gtk_settings_window: Any = None
+        self._appindicator_preset_submenu: Any = None
+        self._appindicator_preset_items: dict[str, Any] = {}
+        self._appindicator_preset_names: list[str] = []
+        self._preset_menu_last_sync_ts = 0.0
 
     def _on_backend_state_change(self, running: bool, status: str, detail: str) -> None:
         """线程安全的状态更新回调"""
@@ -386,6 +391,80 @@ class TrayApp:
 
         # 更新托盘菜单以反映新的选中状态
         self._update_tray_menu()
+
+    def _list_tray_refine_presets(self) -> list[str]:
+        """列出托盘菜单可用的文本精炼预设（过滤 asr-* 等非精炼预设）。"""
+        preset_manager = PresetManager()
+        names = [
+            name for name in preset_manager.list_presets()
+            if name.lower() != "readme" and not name.lower().startswith("asr-")
+        ]
+        builtin_order = ["default", "formal", "meeting", "summary", "technical"]
+        builtin = [name for name in builtin_order if name in names]
+        custom = sorted(name for name in names if name not in builtin)
+        ordered = builtin + custom
+        return ordered if ordered else ["default"]
+
+    def _refresh_appindicator_preset_submenu(self) -> None:
+        """重建托盘预设二级菜单，确保与 presets 目录实时联动。"""
+        Gtk = getattr(self, "_gtk", None)
+        preset_submenu = getattr(self, "_appindicator_preset_submenu", None)
+        if Gtk is None or preset_submenu is None:
+            return
+
+        for child in list(preset_submenu.get_children()):
+            preset_submenu.remove(child)
+
+        presets = self._list_tray_refine_presets()
+        config = ConfigManager.load(self.config_path)
+        current_preset = str(config.get("refine_preset", "default")).strip() or "default"
+        preset_labels = {
+            "default": "默认",
+            "formal": "正式",
+            "meeting": "会议",
+            "summary": "总结",
+            "technical": "技术",
+        }
+
+        radio_group = None
+        item_map: dict[str, Any] = {}
+        for preset in presets:
+            preset_item = Gtk.RadioMenuItem(group=radio_group, label=preset_labels.get(preset, preset))
+            if radio_group is None:
+                radio_group = preset_item
+            if preset == current_preset:
+                preset_item.set_active(True)
+            preset_item.connect(
+                "activate",
+                lambda item, p=preset: self.root.after(0, lambda: self.switch_preset(p)) if item.get_active() else None,
+            )
+            preset_submenu.append(preset_item)
+            item_map[preset] = preset_item
+
+        self._appindicator_preset_items = item_map
+        self._appindicator_preset_names = presets
+        preset_submenu.show_all()
+
+    def _sync_appindicator_preset_submenu(self) -> None:
+        """同步托盘预设菜单：列表变化时重建，列表不变时仅更新选中项。"""
+        now = time.monotonic()
+        if now - self._preset_menu_last_sync_ts < 1.0:
+            return
+        self._preset_menu_last_sync_ts = now
+
+        presets_now = self._list_tray_refine_presets()
+        if presets_now != self._appindicator_preset_names:
+            self._refresh_appindicator_preset_submenu()
+            return
+
+        if not self._appindicator_preset_items:
+            return
+
+        config = ConfigManager.load(self.config_path)
+        current_preset = str(config.get("refine_preset", "default")).strip() or "default"
+        item = self._appindicator_preset_items.get(current_preset)
+        if item is not None and not bool(item.get_active()):
+            item.set_active(True)
 
 
     def open_settings(self) -> None:
@@ -2197,6 +2276,7 @@ class TrayApp:
                     _set_refine_preset_entry(name)
                     preset_name_entry.set_text("")
                     _set_status(f"已新建预设：{name}")
+                    self._update_tray_menu()
                 except Exception as exc:  # noqa: BLE001
                     _set_status(f"新建失败：{exc}")
 
@@ -2249,6 +2329,7 @@ class TrayApp:
                     if str(_get_value("refine_preset")).strip() == selected:
                         _set_refine_preset_entry(fallback)
                     _set_status(f"已删除预设：{selected}")
+                    self._update_tray_menu()
                 except FileNotFoundError:
                     _set_status("预设文件不存在")
                 except Exception as exc:  # noqa: BLE001
@@ -2478,6 +2559,7 @@ class TrayApp:
                     self.root.after(0, self.backend.restart)
                 else:
                     status_label.set_text(f"已保存 ({self.config_path})")
+                self._update_tray_menu()
 
             btn_save = Gtk.Button(label="仅保存")
             btn_save.connect("clicked", lambda *_: _save(restart_backend=False))
@@ -2604,30 +2686,10 @@ class TrayApp:
         # 预设子菜单
         preset_menu_item = Gtk.MenuItem(label="切换预设")
         preset_submenu = Gtk.Menu()
-
-        presets = ["default", "formal", "meeting", "summary", "technical"]
-        preset_labels = {
-            "default": "默认",
-            "formal": "正式",
-            "meeting": "会议",
-            "summary": "总结",
-            "technical": "技术",
-        }
-        current_preset = config.get("refine_preset", "default")
-
-        # Create radio group for presets
-        radio_group = None
-        for preset in presets:
-            preset_item = Gtk.RadioMenuItem(group=radio_group, label=preset_labels.get(preset, preset))
-            if radio_group is None:
-                radio_group = preset_item
-            if preset == current_preset:
-                preset_item.set_active(True)
-            preset_item.connect("activate", lambda item, p=preset: self.root.after(0, lambda: self.switch_preset(p)) if item.get_active() else None)
-            preset_submenu.append(preset_item)
-
+        self._appindicator_preset_submenu = preset_submenu
         preset_menu_item.set_submenu(preset_submenu)
         menu.append(preset_menu_item)
+        self._refresh_appindicator_preset_submenu()
 
         # 常用词管理
         context_item = Gtk.MenuItem(label="常用词管理...")
@@ -2701,6 +2763,7 @@ class TrayApp:
                     auto_hard_enter_item = getattr(self, "_appindicator_auto_hard_enter_item", None)
                     if auto_hard_enter_item is not None:
                         auto_hard_enter_item.set_active(bool(cfg.get("auto_hard_enter", False)))
+                    self._sync_appindicator_preset_submenu()
                     try:
                         indicator.set_icon(icon_path)
                     except Exception:

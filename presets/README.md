@@ -9,6 +9,11 @@
 - `summary.md` - 提取核心信息
 - `meeting.md` - 会议纪要格式
 - `technical.md` - 技术文档风格
+- `English.md` - 翻译成英文口语
+- `Japanese.md` - 翻译成日语
+- `Korean.md` - 翻译成韩语
+- `Arabic.md` - 翻译成阿拉伯语
+- `Extended.md` - 在原意基础上适度扩写
 
 ### 使用方法
 
@@ -20,6 +25,8 @@
   "refine_preset": "formal"
 }
 ```
+
+托盘菜单会自动扫描 `presets/*.md`，新增文本精炼预设后无需改代码，重开菜单即可看到。
 
 ## ASR Context 预设（用于 ASR 识别阶段）
 

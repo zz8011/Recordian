@@ -1785,7 +1785,15 @@ def _parse_args_with_config(parser: argparse.ArgumentParser) -> argparse.Namespa
         args.record_format = "ogg"
     if getattr(args, "commit_backend", "auto") == "pynput":
         args.commit_backend = "auto"
-    if getattr(args, "commit_backend", "auto") not in {"none", "auto", "wtype", "xdotool", "xdotool-clipboard", "stdout"}:
+    if getattr(args, "commit_backend", "auto") not in {
+        "none",
+        "auto",
+        "auto-fallback",
+        "wtype",
+        "xdotool",
+        "xdotool-clipboard",
+        "stdout",
+    }:
         args.commit_backend = "auto"
     args.auto_hard_enter = bool(getattr(args, "auto_hard_enter", False))
     try:

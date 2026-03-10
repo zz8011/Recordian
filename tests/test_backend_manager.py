@@ -87,6 +87,8 @@ class TestBackendManagerStart:
         mock_proc.poll.return_value = None
         mock_proc.stdout = Mock()
         mock_proc.stderr = Mock()
+        mock_proc.stdout.readline.side_effect = [""]
+        mock_proc.stderr.readline.side_effect = [""]
         mock_popen.return_value = mock_proc
 
         manager = BackendManager(
@@ -391,6 +393,8 @@ class TestBackendManagerRestart:
         new_proc.poll.return_value = None
         new_proc.stdout = Mock()
         new_proc.stderr = Mock()
+        new_proc.stdout.readline.side_effect = [""]
+        new_proc.stderr.readline.side_effect = [""]
         mock_popen.return_value = new_proc
 
         manager.restart()

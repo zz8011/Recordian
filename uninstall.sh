@@ -13,14 +13,14 @@ SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 DESKTOP_FILE="$HOME/.local/share/applications/recordian.desktop"
 if [ -f "$DESKTOP_FILE" ]; then
     echo "删除桌面启动器: $DESKTOP_FILE"
-    rm "$DESKTOP_FILE"
+    rm -f "$DESKTOP_FILE"
 fi
 
 # 删除启动脚本
 LAUNCH_SCRIPT="$SCRIPT_DIR/recordian-launch.sh"
 if [ -f "$LAUNCH_SCRIPT" ]; then
     echo "删除启动脚本: $LAUNCH_SCRIPT"
-    rm "$LAUNCH_SCRIPT"
+    rm -f "$LAUNCH_SCRIPT"
 fi
 
 echo ""

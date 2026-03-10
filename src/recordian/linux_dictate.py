@@ -69,7 +69,7 @@ def add_dictate_args(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument(
         "--commit-backend",
-        choices=["none", "auto", "wtype", "xdotool", "xdotool-clipboard", "stdout"],
+        choices=["none", "auto", "auto-fallback", "wtype", "xdotool", "xdotool-clipboard", "stdout"],
         default="auto",
     )
     parser.add_argument(
