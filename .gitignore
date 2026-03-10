@@ -58,5 +58,4 @@ htmlcov/
 .dolt/
 *.db
 
-# Beads (ephemeral task data)
-.beads/
+# Beads runtime ignore rules are maintained in .beads/.gitignore
