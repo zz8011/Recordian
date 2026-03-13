@@ -28,7 +28,14 @@ from .linux_dictate import (
 )
 from .linux_notify import Notification, resolve_notifier
 from .runtime_deps import ensure_ffmpeg_available
-from .voice_wake import VoiceWakeService, make_wake_model_config, make_wake_runtime_config, normalize_tokens_type
+from .voice_wake import (
+    DEFAULT_WAKE_KEYWORD_THRESHOLD,
+    DEFAULT_WAKE_NUM_THREADS,
+    VoiceWakeService,
+    make_wake_model_config,
+    make_wake_runtime_config,
+    normalize_tokens_type,
+)
 
 DEFAULT_CONFIG_PATH = "~/.config/recordian/hotkey.json"
 
@@ -364,10 +371,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--wake-keywords-file", default="", help="Optional pre-tokenized keywords.txt path")
     parser.add_argument("--wake-tokens-type", default="ppinyin", choices=["ppinyin", "bpe", "cjkchar", "fpinyin"])
     parser.add_argument("--wake-provider", default="cpu")
-    parser.add_argument("--wake-num-threads", type=int, default=2)
+    parser.add_argument("--wake-num-threads", type=int, default=DEFAULT_WAKE_NUM_THREADS)
     parser.add_argument("--wake-sample-rate", type=int, default=16000)
     parser.add_argument("--wake-keyword-score", type=float, default=1.5)
-    parser.add_argument("--wake-keyword-threshold", type=float, default=0.08)
+    parser.add_argument("--wake-keyword-threshold", type=float, default=DEFAULT_WAKE_KEYWORD_THRESHOLD)
     parser.add_argument(
         "--enable-auto-lexicon",
         action=argparse.BooleanOptionalAction,
@@ -2002,11 +2009,11 @@ def _save_runtime_config(args: argparse.Namespace) -> None:
         "wake_tokens": getattr(args, "wake_tokens", str(_DEFAULT_WAKE_TOKENS)),
         "wake_keywords_file": getattr(args, "wake_keywords_file", ""),
         "wake_tokens_type": getattr(args, "wake_tokens_type", "ppinyin"),
-        "wake_num_threads": getattr(args, "wake_num_threads", 2),
+        "wake_num_threads": getattr(args, "wake_num_threads", DEFAULT_WAKE_NUM_THREADS),
         "wake_sample_rate": getattr(args, "wake_sample_rate", 16000),
         "wake_energy_threshold": float(getattr(args, "wake_energy_threshold", 0.0001)),
         "wake_keyword_score": getattr(args, "wake_keyword_score", 1.5),
-        "wake_keyword_threshold": getattr(args, "wake_keyword_threshold", 0.08),
+        "wake_keyword_threshold": getattr(args, "wake_keyword_threshold", DEFAULT_WAKE_KEYWORD_THRESHOLD),
         "enable_auto_lexicon": getattr(args, "enable_auto_lexicon", True),
         "auto_lexicon_db": getattr(args, "auto_lexicon_db", "~/.config/recordian/auto_lexicon.db"),
         "auto_lexicon_max_hotwords": getattr(args, "auto_lexicon_max_hotwords", 40),

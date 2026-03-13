@@ -17,6 +17,7 @@ from recordian.audio_feedback import play_sound
 from recordian.backend_manager import BackendManager
 from recordian.config import ConfigManager
 from recordian.preset_manager import PresetManager
+from recordian.voice_wake import DEFAULT_WAKE_KEYWORD_THRESHOLD, DEFAULT_WAKE_NUM_THREADS
 from recordian.waveform_renderer import WaveformRenderer
 
 logger = logging.getLogger(__name__)
@@ -1949,7 +1950,7 @@ class TrayApp:
                 row,
                 key="wake_num_threads",
                 label="线程数",
-                value=current.get("wake_num_threads", 2),
+                value=current.get("wake_num_threads", DEFAULT_WAKE_NUM_THREADS),
             )
             row = _add_field(
                 sec_wake_model,
@@ -2002,7 +2003,7 @@ class TrayApp:
                 row,
                 key="wake_keyword_threshold",
                 label="关键词阈值",
-                value=current.get("wake_keyword_threshold", 0.25),
+                value=current.get("wake_keyword_threshold", DEFAULT_WAKE_KEYWORD_THRESHOLD),
             )
 
             sec_wake_advanced = _create_section(tab_wake, "高级调优")
@@ -2512,10 +2513,10 @@ class TrayApp:
                         "wake_keywords_file": str(_get_value("wake_keywords_file")).strip(),
                         "wake_tokens_type": str(_get_value("wake_tokens_type")).strip() or "ppinyin",
                         "wake_provider": str(_get_value("wake_provider")).strip() or "cpu",
-                        "wake_num_threads": _parse_int_field("wake_num_threads", 2),
+                        "wake_num_threads": _parse_int_field("wake_num_threads", DEFAULT_WAKE_NUM_THREADS),
                         "wake_sample_rate": _parse_int_field("wake_sample_rate", 16000),
                         "wake_keyword_score": _parse_float_field("wake_keyword_score", 1.5),
-                        "wake_keyword_threshold": _parse_float_field("wake_keyword_threshold", 0.25),
+                        "wake_keyword_threshold": _parse_float_field("wake_keyword_threshold", DEFAULT_WAKE_KEYWORD_THRESHOLD),
                         "hub": latest_config.get("hub", "ms"),
                         "remote_code": latest_config.get("remote_code", ""),
                         "hotword": latest_config.get("hotword", []),

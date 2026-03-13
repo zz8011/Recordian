@@ -7,6 +7,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from recordian.voice_wake import DEFAULT_WAKE_KEYWORD_THRESHOLD
+
 
 def print_check(name: str, passed: bool, details: str = "") -> None:
     """打印检查结果"""
@@ -162,7 +164,7 @@ def check_wake_config(config: dict[str, Any]) -> None:
                 print("    ✗ 声纹配置文件不存在")
 
     keyword_score = config.get("wake_keyword_score", 1.5)
-    keyword_threshold = config.get("wake_keyword_threshold", 0.12)
+    keyword_threshold = config.get("wake_keyword_threshold", DEFAULT_WAKE_KEYWORD_THRESHOLD)
     print(f"  关键词得分: {keyword_score}")
     print(f"  关键词阈值: {keyword_threshold}")
 
@@ -214,7 +216,7 @@ def main() -> int:
         print("   1. 声纹验证阈值太高（当前: {})".format(
             config.get("wake_owner_threshold", 0.72)))
         print("   2. 关键词检测阈值太高（当前: {})".format(
-            config.get("wake_keyword_threshold", 0.12)))
+            config.get("wake_keyword_threshold", DEFAULT_WAKE_KEYWORD_THRESHOLD)))
         print("   3. 音频流没有正确传递给 sherpa_onnx")
         print("\n建议：")
         print("   - 尝试临时禁用声纹验证: wake_owner_verify = false")

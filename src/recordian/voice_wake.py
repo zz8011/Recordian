@@ -16,6 +16,9 @@ from shutil import which
 
 EventCallback = Callable[[dict[str, object]], None]
 
+DEFAULT_WAKE_NUM_THREADS = 1
+DEFAULT_WAKE_KEYWORD_THRESHOLD = 0.12
+
 # Trusted model hashes for integrity verification
 TRUSTED_MODEL_HASHES = {
     "encoder-epoch-12-avg-2-chunk-16-left-64.int8.onnx": "dd784973fc9d2fabb3b800d6dcd20fc3b0ca84f8e2415afe54b032878e447f4d",
@@ -924,7 +927,7 @@ def make_wake_model_config(args: argparse.Namespace) -> WakeModelConfig:
         joiner=str(getattr(args, "wake_joiner", "")),
         tokens=str(getattr(args, "wake_tokens", "")),
         provider=str(getattr(args, "wake_provider", "cpu")),
-        num_threads=int(getattr(args, "wake_num_threads", 2)),
+        num_threads=int(getattr(args, "wake_num_threads", DEFAULT_WAKE_NUM_THREADS)),
         sample_rate=int(getattr(args, "wake_sample_rate", 16000)),
         tokens_type=normalize_tokens_type(str(getattr(args, "wake_tokens_type", "ppinyin"))),
         keywords_file=str(getattr(args, "wake_keywords_file", "")),
@@ -940,7 +943,7 @@ def make_wake_runtime_config(args: argparse.Namespace) -> WakeRuntimeConfig:
         names=names,
         cooldown_s=float(getattr(args, "wake_cooldown_s", 3.0)),
         keyword_score=float(getattr(args, "wake_keyword_score", 1.5)),
-        keyword_threshold=float(getattr(args, "wake_keyword_threshold", 0.08)),
+        keyword_threshold=float(getattr(args, "wake_keyword_threshold", DEFAULT_WAKE_KEYWORD_THRESHOLD)),
         auto_name_variants=bool(getattr(args, "wake_auto_name_variants", True)),
         auto_prefix_variants=bool(getattr(args, "wake_auto_prefix_variants", True)),
         allow_name_only=bool(getattr(args, "wake_allow_name_only", True)),

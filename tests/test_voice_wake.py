@@ -5,6 +5,8 @@ import types
 from pathlib import Path
 
 from recordian.voice_wake import (
+    DEFAULT_WAKE_KEYWORD_THRESHOLD,
+    DEFAULT_WAKE_NUM_THREADS,
     build_wake_phrases,
     ensure_keywords_file,
     make_wake_model_config,
@@ -125,6 +127,16 @@ def test_make_wake_model_config_normalizes_legacy_char() -> None:
     )
     cfg = make_wake_model_config(args)
     assert cfg.tokens_type == "ppinyin"
+
+
+def test_make_wake_configs_use_shared_defaults() -> None:
+    args = argparse.Namespace()
+
+    model_cfg = make_wake_model_config(args)
+    runtime_cfg = make_wake_runtime_config(args)
+
+    assert model_cfg.num_threads == DEFAULT_WAKE_NUM_THREADS
+    assert runtime_cfg.keyword_threshold == DEFAULT_WAKE_KEYWORD_THRESHOLD
 
 
 def test_normalize_tokens_type() -> None:

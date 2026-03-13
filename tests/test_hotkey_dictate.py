@@ -403,6 +403,16 @@ def test_build_parser_accepts_voice_wake_options() -> None:
     assert args.auto_lexicon_max_terms == 6666
 
 
+def test_build_parser_uses_cpu_friendly_wake_defaults() -> None:
+    from recordian.hotkey_dictate import build_parser
+
+    parser = build_parser()
+    args = parser.parse_args([])
+
+    assert args.wake_num_threads == 1
+    assert args.wake_keyword_threshold == 0.12
+
+
 def test_parse_args_with_config_normalizes_legacy_values(tmp_path: Path, monkeypatch) -> None:
     from recordian.hotkey_dictate import _parse_args_with_config, build_parser
 
