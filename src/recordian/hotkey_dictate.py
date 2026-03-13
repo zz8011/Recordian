@@ -952,15 +952,16 @@ def build_ptt_hotkey_handlers(
             if recorder_backend == "arecord":
                 suffix = ".wav"
             audio_path = Path(temp_dir.name) / f"input{suffix}"
-            process = start_record_process(
+            record_handle = start_record_process(
                 args=args,
                 ffmpeg_bin=ffmpeg_bin,
                 recorder_backend=recorder_backend,
                 output_path=audio_path,
                 duration_s=None,
+                enable_monitor=trigger_source == "voice_wake",
             )
             _update_state({
-                "process": process,
+                "process": record_handle,
                 "temp_dir": temp_dir,
                 "audio_path": audio_path,
                 "record_started_at": time.perf_counter(),
@@ -985,39 +986,62 @@ def build_ptt_hotkey_handlers(
             level_stop = threading.Event()
             _set_state("level_stop", level_stop)
 
-            def _level_worker(stop: threading.Event = level_stop) -> None:
+            def _level_worker(stop: threading.Event = level_stop, record_handle: Any = record_handle) -> None:
                 try:
                     import numpy as np
-                    import sounddevice as sd
 
                     # 音量计动态参数：适配普通语音输入，避免只有大音量才触发动画。
                     noise_floor = 0.0015
                     smoothed_level = 0.0
+                    monitor_stream = getattr(record_handle, "monitor_stream", None)
+                    sample_rate = int(getattr(record_handle, "monitor_sample_rate", 16000))
+                    monitor_channels = max(1, int(getattr(record_handle, "monitor_channels", 1)))
+                    device_id = None
 
-                    # 自动检测设备支持的采样率
-                    device_name = args.input_device if args.input_device != "default" else None
-                    try:
-                        if device_name:
-                            # 尝试通过名称查找设备
-                            devices = sd.query_devices()
+                    if monitor_stream is None:
+                        import sounddevice as sd
+
+                        # 自动检测设备支持的采样率
+                        device_name = args.input_device if args.input_device != "default" else None
+                        try:
+                            if device_name:
+                                # 尝试通过名称查找设备
+                                devices = sd.query_devices()
+                                for i, dev in enumerate(devices):
+                                    if device_name in dev["name"] and dev["max_input_channels"] > 0:
+                                        device_id = i
+                                        break
+                                if device_id is None:
+                                    device_id = device_name  # 可能是数字 ID
+
+                            device_info = sd.query_devices(device_id, kind="input")
+                            sample_rate = int(device_info["default_samplerate"])
+                            if args.debug_diagnostics:
+                                on_state(
+                                    {
+                                        "event": "log",
+                                        "message": (
+                                            "diag audio_level_monitoring_fallback"
+                                            f" device={device_info['name']}"
+                                            f" samplerate={sample_rate}"
+                                        ),
+                                    }
+                                )
+                        except Exception:
+                            # 回退到 16000 Hz
                             device_id = None
-                            for i, dev in enumerate(devices):
-                                if device_name in dev['name'] and dev['max_input_channels'] > 0:
-                                    device_id = i
-                                    break
-                            if device_id is None:
-                                device_id = device_name  # 可能是数字 ID
-                        else:
-                            device_id = None  # 使用默认设备
-
-                        device_info = sd.query_devices(device_id, kind='input')
-                        sample_rate = int(device_info['default_samplerate'])
-                        if args.debug_diagnostics:
-                            on_state({"event": "log", "message": f"diag audio_level_monitoring device={device_info['name']} samplerate={sample_rate}"})
-                    except Exception:
-                        # 回退到 16000 Hz
-                        device_id = None
-                        sample_rate = 16000
+                            sample_rate = 16000
+                    elif args.debug_diagnostics:
+                        on_state(
+                            {
+                                "event": "log",
+                                "message": (
+                                    "diag audio_level_monitoring source=record_monitor"
+                                    f" samplerate={sample_rate}"
+                                    f" channels={monitor_channels}"
+                                ),
+                            }
+                        )
 
                     use_webrtc_vad = bool(getattr(args, "wake_use_webrtcvad", True))
                     try:
@@ -1254,16 +1278,75 @@ def build_ptt_hotkey_handlers(
                         semantic_thread = threading.Thread(target=_semantic_probe_worker, daemon=True)
                         semantic_thread.start()
 
-                    def _cb(indata: Any, frames: int, t: Any, status: Any) -> None:
+                    def _emit_auto_stop(reason: str) -> bool:
+                        if bool(_get_state("voice_auto_stopping")):
+                            return False
+                        _set_state("voice_auto_stopping", True)
+                        on_state({"event": "voice_wake_auto_stop", "reason": reason})
+                        threading.Thread(target=_stop_recording, daemon=True).start()
+                        return True
+
+                    def _maybe_schedule_auto_stop(now_ts: float) -> bool:
+                        if not bool(_get_state("voice_session_active")):
+                            return False
+                        if bool(_get_state("voice_auto_stopping")):
+                            return False
+                        speech_detected = bool(_get_state("voice_speech_detected"))
+                        started_ts = float(_get_state("voice_started_ts"))
+                        if semantic_enabled:
+                            no_speech_timeout_s = max(0.0, float(getattr(args, "wake_no_speech_timeout_s", 2.0)))
+                            min_speech_s = max(0.0, float(getattr(args, "wake_min_speech_s", 0.5)))
+                            acoustic_silence_s = max(0.0, float(getattr(args, "wake_auto_stop_silence_s", 1.5)))
+                            semantic_has_text = bool(_get_state("voice_semantic_has_text"))
+                            semantic_last_ts = float(_get_state("voice_semantic_last_text_ts"))
+                            last_speech_ts = float(_get_state("voice_last_speech_ts"))
+                            semantic_reason = _should_auto_stop_semantic_session(
+                                now_ts=now_ts,
+                                started_ts=started_ts,
+                                last_speech_ts=last_speech_ts,
+                                semantic_has_text=semantic_has_text,
+                                semantic_last_text_ts=semantic_last_ts,
+                                no_speech_timeout_s=no_speech_timeout_s,
+                                min_speech_s=min_speech_s,
+                                semantic_end_silence_s=semantic_end_silence_s,
+                                acoustic_silence_s=acoustic_silence_s,
+                            )
+                            if semantic_reason is not None:
+                                return _emit_auto_stop(semantic_reason)
+                            return False
+                        if not speech_detected:
+                            no_speech_timeout_s = max(0.0, float(getattr(args, "wake_no_speech_timeout_s", 2.0)))
+                            if no_speech_timeout_s > 0 and now_ts - started_ts >= no_speech_timeout_s:
+                                return _emit_auto_stop("no_speech_timeout")
+                            return False
+                        last_speech_ts = float(_get_state("voice_last_speech_ts"))
+                        if now_ts - started_ts < max(0.0, float(getattr(args, "wake_min_speech_s", 0.5))):
+                            return False
+
+                        base_silence_s = max(0.0, float(getattr(args, "wake_auto_stop_silence_s", 1.5)))
+                        owner_filter_enabled_runtime = bool(getattr(args, "wake_owner_verify", False))
+                        if owner_filter_enabled_runtime:
+                            owner_active = bool(_get_state("voice_owner_active"))
+                            if owner_active:
+                                owner_extend_s = max(0.0, float(getattr(args, "wake_owner_silence_extend_s", 0.5)))
+                                silence_threshold = base_silence_s + owner_extend_s
+                            else:
+                                silence_threshold = base_silence_s * 0.6
+                        else:
+                            silence_threshold = base_silence_s
+                        if now_ts - last_speech_ts < silence_threshold:
+                            return False
+                        return _emit_auto_stop("silence")
+
+                    def _process_audio_frame(mono_frame: Any, *, frames: int, sample_rate: int) -> None:
                         nonlocal noise_floor, smoothed_level, vad, vad_init_attempted, vad_log_emitted
                         nonlocal speech_evidence_s, owner_audio_samples, owner_last_verify_ts, owner_last_active
                         nonlocal owner_pass_streak, owner_fail_streak
-                        if stop.is_set():
-                            raise sd.CallbackStop()
-
-                        mono_frame = np.ascontiguousarray(indata.reshape(-1), dtype=np.float32)
-                        rms = float(np.sqrt(np.mean(indata ** 2)))
-                        _append_semantic_frame(indata)
+                        mono_frame = np.ascontiguousarray(np.asarray(mono_frame, dtype=np.float32).reshape(-1))
+                        if mono_frame.size == 0:
+                            return
+                        rms = float(np.sqrt(np.mean(mono_frame ** 2)))
+                        _append_semantic_frame(mono_frame)
 
                         # 动态噪声底估计：仅在较安静片段更新，降低环境噪声导致的抖动。
                         if rms < noise_floor * 1.8:
@@ -1422,74 +1505,51 @@ def build_ptt_hotkey_handlers(
                                 if not semantic_enabled:
                                     _set_state("voice_speech_detected", True)
 
-                    with sd.InputStream(device=device_id, samplerate=sample_rate, channels=1, blocksize=1024, callback=_cb):
-                        while not stop.wait(0.05):
-                            # Only auto-stop for voice wake sessions, not hotkey mode
-                            if not bool(_get_state("voice_session_active")):
-                                continue
-                            if bool(_get_state("voice_auto_stopping")):
-                                continue
-                            speech_detected = bool(_get_state("voice_speech_detected"))
-                            started_ts = float(_get_state("voice_started_ts"))
-                            now_ts = time.monotonic()
-                            if semantic_enabled:
-                                no_speech_timeout_s = max(0.0, float(getattr(args, "wake_no_speech_timeout_s", 2.0)))
-                                min_speech_s = max(0.0, float(getattr(args, "wake_min_speech_s", 0.5)))
-                                acoustic_silence_s = max(0.0, float(getattr(args, "wake_auto_stop_silence_s", 1.5)))
-                                semantic_has_text = bool(_get_state("voice_semantic_has_text"))
-                                semantic_last_ts = float(_get_state("voice_semantic_last_text_ts"))
-                                last_speech_ts = float(_get_state("voice_last_speech_ts"))
-                                semantic_reason = _should_auto_stop_semantic_session(
-                                    now_ts=now_ts,
-                                    started_ts=started_ts,
-                                    last_speech_ts=last_speech_ts,
-                                    semantic_has_text=semantic_has_text,
-                                    semantic_last_text_ts=semantic_last_ts,
-                                    no_speech_timeout_s=no_speech_timeout_s,
-                                    min_speech_s=min_speech_s,
-                                    semantic_end_silence_s=semantic_end_silence_s,
-                                    acoustic_silence_s=acoustic_silence_s,
-                                )
-                                if semantic_reason is not None:
-                                    _set_state("voice_auto_stopping", True)
-                                    on_state({"event": "voice_wake_auto_stop", "reason": semantic_reason})
-                                    threading.Thread(target=_stop_recording, daemon=True).start()
-                                    break
-                                continue
-                            if not speech_detected:
-                                no_speech_timeout_s = max(0.0, float(getattr(args, "wake_no_speech_timeout_s", 2.0)))
-                                if no_speech_timeout_s > 0 and now_ts - started_ts >= no_speech_timeout_s:
-                                    _set_state("voice_auto_stopping", True)
-                                    on_state({"event": "voice_wake_auto_stop", "reason": "no_speech_timeout"})
-                                    threading.Thread(target=_stop_recording, daemon=True).start()
-                                    break
-                                continue
-                            last_speech_ts = float(_get_state("voice_last_speech_ts"))
-                            if now_ts - started_ts < max(0.0, float(getattr(args, "wake_min_speech_s", 0.5))):
-                                continue
-
-                            # Speaker-assisted VAD: adjust silence threshold based on owner status
-                            base_silence_s = max(0.0, float(getattr(args, "wake_auto_stop_silence_s", 1.5)))
-                            owner_filter_enabled = bool(getattr(args, "wake_owner_verify", False))
-
-                            if owner_filter_enabled:
-                                owner_active = bool(_get_state("voice_owner_active"))
-                                if owner_active:
-                                    # Owner is speaking: extend silence threshold
-                                    owner_extend_s = max(0.0, float(getattr(args, "wake_owner_silence_extend_s", 0.5)))
-                                    silence_threshold = base_silence_s + owner_extend_s
-                                else:
-                                    # Non-owner or noise: use shorter threshold
-                                    silence_threshold = base_silence_s * 0.6
+                    if monitor_stream is not None:
+                        frame_bytes = max(1, monitor_channels) * 4
+                        read_frames = 1024
+                        pending = bytearray()
+                        while not stop.is_set():
+                            chunk = monitor_stream.read(read_frames * frame_bytes)
+                            if chunk:
+                                pending.extend(chunk)
+                            elif record_handle.process.poll() is not None:
+                                break
                             else:
-                                silence_threshold = base_silence_s
-
-                            if now_ts - last_speech_ts < silence_threshold:
+                                if _maybe_schedule_auto_stop(time.monotonic()):
+                                    break
+                                stop.wait(0.02)
                                 continue
-                            _set_state("voice_auto_stopping", True)
-                            on_state({"event": "voice_wake_auto_stop", "reason": "silence"})
-                            threading.Thread(target=_stop_recording, daemon=True).start()
-                            break
+
+                            full_bytes = (len(pending) // frame_bytes) * frame_bytes
+                            if full_bytes <= 0:
+                                continue
+                            raw = bytes(pending[:full_bytes])
+                            del pending[:full_bytes]
+                            samples = np.frombuffer(raw, dtype=np.float32)
+                            if monitor_channels > 1:
+                                samples = samples.reshape(-1, monitor_channels).mean(axis=1)
+                            _process_audio_frame(samples, frames=int(samples.size), sample_rate=sample_rate)
+                            if _maybe_schedule_auto_stop(time.monotonic()):
+                                break
+                    else:
+                        import sounddevice as sd
+
+                        def _cb(indata: Any, frames: int, t: Any, status: Any) -> None:
+                            if stop.is_set():
+                                raise sd.CallbackStop()
+                            _process_audio_frame(indata, frames=frames, sample_rate=sample_rate)
+
+                        with sd.InputStream(
+                            device=device_id,
+                            samplerate=sample_rate,
+                            channels=1,
+                            blocksize=1024,
+                            callback=_cb,
+                        ):
+                            while not stop.wait(0.05):
+                                if _maybe_schedule_auto_stop(time.monotonic()):
+                                    break
                 except ImportError:
                     # sounddevice not available, skip audio level monitoring
                     if args.debug_diagnostics:

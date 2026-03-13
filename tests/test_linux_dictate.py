@@ -39,6 +39,22 @@ def test_build_ffmpeg_record_cmd_wav() -> None:
     assert cmd[-3:] == ["-c:a", "pcm_s16le", "/tmp/in.wav"]
 
 
+def test_build_ffmpeg_record_cmd_with_monitor_pipe() -> None:
+    cmd = build_ffmpeg_record_cmd(
+        ffmpeg_bin="/usr/bin/ffmpeg",
+        output_path=Path("/tmp/in.wav"),
+        duration_s=2.0,
+        sample_rate=16000,
+        channels=1,
+        input_device="default",
+        record_format="wav",
+        enable_monitor=True,
+    )
+    assert "-filter_complex" in cmd
+    assert "[0:a]asplit=2[record][monitor]" in cmd
+    assert cmd[-5:] == ["-f", "f32le", "-acodec", "pcm_f32le", "pipe:1"]
+
+
 def test_build_arecord_cmd_rounds_up_duration() -> None:
     cmd = build_arecord_cmd(
         output_path=Path("/tmp/in.wav"),
@@ -185,3 +201,20 @@ def test_stop_record_process_returns_quickly_when_process_exits() -> None:
     # 应该在 0.3 秒内返回（3 次 poll × 0.1s），而非等待 2 秒
     assert elapsed < 0.5, f"停止耗时 {elapsed:.2f}s，应 < 0.5s"
     assert mock_proc.poll.call_count == 3
+
+
+def test_stop_record_process_closes_monitor_stream_for_handle() -> None:
+    from unittest.mock import MagicMock
+
+    from recordian.linux_dictate import RecordProcessHandle, stop_record_process
+
+    proc = MagicMock()
+    proc.poll.return_value = 0
+    monitor_stream = MagicMock()
+
+    stop_record_process(
+        RecordProcessHandle(process=proc, monitor_stream=monitor_stream),
+        recorder_backend="ffmpeg-pulse",
+    )
+
+    monitor_stream.close.assert_called_once_with()

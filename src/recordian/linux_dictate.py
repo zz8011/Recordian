@@ -12,7 +12,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from shutil import which
 from tempfile import TemporaryDirectory
-from typing import Any
+from typing import Any, BinaryIO
 
 from .linux_commit import resolve_committer, send_hard_enter
 from .providers import ASRProvider, HttpCloudProvider, QwenASRProvider
@@ -53,6 +53,14 @@ class DictateResult:
     transcribe_latency_ms: float
     text: str
     commit: dict[str, object]
+
+
+@dataclass(slots=True)
+class RecordProcessHandle:
+    process: subprocess.Popen[Any]
+    monitor_stream: BinaryIO | None = None
+    monitor_sample_rate: int = 16000
+    monitor_channels: int = 1
 
 
 def add_dictate_args(parser: argparse.ArgumentParser) -> None:
@@ -151,6 +159,7 @@ def build_ffmpeg_record_cmd(
     channels: int,
     input_device: str,
     record_format: str,
+    enable_monitor: bool = False,
 ) -> list[str]:
     base = [
         ffmpeg_bin,
@@ -169,10 +178,20 @@ def build_ffmpeg_record_cmd(
     ]
     if duration_s is not None:
         base.extend(["-t", f"{duration_s:.3f}"])
+    if enable_monitor:
+        base.extend(
+            [
+                "-filter_complex",
+                "[0:a]asplit=2[record][monitor]",
+                "-map",
+                "[record]",
+            ]
+        )
+    monitor_output = ["-map", "[monitor]", "-f", "f32le", "-acodec", "pcm_f32le", "pipe:1"] if enable_monitor else []
     if record_format == "ogg":
-        return base + ["-c:a", "libopus", "-b:a", "24k", str(output_path)]
+        return base + ["-c:a", "libopus", "-b:a", "24k", str(output_path), *monitor_output]
     if record_format == "wav":
-        return base + ["-c:a", "pcm_s16le", str(output_path)]
+        return base + ["-c:a", "pcm_s16le", str(output_path), *monitor_output]
     raise ValueError(f"unsupported format: {record_format}")
 
 
@@ -302,7 +321,9 @@ def start_record_process(
     recorder_backend: str,
     output_path: Path,
     duration_s: float | None,
-) -> subprocess.Popen[Any]:
+    enable_monitor: bool = False,
+) -> RecordProcessHandle:
+    monitor_enabled = bool(enable_monitor and recorder_backend == "ffmpeg-pulse")
     if recorder_backend == "ffmpeg-pulse":
         assert ffmpeg_bin is not None
         record_cmd = build_ffmpeg_record_cmd(
@@ -313,6 +334,7 @@ def start_record_process(
             channels=args.channels,
             input_device=args.input_device,
             record_format=args.record_format,
+            enable_monitor=monitor_enabled,
         )
     else:
         record_cmd = build_arecord_cmd(
@@ -321,52 +343,86 @@ def start_record_process(
             sample_rate=args.sample_rate,
             channels=args.channels,
         )
-    proc = subprocess.Popen(record_cmd)
+    proc = subprocess.Popen(
+        record_cmd,
+        stdout=subprocess.PIPE if monitor_enabled else None,
+        stderr=subprocess.DEVNULL if monitor_enabled else None,
+        bufsize=0 if monitor_enabled else -1,
+    )
     _ACTIVE_PROCESSES.append(proc)
-    return proc
+    return RecordProcessHandle(
+        process=proc,
+        monitor_stream=proc.stdout if monitor_enabled else None,
+        monitor_sample_rate=int(args.sample_rate),
+        monitor_channels=int(args.channels),
+    )
+
+
+def _unwrap_record_process_handle(
+    process: RecordProcessHandle | subprocess.Popen[Any],
+) -> tuple[subprocess.Popen[Any], BinaryIO | None]:
+    if isinstance(process, RecordProcessHandle):
+        return process.process, process.monitor_stream
+    return process, None
 
 
 def stop_record_process(
-    process: subprocess.Popen[Any],
+    process: RecordProcessHandle | subprocess.Popen[Any],
     *,
     recorder_backend: str,
     timeout_s: float = 2.0,
 ) -> None:
-    if process.poll() is not None:
+    proc, monitor_stream = _unwrap_record_process_handle(process)
+    if proc.poll() is not None:
+        if monitor_stream is not None:
+            try:
+                monitor_stream.close()
+            except Exception:
+                pass
         # 进程已退出，从注册表移除
-        if process in _ACTIVE_PROCESSES:
-            _ACTIVE_PROCESSES.remove(process)
+        if proc in _ACTIVE_PROCESSES:
+            _ACTIVE_PROCESSES.remove(proc)
         return
 
     # 发送信号
     if recorder_backend == "ffmpeg-pulse":
-        process.send_signal(signal.SIGINT)
+        proc.send_signal(signal.SIGINT)
     else:
-        process.send_signal(signal.SIGTERM)
+        proc.send_signal(signal.SIGTERM)
 
     # 使用 poll 循环代替 wait，提升响应速度
     poll_interval_s = 0.1
     elapsed = 0.0
 
     while elapsed < timeout_s:
-        if process.poll() is not None:
+        if proc.poll() is not None:
+            if monitor_stream is not None:
+                try:
+                    monitor_stream.close()
+                except Exception:
+                    pass
             # 进程已退出，从注册表移除
-            if process in _ACTIVE_PROCESSES:
-                _ACTIVE_PROCESSES.remove(process)
+            if proc in _ACTIVE_PROCESSES:
+                _ACTIVE_PROCESSES.remove(proc)
             return
         time.sleep(poll_interval_s)
         elapsed += poll_interval_s
 
     # 超时后强制终止
     try:
-        process.kill()
-        process.wait(timeout=0.5)
+        proc.kill()
+        proc.wait(timeout=0.5)
     except (ProcessLookupError, subprocess.TimeoutExpired):
         pass
     finally:
+        if monitor_stream is not None:
+            try:
+                monitor_stream.close()
+            except Exception:
+                pass
         # 从注册表移除
-        if process in _ACTIVE_PROCESSES:
-            _ACTIVE_PROCESSES.remove(process)
+        if proc in _ACTIVE_PROCESSES:
+            _ACTIVE_PROCESSES.remove(proc)
 
 
 def transcribe_and_commit(
@@ -427,14 +483,14 @@ def run_dictate_once(
     with TemporaryDirectory(prefix="recordian-dictate-") as temp_dir:
         audio_path = Path(temp_dir) / f"input{suffix}"
         t0 = time.perf_counter()
-        process = start_record_process(
+        record_handle = start_record_process(
             args=args,
             ffmpeg_bin=ffmpeg_bin,
             recorder_backend=recorder_backend,
             output_path=audio_path,
             duration_s=args.duration,
         )
-        code = process.wait()
+        code = record_handle.process.wait()
         if code != 0:
             raise RuntimeError(f"record command failed with exit code={code}")
         record_latency_ms = (time.perf_counter() - t0) * 1000
