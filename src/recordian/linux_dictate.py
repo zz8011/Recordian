@@ -201,6 +201,7 @@ def build_arecord_cmd(
     duration_s: float | None,
     sample_rate: int,
     channels: int,
+    input_device: str = "default",
 ) -> list[str]:
     cmd = [
         "arecord",
@@ -212,6 +213,8 @@ def build_arecord_cmd(
         "-c",
         str(channels),
     ]
+    if input_device and input_device != "default":
+        cmd.extend(["-D", input_device])
     if duration_s is not None:
         seconds = max(1, math.ceil(duration_s))
         cmd.extend(["-d", str(seconds)])
@@ -342,6 +345,7 @@ def start_record_process(
             duration_s=duration_s,
             sample_rate=args.sample_rate,
             channels=args.channels,
+            input_device=str(getattr(args, "input_device", "default")),
         )
     proc = subprocess.Popen(
         record_cmd,

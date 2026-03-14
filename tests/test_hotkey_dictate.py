@@ -1,9 +1,12 @@
 import argparse
 import io
 import json
+import threading
 import time
 from pathlib import Path
 from types import SimpleNamespace
+
+import pytest
 
 from recordian.hotkey_dictate import (
     _adaptive_vad_threshold,
@@ -909,3 +912,244 @@ def test_ptt_handlers_fall_back_to_raw_text_when_refiner_fails(monkeypatch) -> N
         for event in events
         if event.get("event") == "log"
     )
+
+
+def _fake_ptt_args(**overrides: object) -> argparse.Namespace:
+    values: dict[str, object] = {
+        "cooldown_ms": 0,
+        "record_backend": "ffmpeg-pulse",
+        "commit_backend": "stdout",
+        "enable_auto_lexicon": False,
+        "debug_diagnostics": False,
+        "enable_text_refine": False,
+        "warmup": False,
+        "record_format": "wav",
+        "input_device": "default",
+        "channels": 1,
+        "sample_rate": 16000,
+        "wake_use_semantic_gate": False,
+        "wake_owner_verify": False,
+        "hotword": [],
+        "auto_hard_enter": False,
+        "enable_streaming_refine": False,
+    }
+    values.update(overrides)
+    return argparse.Namespace(**values)
+
+
+def test_ptt_start_recording_returns_false_when_busy(monkeypatch) -> None:
+    events: list[dict[str, object]] = []
+
+    class _FakeProvider:
+        provider_name = "http-cloud"
+
+        def transcribe_file(self, audio_path: Path, hotwords: list[str]) -> SimpleNamespace:  # noqa: ANN001
+            return SimpleNamespace(text="忙时测试")
+
+    class _FakeCommitter:
+        backend_name = "stdout"
+        target_window_id = None
+
+        def commit(self, text: str) -> SimpleNamespace:
+            return SimpleNamespace(backend="stdout", committed=True, detail="printed")
+
+    class _FakeProcess:
+        def poll(self) -> int:
+            return 0
+
+    def _fake_start_record_process(**kwargs) -> RecordProcessHandle:  # noqa: ANN003
+        output_path = kwargs["output_path"]
+        output_path.write_bytes(b"")
+        return RecordProcessHandle(process=_FakeProcess(), monitor_stream=io.BytesIO(b""))
+
+    monkeypatch.setattr("recordian.hotkey_dictate.ensure_ffmpeg_available", lambda: "/usr/bin/ffmpeg")
+    monkeypatch.setattr("recordian.hotkey_dictate.choose_record_backend", lambda requested, ffmpeg_bin: "ffmpeg-pulse")
+    monkeypatch.setattr("recordian.hotkey_dictate.resolve_committer", lambda backend: _FakeCommitter())
+    monkeypatch.setattr("recordian.hotkey_dictate.create_provider", lambda args: _FakeProvider())
+    monkeypatch.setattr("recordian.hotkey_dictate.get_focused_window_id", lambda: None)
+    monkeypatch.setattr("recordian.hotkey_dictate.start_record_process", _fake_start_record_process)
+    monkeypatch.setattr("recordian.hotkey_dictate.stop_record_process", lambda *args, **kwargs: None)
+
+    start_recording, stop_recording, _, _ = build_ptt_hotkey_handlers(
+        args=_fake_ptt_args(),
+        on_result=events.append,
+        on_error=events.append,
+        on_busy=events.append,
+        on_state=events.append,
+    )
+
+    assert start_recording() is True
+    assert start_recording() is False
+    stop_recording()
+    time.sleep(0.1)
+
+    busy_events = [event for event in events if event.get("event") == "busy"]
+    assert len(busy_events) == 1
+
+
+def test_ptt_start_failure_releases_lock_and_recovers(monkeypatch) -> None:
+    events: list[dict[str, object]] = []
+    start_attempts = {"count": 0}
+
+    class _FakeProvider:
+        provider_name = "http-cloud"
+
+        def transcribe_file(self, audio_path: Path, hotwords: list[str]) -> SimpleNamespace:  # noqa: ANN001
+            return SimpleNamespace(text="恢复成功")
+
+    class _FakeCommitter:
+        backend_name = "stdout"
+        target_window_id = None
+
+        def commit(self, text: str) -> SimpleNamespace:
+            return SimpleNamespace(backend="stdout", committed=True, detail="printed")
+
+    class _FakeProcess:
+        def poll(self) -> int:
+            return 0
+
+    def _fake_start_record_process(**kwargs) -> RecordProcessHandle:  # noqa: ANN003
+        start_attempts["count"] += 1
+        if start_attempts["count"] == 1:
+            raise RuntimeError("recorder failed")
+        output_path = kwargs["output_path"]
+        output_path.write_bytes(b"")
+        return RecordProcessHandle(process=_FakeProcess(), monitor_stream=io.BytesIO(b""))
+
+    monkeypatch.setattr("recordian.hotkey_dictate.ensure_ffmpeg_available", lambda: "/usr/bin/ffmpeg")
+    monkeypatch.setattr("recordian.hotkey_dictate.choose_record_backend", lambda requested, ffmpeg_bin: "ffmpeg-pulse")
+    monkeypatch.setattr("recordian.hotkey_dictate.resolve_committer", lambda backend: _FakeCommitter())
+    monkeypatch.setattr("recordian.hotkey_dictate.create_provider", lambda args: _FakeProvider())
+    monkeypatch.setattr("recordian.hotkey_dictate.get_focused_window_id", lambda: None)
+    monkeypatch.setattr("recordian.hotkey_dictate.start_record_process", _fake_start_record_process)
+    monkeypatch.setattr("recordian.hotkey_dictate.stop_record_process", lambda *args, **kwargs: None)
+
+    start_recording, stop_recording, _, _ = build_ptt_hotkey_handlers(
+        args=_fake_ptt_args(),
+        on_result=events.append,
+        on_error=events.append,
+        on_busy=events.append,
+        on_state=events.append,
+    )
+
+    with pytest.raises(RuntimeError, match="recorder failed"):
+        start_recording()
+
+    assert start_recording() is True
+    stop_recording()
+    time.sleep(0.1)
+
+    result_events = [event for event in events if event.get("event") == "result"]
+    assert len(result_events) == 1
+    assert result_events[0]["result"]["text"] == "恢复成功"
+
+
+def test_ptt_stop_recording_is_idempotent_under_concurrency(monkeypatch) -> None:
+    events: list[dict[str, object]] = []
+
+    class _FakeProvider:
+        provider_name = "http-cloud"
+
+        def transcribe_file(self, audio_path: Path, hotwords: list[str]) -> SimpleNamespace:  # noqa: ANN001
+            time.sleep(0.05)
+            return SimpleNamespace(text="并发停止")
+
+    class _FakeCommitter:
+        backend_name = "stdout"
+        target_window_id = None
+
+        def commit(self, text: str) -> SimpleNamespace:
+            return SimpleNamespace(backend="stdout", committed=True, detail="printed")
+
+    class _FakeProcess:
+        def poll(self) -> int:
+            return 0
+
+    def _fake_start_record_process(**kwargs) -> RecordProcessHandle:  # noqa: ANN003
+        output_path = kwargs["output_path"]
+        output_path.write_bytes(b"")
+        return RecordProcessHandle(process=_FakeProcess(), monitor_stream=io.BytesIO(b""))
+
+    monkeypatch.setattr("recordian.hotkey_dictate.ensure_ffmpeg_available", lambda: "/usr/bin/ffmpeg")
+    monkeypatch.setattr("recordian.hotkey_dictate.choose_record_backend", lambda requested, ffmpeg_bin: "ffmpeg-pulse")
+    monkeypatch.setattr("recordian.hotkey_dictate.resolve_committer", lambda backend: _FakeCommitter())
+    monkeypatch.setattr("recordian.hotkey_dictate.create_provider", lambda args: _FakeProvider())
+    monkeypatch.setattr("recordian.hotkey_dictate.get_focused_window_id", lambda: None)
+    monkeypatch.setattr("recordian.hotkey_dictate.start_record_process", _fake_start_record_process)
+    monkeypatch.setattr("recordian.hotkey_dictate.stop_record_process", lambda *args, **kwargs: None)
+
+    start_recording, stop_recording, _, _ = build_ptt_hotkey_handlers(
+        args=_fake_ptt_args(),
+        on_result=events.append,
+        on_error=events.append,
+        on_busy=events.append,
+        on_state=events.append,
+    )
+
+    assert start_recording() is True
+
+    workers = [threading.Thread(target=stop_recording), threading.Thread(target=stop_recording)]
+    for worker in workers:
+        worker.start()
+    for worker in workers:
+        worker.join()
+    time.sleep(0.15)
+
+    result_events = [event for event in events if event.get("event") == "result"]
+    error_events = [event for event in events if event.get("event") == "error"]
+    assert len(result_events) == 1
+    assert not error_events
+
+
+def test_ptt_exit_waits_for_processing_completion(monkeypatch) -> None:
+    events: list[dict[str, object]] = []
+
+    class _FakeProvider:
+        provider_name = "http-cloud"
+
+        def transcribe_file(self, audio_path: Path, hotwords: list[str]) -> SimpleNamespace:  # noqa: ANN001
+            time.sleep(0.08)
+            return SimpleNamespace(text="退出等待")
+
+    class _FakeCommitter:
+        backend_name = "stdout"
+        target_window_id = None
+
+        def commit(self, text: str) -> SimpleNamespace:
+            return SimpleNamespace(backend="stdout", committed=True, detail="printed")
+
+    class _FakeProcess:
+        def poll(self) -> int:
+            return 0
+
+    def _fake_start_record_process(**kwargs) -> RecordProcessHandle:  # noqa: ANN003
+        output_path = kwargs["output_path"]
+        output_path.write_bytes(b"")
+        return RecordProcessHandle(process=_FakeProcess(), monitor_stream=io.BytesIO(b""))
+
+    monkeypatch.setattr("recordian.hotkey_dictate.ensure_ffmpeg_available", lambda: "/usr/bin/ffmpeg")
+    monkeypatch.setattr("recordian.hotkey_dictate.choose_record_backend", lambda requested, ffmpeg_bin: "ffmpeg-pulse")
+    monkeypatch.setattr("recordian.hotkey_dictate.resolve_committer", lambda backend: _FakeCommitter())
+    monkeypatch.setattr("recordian.hotkey_dictate.create_provider", lambda args: _FakeProvider())
+    monkeypatch.setattr("recordian.hotkey_dictate.get_focused_window_id", lambda: None)
+    monkeypatch.setattr("recordian.hotkey_dictate.start_record_process", _fake_start_record_process)
+    monkeypatch.setattr("recordian.hotkey_dictate.stop_record_process", lambda *args, **kwargs: None)
+
+    start_recording, _, exit_daemon, stop_event = build_ptt_hotkey_handlers(
+        args=_fake_ptt_args(),
+        on_result=events.append,
+        on_error=events.append,
+        on_busy=events.append,
+        on_state=events.append,
+    )
+
+    assert start_recording("voice_wake") is True
+    t0 = time.perf_counter()
+    exit_daemon()
+    elapsed = time.perf_counter() - t0
+
+    result_events = [event for event in events if event.get("event") == "result"]
+    assert elapsed >= 0.07
+    assert stop_event.is_set() is True
+    assert len(result_events) == 1
+    assert result_events[0]["result"]["text"] == "退出等待"

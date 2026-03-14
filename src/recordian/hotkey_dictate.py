@@ -740,7 +740,7 @@ def build_ptt_hotkey_handlers(
     on_error: Callable[[dict[str, object]], None],
     on_busy: Callable[[dict[str, object]], None],
     on_state: Callable[[dict[str, object]], None],
-) -> tuple[Callable[..., None], Callable[[], None], Callable[[], None], threading.Event]:
+) -> tuple[Callable[..., bool], Callable[[], bool], Callable[[], None], threading.Event]:
     lock = threading.Lock()
     stop_event = threading.Event()
     cooldown_s = max(0.0, args.cooldown_ms / 1000.0)
@@ -916,6 +916,7 @@ def build_ptt_hotkey_handlers(
         "record_started_at": None,
         "target_window_id": None,
         "level_stop": None,  # threading.Event to stop audio level sampling
+        "processing_thread": None,
         "recording_state": RecordingState.IDLE,
         "record_source": "hotkey",
         "voice_session_active": False,
@@ -948,11 +949,44 @@ def build_ptt_hotkey_handlers(
         with state_lock:
             state.update(updates)
 
-    def _start_recording(trigger_source: str = "hotkey") -> None:
+    def _transition_to_idle() -> None:
+        _update_state({
+            "process": None,
+            "temp_dir": None,
+            "audio_path": None,
+            "record_started_at": None,
+            "level_stop": None,
+            "recording_state": RecordingState.IDLE,
+            "record_source": "hotkey",
+            "voice_session_active": False,
+            "voice_last_speech_ts": 0.0,
+            "voice_started_ts": 0.0,
+            "voice_speech_detected": False,
+            "voice_auto_stopping": False,
+            "voice_semantic_enabled": False,
+            "voice_semantic_has_text": False,
+            "voice_semantic_last_text_ts": 0.0,
+            "voice_semantic_last_text": "",
+            "voice_owner_filter_enabled": False,
+            "voice_owner_active": True,
+            "voice_owner_seen": False,
+            "voice_owner_last_score": -1.0,
+        })
+
+    def _wait_for_processing_completion() -> None:
+        processing_thread = _get_state("processing_thread")
+        if (
+            isinstance(processing_thread, threading.Thread)
+            and processing_thread.is_alive()
+            and processing_thread is not threading.current_thread()
+        ):
+            processing_thread.join()
+
+    def _start_recording(trigger_source: str = "hotkey") -> bool:
         now = time.monotonic()
         last_trigger = float(_get_state("last_trigger"))
         if now - last_trigger < cooldown_s:
-            return
+            return False
         _set_state("last_trigger", now)
 
         target_wid = get_focused_window_id()
@@ -962,8 +996,9 @@ def build_ptt_hotkey_handlers(
 
         if not lock.acquire(blocking=False):
             on_busy({"event": "busy", "reason": "dictation_in_progress"})
-            return
+            return False
 
+        temp_dir: TemporaryDirectory[str] | None = None
         try:
             _set_state("recording_state", RecordingState.RECORDING)
             temp_dir = TemporaryDirectory(prefix="recordian-ptt-")
@@ -1579,60 +1614,64 @@ def build_ptt_hotkey_handlers(
                         on_state({"event": "log", "message": f"diag audio_level_monitoring_failed: {exc}"})
 
             threading.Thread(target=_level_worker, daemon=True).start()
+            return True
         except Exception:  # noqa: BLE001
             # 确保在异常路径停止音频采样线程
             level_stop = _get_state("level_stop")
             if isinstance(level_stop, threading.Event):
                 level_stop.set()
-            _set_state("level_stop", None)
+            if temp_dir is not None:
+                temp_dir.cleanup()
+            _transition_to_idle()
             lock.release()
             raise
 
-    def _stop_recording() -> None:
-        process = _get_state("process")
-        started = _get_state("record_started_at")
-        audio_path = _get_state("audio_path")
-        temp_dir = _get_state("temp_dir")
-        owner_filter_enabled = bool(_get_state("voice_owner_filter_enabled"))
-        owner_seen = bool(_get_state("voice_owner_seen"))
-        try:
-            owner_last_score = float(_get_state("voice_owner_last_score"))
-        except Exception:
-            owner_last_score = -1.0
-        if process is None or audio_path is None or temp_dir is None or started is None:
-            return
+    def _stop_recording() -> bool:
+        with state_lock:
+            process = state.get("process")
+            started = state.get("record_started_at")
+            audio_path = state.get("audio_path")
+            temp_dir = state.get("temp_dir")
+            level_stop = state.get("level_stop")
+            owner_filter_enabled = bool(state.get("voice_owner_filter_enabled"))
+            owner_seen = bool(state.get("voice_owner_seen"))
+            try:
+                owner_last_score = float(state.get("voice_owner_last_score"))
+            except Exception:
+                owner_last_score = -1.0
+            if process is None or audio_path is None or temp_dir is None or started is None:
+                return False
 
-        # Stop audio level sampling
-        level_stop = _get_state("level_stop")
+            state.update({
+                "process": None,
+                "audio_path": None,
+                "temp_dir": None,
+                "record_started_at": None,
+                "level_stop": None,
+                "recording_state": RecordingState.PROCESSING,
+                "voice_session_active": False,
+                "voice_auto_stopping": False,
+                "voice_semantic_enabled": False,
+                "voice_semantic_has_text": False,
+                "voice_semantic_last_text_ts": 0.0,
+                "voice_semantic_last_text": "",
+                "voice_owner_filter_enabled": False,
+                "voice_owner_active": True,
+                "voice_owner_seen": False,
+                "voice_owner_last_score": -1.0,
+            })
+
         if isinstance(level_stop, threading.Event):
             level_stop.set()
-        _set_state("level_stop", None)
-
-        _update_state({
-            "process": None,
-            "audio_path": None,
-            "temp_dir": None,
-            "record_started_at": None,
-            "recording_state": RecordingState.PROCESSING,
-            "voice_session_active": False,
-            "voice_auto_stopping": False,
-            "voice_semantic_enabled": False,
-            "voice_semantic_has_text": False,
-            "voice_semantic_last_text_ts": 0.0,
-            "voice_semantic_last_text": "",
-            "voice_owner_filter_enabled": False,
-            "voice_owner_active": True,
-            "voice_owner_seen": False,
-            "voice_owner_last_score": -1.0,
-        })
 
         try:
             stop_record_process(process, recorder_backend=recorder_backend)
         except Exception as exc:  # noqa: BLE001
             temp_dir.cleanup()
+            _transition_to_idle()
             lock.release()
             on_error({"event": "error", "error": f"{type(exc).__name__}: {exc}"})
-            return
+            return False
 
         record_latency_ms = (time.perf_counter() - float(started)) * 1000
         audio_path = Path(audio_path)
@@ -1810,13 +1849,18 @@ def build_ptt_hotkey_handlers(
                 on_error({"event": "error", "error": f"{type(exc).__name__}: {exc}"})
             finally:
                 temp_dir.cleanup()
+                _set_state("processing_thread", None)
                 _set_state("recording_state", RecordingState.IDLE)
                 lock.release()
 
-        threading.Thread(target=_worker, daemon=True).start()
+        processing_thread = threading.Thread(target=_worker, name="recordian-postprocess")
+        _set_state("processing_thread", processing_thread)
+        processing_thread.start()
+        return True
 
     def _exit() -> None:
         _stop_recording()
+        _wait_for_processing_completion()
         stop_event.set()
 
     return _start_recording, _stop_recording, _exit, stop_event
@@ -2333,9 +2377,8 @@ def _main_impl() -> None:
                 if toggle_keys and toggle_keys.issubset(pressed) and not toggle_pressed["active"]:
                     toggle_pressed["active"] = True
                     if not toggle_recording["active"]:
-                        toggle_recording["active"] = True
                         try:
-                            start_recording()
+                            toggle_recording["active"] = start_recording()
                         except Exception as exc:  # noqa: BLE001
                             toggle_recording["active"] = False
                             _emit({"event": "error", "error": f"{type(exc).__name__}: {exc}"})
@@ -2391,9 +2434,8 @@ def _main_impl() -> None:
                 if trigger_keys.issubset(pressed) and not trigger_pressed["active"]:
                     trigger_pressed["active"] = True
                     if not recording["active"]:
-                        recording["active"] = True
                         try:
-                            start_recording()
+                            recording["active"] = start_recording()
                         except Exception as exc:  # noqa: BLE001
                             recording["active"] = False
                             _emit({"event": "error", "error": f"{type(exc).__name__}: {exc}"})

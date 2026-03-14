@@ -77,6 +77,31 @@ def test_build_arecord_cmd_rounds_up_duration() -> None:
     ]
 
 
+def test_build_arecord_cmd_uses_input_device_when_provided() -> None:
+    cmd = build_arecord_cmd(
+        output_path=Path("/tmp/in.wav"),
+        duration_s=1.0,
+        sample_rate=16000,
+        channels=1,
+        input_device="hw:1,0",
+    )
+    assert cmd == [
+        "arecord",
+        "-q",
+        "-f",
+        "S16_LE",
+        "-r",
+        "16000",
+        "-c",
+        "1",
+        "-D",
+        "hw:1,0",
+        "-d",
+        "1",
+        "/tmp/in.wav",
+    ]
+
+
 def test_choose_record_backend_auto_fallback_arecord(monkeypatch) -> None:
     monkeypatch.setattr("recordian.linux_dictate._ffmpeg_supports_pulse", lambda _: False)
     monkeypatch.setattr("recordian.linux_dictate.which", lambda cmd: "/usr/bin/arecord" if cmd == "arecord" else None)
