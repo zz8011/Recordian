@@ -1218,7 +1218,63 @@ def test_voice_wake_owner_gate_inconclusive_falls_back_to_asr(monkeypatch) -> No
     assert "voice_owner_gate_inconclusive: fallback_to_asr" in log_messages
 
 
-def test_voice_wake_recording_uses_sounddevice_monitoring_path(monkeypatch) -> None:
+def test_voice_wake_recording_starts_owner_gate_as_active(monkeypatch) -> None:
+    events: list[dict[str, object]] = []
+    captured_owner_active: list[object] = []
+
+    class _FakeProvider:
+        provider_name = "http-cloud"
+
+        def transcribe_file(self, audio_path: Path, hotwords: list[str]) -> SimpleNamespace:  # noqa: ANN001
+            return SimpleNamespace(text="语音唤醒识别成功")
+
+    class _FakeCommitter:
+        backend_name = "stdout"
+        target_window_id = None
+
+        def commit(self, text: str) -> SimpleNamespace:
+            return SimpleNamespace(backend="stdout", committed=True, detail="printed")
+
+    class _FakeProcess:
+        def poll(self) -> int:
+            return 0
+
+    def _fake_start_record_process(**kwargs) -> RecordProcessHandle:  # noqa: ANN003
+        output_path = kwargs["output_path"]
+        output_path.write_bytes(b"")
+        return RecordProcessHandle(
+            process=_FakeProcess(),
+            monitor_stream=io.BytesIO(b""),
+            monitor_sample_rate=16000,
+            monitor_channels=1,
+        )
+
+    def _fake_start_wake_session_monitor(context):  # noqa: ANN001
+        captured_owner_active.append(context.get_state("voice_owner_active"))
+        return SimpleNamespace()
+
+    monkeypatch.setattr("recordian.hotkey_dictate.ensure_ffmpeg_available", lambda: "/usr/bin/ffmpeg")
+    monkeypatch.setattr("recordian.hotkey_dictate.choose_record_backend", lambda requested, ffmpeg_bin: "ffmpeg-pulse")
+    monkeypatch.setattr("recordian.hotkey_dictate.resolve_committer", lambda backend: _FakeCommitter())
+    monkeypatch.setattr("recordian.hotkey_dictate.create_provider", lambda args: _FakeProvider())
+    monkeypatch.setattr("recordian.hotkey_dictate.get_focused_window_id", lambda: None)
+    monkeypatch.setattr("recordian.hotkey_dictate.start_record_process", _fake_start_record_process)
+    monkeypatch.setattr("recordian.hotkey_dictate.start_wake_session_monitor", _fake_start_wake_session_monitor)
+    monkeypatch.setattr("recordian.hotkey_dictate.stop_record_process", lambda *args, **kwargs: None)
+
+    start_recording, _, _, _ = build_ptt_hotkey_handlers(
+        args=_fake_ptt_args(wake_owner_verify=True, record_format="ogg"),
+        on_result=events.append,
+        on_error=events.append,
+        on_busy=events.append,
+        on_state=events.append,
+    )
+
+    assert start_recording("voice_wake") is True
+    assert captured_owner_active == [True]
+
+
+def test_voice_wake_recording_enables_monitor_stream(monkeypatch) -> None:
     events: list[dict[str, object]] = []
     captured_enable_monitor: list[bool] = []
 
@@ -1267,5 +1323,5 @@ def test_voice_wake_recording_uses_sounddevice_monitoring_path(monkeypatch) -> N
     )
 
     assert start_recording("voice_wake") is True
-    assert captured_enable_monitor == [False]
+    assert captured_enable_monitor == [True]
     assert stop_recording() is True

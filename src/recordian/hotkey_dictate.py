@@ -898,7 +898,10 @@ def build_ptt_hotkey_handlers(
                 "voice_semantic_last_text_ts": 0.0,
                 "voice_semantic_last_text": "",
                 "voice_owner_filter_enabled": trigger_source == "voice_wake" and bool(getattr(args, "wake_owner_verify", False)),
-                "voice_owner_active": not (trigger_source == "voice_wake" and bool(getattr(args, "wake_owner_verify", False))),
+                # Optimistically allow the first speech frames after wake trigger.
+                # Owner verification can still deactivate the session once there
+                # is enough audio to make a real decision.
+                "voice_owner_active": True,
                 "voice_owner_seen": False,
                 "voice_owner_last_score": -1.0,
             })

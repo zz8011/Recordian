@@ -424,7 +424,9 @@ def start_wake_session_monitor(context: WakeSessionMonitorContext) -> threading.
                     context.on_state({"event": "log", "message": f"voice_owner_filter_disabled: {type(exc).__name__}: {exc}"})
 
             context.set_state("voice_owner_filter_enabled", owner_filter_enabled)
-            context.set_state("voice_owner_active", not owner_filter_enabled)
+            # Keep initial speech responsive after wake trigger. The owner gate
+            # will flip this to False after an explicit non-owner decision.
+            context.set_state("voice_owner_active", True)
             context.set_state("voice_owner_seen", False)
             context.set_state("voice_owner_last_score", -1.0)
 
