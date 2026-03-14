@@ -4,7 +4,7 @@ import base64
 import subprocess
 from pathlib import Path
 from shutil import which
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlunparse
 
 from ..models import ASRResult
 from .base import ASRProvider, _estimate_english_ratio
@@ -41,10 +41,76 @@ class HttpCloudProvider(ASRProvider):
         self.timeout_s = timeout_s
         self.model_name = model_name.strip() or "Qwen/Qwen3-ASR-1.7B"
         self.language = language.strip()
+        self._resolved_openai_model_name: str | None = None
 
     def _is_openai_transcription_endpoint(self) -> bool:
         path = urlparse(self.endpoint).path.lower()
         return path.endswith("/v1/audio/transcriptions") or path.endswith("/audio/transcriptions")
+
+    def _openai_models_endpoint(self) -> str | None:
+        if not self._is_openai_transcription_endpoint():
+            return None
+
+        parsed = urlparse(self.endpoint)
+        suffix = "/audio/transcriptions"
+        if not parsed.path.lower().endswith(suffix):
+            return None
+        models_path = parsed.path[:-len(suffix)] + "/models"
+        return urlunparse(parsed._replace(path=models_path, params="", query="", fragment=""))
+
+    def _candidate_model_names(self) -> list[str]:
+        candidates: list[str] = []
+        primary = self.model_name.strip()
+        if primary:
+            candidates.append(primary)
+            if "/" in primary:
+                short_name = primary.rsplit("/", 1)[-1].strip()
+                if short_name and short_name not in candidates:
+                    candidates.append(short_name)
+        return candidates or ["cloud-asr"]
+
+    def _resolve_openai_model_name(self, requests_module, headers: dict[str, str]) -> str:  # noqa: ANN001
+        if self._resolved_openai_model_name:
+            return self._resolved_openai_model_name
+
+        candidates = self._candidate_model_names()
+        models_endpoint = self._openai_models_endpoint()
+        if not models_endpoint:
+            return candidates[0]
+
+        try:
+            response = requests_module.get(
+                models_endpoint,
+                headers=headers,
+                timeout=self.timeout_s,
+            )
+            response.raise_for_status()
+            body = response.json()
+        except Exception:
+            return candidates[0]
+
+        available_ids: list[str] = []
+        data = body.get("data")
+        if isinstance(data, list):
+            for item in data:
+                if not isinstance(item, dict):
+                    continue
+                model_id = item.get("id")
+                if isinstance(model_id, str):
+                    normalized = model_id.strip()
+                    if normalized:
+                        available_ids.append(normalized)
+
+        for candidate in candidates:
+            if candidate in available_ids:
+                self._resolved_openai_model_name = candidate
+                return candidate
+
+        if len(available_ids) == 1:
+            self._resolved_openai_model_name = available_ids[0]
+            return available_ids[0]
+
+        return candidates[0]
 
     def _prepare_openai_audio_file(self, audio_path: Path) -> tuple[bytes, str, str]:
         """Prepare audio payload for OpenAI-compatible transcription endpoint.
@@ -120,7 +186,9 @@ class HttpCloudProvider(ASRProvider):
         if self._is_openai_transcription_endpoint():
             # OpenAI-compatible transcription API (e.g. vLLM /v1/audio/transcriptions)
             upload_data, upload_name, upload_mime = self._prepare_openai_audio_file(wav_path)
-            form_data: dict[str, str] = {"model": self.model_name}
+            form_data: dict[str, str] = {
+                "model": self._resolve_openai_model_name(requests, headers),
+            }
             if self.language and self.language.lower() != "auto":
                 lang_map = {"chinese": "zh", "english": "en"}
                 normalized = lang_map.get(self.language.lower(), self.language)
