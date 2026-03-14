@@ -62,6 +62,25 @@ def test_xdotool_clipboard_committer_clears_clipboard_after_timeout(monkeypatch)
     assert clipboard_calls[1] == "set:"
 
 
+def test_xdotool_clipboard_committer_waits_for_clipboard_settle(monkeypatch):
+    from recordian.linux_commit import XdotoolClipboardCommitter
+
+    order: list[str] = []
+    slept: list[float] = []
+
+    monkeypatch.setattr("recordian.linux_commit.which", lambda x: "/usr/bin/" + x)
+    monkeypatch.setattr("recordian.linux_commit._set_clipboard_text", lambda text: order.append(f"clipboard:{text}"))
+    monkeypatch.setattr("recordian.linux_commit._xdotool_key", lambda shortcut, *, window_id=None: order.append(f"paste:{shortcut}"))
+    monkeypatch.setattr("time.sleep", lambda seconds: slept.append(seconds))
+
+    committer = XdotoolClipboardCommitter(clipboard_timeout_ms=0)
+    committer.commit("测试文本")
+
+    assert order == ["clipboard:测试文本", "paste:ctrl+v"]
+    assert slept
+    assert slept[0] >= 0.2
+
+
 def test_clipboard_timeout_invalid_env_var_uses_default(monkeypatch):
     """无效的环境变量应使用默认值 0（禁用）"""
     from recordian.linux_commit import resolve_committer

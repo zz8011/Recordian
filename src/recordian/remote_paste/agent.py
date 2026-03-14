@@ -4,6 +4,7 @@ import argparse
 import logging
 import socket
 import socketserver
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -84,6 +85,7 @@ class RemotePasteAgent:
         self.args = args
         self.started_at = time.monotonic()
         self.notifier = resolve_notifier("none" if not args.enable_notify else args.notify_backend)
+        self._paste_lock = threading.Lock()
 
     def handle_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
         action = str(payload.get("action", "")).strip().lower()
@@ -107,27 +109,29 @@ class RemotePasteAgent:
         if not text:
             return self.error_response("empty_text")
 
-        delay_ms = max(0, int(getattr(self.args, "paste_delay_ms", 100)))
-        if delay_ms:
-            time.sleep(delay_ms / 1000.0)
+        with self._paste_lock:
+            delay_ms = max(0, int(getattr(self.args, "paste_delay_ms", 100)))
+            if delay_ms:
+                time.sleep(delay_ms / 1000.0)
 
-        target_window_id = get_focused_window_id()
-        committer = resolve_committer(self.args.commit_backend, target_window_id=target_window_id)
-        result = committer.commit(text)
-        if not result.committed:
-            return self.error_response(str(result.detail or "commit_failed"))
+            target_window_id = get_focused_window_id()
+            committer = resolve_committer(self.args.commit_backend, target_window_id=target_window_id)
+            result = committer.commit(text)
+            if not result.committed:
+                return self.error_response(str(result.detail or "commit_failed"))
 
-        self._notify_success(text)
-        logger.info(
-            "Remote paste succeeded on %s (wid=%s, backend=%s)",
-            self.args.hostname,
-            target_window_id,
-            getattr(committer, "backend_name", self.args.commit_backend),
-        )
-        detail = str(result.detail or "committed")
-        if target_window_id is not None:
-            detail = f"{detail};wid:{target_window_id}"
-        return {"status": "ok", "hostname": self.args.hostname, "detail": detail}
+            self._notify_success(text)
+            logger.info(
+                "Remote paste succeeded on %s (wid=%s, backend=%s, text=%s)",
+                self.args.hostname,
+                target_window_id,
+                getattr(committer, "backend_name", self.args.commit_backend),
+                preview_text(text),
+            )
+            detail = str(result.detail or "committed")
+            if target_window_id is not None:
+                detail = f"{detail};wid:{target_window_id}"
+            return {"status": "ok", "hostname": self.args.hostname, "detail": detail}
 
     def _notify_success(self, text: str) -> None:
         body = f"已在 {self.args.hostname} 粘贴: {preview_text(text)}"

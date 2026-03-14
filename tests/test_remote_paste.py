@@ -1,6 +1,7 @@
 import argparse
 import socketserver
 import threading
+import time
 from pathlib import Path
 
 from recordian.remote_paste.agent import RemotePasteAgent
@@ -108,3 +109,59 @@ def test_agent_resolves_committer_from_current_focused_window(monkeypatch) -> No
     assert calls["backend"] == "auto"
     assert calls["target_window_id"] == 4242
     assert calls["text"] == "hello"
+
+
+def test_agent_serializes_concurrent_paste_requests(monkeypatch) -> None:
+    events: list[str] = []
+    first_started = threading.Event()
+    release_first = threading.Event()
+
+    class _Committer:
+        backend_name = "xdotool-clipboard"
+
+        def __init__(self, text_label: str) -> None:
+            self.text_label = text_label
+
+        def commit(self, text: str):  # noqa: ANN001
+            events.append(f"start:{text}")
+            if text == "one":
+                first_started.set()
+                release_first.wait(timeout=1.0)
+            events.append(f"end:{text}")
+            return type("CommitResult", (), {"committed": True, "detail": self.text_label})()
+
+    monkeypatch.setattr("recordian.remote_paste.agent.get_focused_window_id", lambda: 4242)
+    monkeypatch.setattr(
+        "recordian.remote_paste.agent.resolve_committer",
+        lambda backend, *, target_window_id=None: _Committer(str(target_window_id)),
+    )
+
+    agent = RemotePasteAgent(
+        argparse.Namespace(
+            hostname="remote-host",
+            enable_notify=False,
+            notify_backend="none",
+            paste_delay_ms=0,
+            commit_backend="auto",
+        )
+    )
+
+    responses: list[dict[str, object]] = []
+
+    def _run(text: str) -> None:
+        responses.append(agent.handle_payload({"action": "paste", "text": text}))
+
+    t1 = threading.Thread(target=_run, args=("one",), daemon=True)
+    t2 = threading.Thread(target=_run, args=("two",), daemon=True)
+    t1.start()
+    assert first_started.wait(timeout=1.0) is True
+    t2.start()
+    time.sleep(0.05)
+    assert events == ["start:one"]
+    release_first.set()
+    t1.join(timeout=1.0)
+    t2.join(timeout=1.0)
+
+    assert events == ["start:one", "end:one", "start:two", "end:two"]
+    assert len(responses) == 2
+    assert all(response["status"] == "ok" for response in responses)

@@ -13,6 +13,8 @@ from .exceptions import CommitError
 
 logger = logging.getLogger(__name__)
 
+_CLIPBOARD_SETTLE_DELAY_S = 0.22
+
 
 @dataclass(slots=True)
 class CommitResult:
@@ -153,6 +155,9 @@ class XdotoolClipboardCommitter(TextCommitter):
         if not which("xdotool"):
             raise CommitError("xdotool not found in PATH")
         _set_clipboard_text(text)
+        # Give the clipboard owner time to publish the new selection before
+        # sending the paste shortcut. This avoids stale clipboard pastes on X11.
+        time.sleep(_CLIPBOARD_SETTLE_DELAY_S)
 
         # 取消之前的定时器（如果存在）
         with self._timer_lock:
@@ -175,7 +180,6 @@ class XdotoolClipboardCommitter(TextCommitter):
                 self._clear_timer.daemon = True
                 self._clear_timer.start()
 
-        time.sleep(0.10)
         shortcut = _resolve_paste_shortcut()
         # Terminals use Ctrl+Shift+V; override if target is a terminal.
         wid = self.target_window_id
