@@ -144,6 +144,11 @@ def normalize_runtime_config(
         normalized.get("deskflow_active_screen_path", "~/.local/state/deskflow/active_screen.json"),
         base_dir=config_base_dir,
     )
+    if "deskflow_log_path" in normalized:
+        normalized["deskflow_log_path"] = _normalize_path_string(
+            normalized.get("deskflow_log_path", ""),
+            base_dir=config_base_dir,
+        )
     if include_sound_defaults:
         legacy_beep = str(normalized.get("wake_beep_path", "")).strip()
         normalized["sound_on_path"] = _normalize_path_string(

@@ -9,7 +9,8 @@ from typing import Any
 
 from recordian.deskflow_active_screen import (
     DEFAULT_DESKFLOW_ACTIVE_SCREEN_PATH,
-    load_deskflow_active_screen,
+    DEFAULT_DESKFLOW_LOG_PATH,
+    resolve_deskflow_active_screen,
 )
 from recordian.linux_commit import _set_clipboard_text
 
@@ -38,8 +39,10 @@ class RemotePasteRoutingDecision:
     active_screen: str = ""
     remote_screen_name: str = ""
     deskflow_state_path: str = ""
+    deskflow_log_path: str = ""
     deskflow_server_name: str = ""
     deskflow_updated_at: str = ""
+    deskflow_source: str = ""
     follow_active_screen: bool = False
 
 
@@ -104,6 +107,11 @@ def add_remote_paste_args(parser: argparse.ArgumentParser) -> None:
         "--remote-paste-screen-name",
         default="",
         help="DeskFlow screen name that should receive remote paste when active",
+    )
+    parser.add_argument(
+        "--deskflow-log-path",
+        default=DEFAULT_DESKFLOW_LOG_PATH,
+        help="Optional DeskFlow daemon log path. When state file is unavailable, Recordian will parse the latest screen switch from this log",
     )
 
 
@@ -195,6 +203,7 @@ def resolve_remote_paste_routing(args: argparse.Namespace) -> RemotePasteRouting
     remote_screen_name = str(getattr(args, "remote_paste_screen_name", "")).strip()
     state_path = str(getattr(args, "deskflow_active_screen_path", DEFAULT_DESKFLOW_ACTIVE_SCREEN_PATH)).strip()
     state_path = state_path or DEFAULT_DESKFLOW_ACTIVE_SCREEN_PATH
+    log_path = str(getattr(args, "deskflow_log_path", DEFAULT_DESKFLOW_LOG_PATH)).strip()
 
     if not remote_screen_name:
         return RemotePasteRoutingDecision(
@@ -204,11 +213,15 @@ def resolve_remote_paste_routing(args: argparse.Namespace) -> RemotePasteRouting
             detail="remote_screen_name_not_configured",
             remote_screen_name="",
             deskflow_state_path=state_path,
+            deskflow_log_path=log_path,
             follow_active_screen=True,
         )
 
     try:
-        state = load_deskflow_active_screen(state_path)
+        state = resolve_deskflow_active_screen(
+            state_path_value=state_path,
+            log_path_value=log_path,
+        )
     except Exception as exc:  # noqa: BLE001
         return RemotePasteRoutingDecision(
             commit_local=True,
@@ -217,6 +230,7 @@ def resolve_remote_paste_routing(args: argparse.Namespace) -> RemotePasteRouting
             detail=f"deskflow_active_screen_unavailable:{exc}",
             remote_screen_name=remote_screen_name,
             deskflow_state_path=state_path,
+            deskflow_log_path=log_path,
             follow_active_screen=True,
         )
 
@@ -229,8 +243,10 @@ def resolve_remote_paste_routing(args: argparse.Namespace) -> RemotePasteRouting
         active_screen=state.screen,
         remote_screen_name=remote_screen_name,
         deskflow_state_path=state.path,
+        deskflow_log_path=log_path,
         deskflow_server_name=state.server_name,
         deskflow_updated_at=state.updated_at,
+        deskflow_source=state.source,
         follow_active_screen=True,
     )
 
@@ -263,8 +279,10 @@ def send_remote_paste_from_args(
         "active_screen": routing.active_screen,
         "remote_screen_name": routing.remote_screen_name,
         "deskflow_active_screen_path": routing.deskflow_state_path,
+        "deskflow_log_path": routing.deskflow_log_path,
         "deskflow_server_name": routing.deskflow_server_name,
         "deskflow_updated_at": routing.deskflow_updated_at,
+        "deskflow_source": routing.deskflow_source,
     }
     if not enabled:
         return result

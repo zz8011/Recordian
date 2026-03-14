@@ -1209,6 +1209,7 @@ def _save_runtime_config(args: argparse.Namespace) -> None:
             "deskflow_active_screen_path",
             "~/.local/state/deskflow/active_screen.json",
         ),
+        "deskflow_log_path": getattr(args, "deskflow_log_path", ""),
         "remote_paste_screen_name": getattr(args, "remote_paste_screen_name", ""),
         "model": args.model,
         "device": args.device,

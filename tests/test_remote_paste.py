@@ -102,6 +102,7 @@ def test_resolve_remote_paste_routing_remote_only_when_deskflow_active_screen_ma
         enable_remote_paste=True,
         remote_paste_follow_deskflow_active_screen=True,
         deskflow_active_screen_path=str(state_path),
+        deskflow_log_path="",
         remote_paste_screen_name="remote-screen",
     )
     routing = resolve_remote_paste_routing(args)
@@ -110,6 +111,35 @@ def test_resolve_remote_paste_routing_remote_only_when_deskflow_active_screen_ma
     assert routing.commit_local is False
     assert routing.send_remote is True
     assert routing.active_screen == "remote-screen"
+
+
+def test_resolve_remote_paste_routing_falls_back_to_deskflow_log(tmp_path: Path) -> None:
+    log_path = tmp_path / "deskflow-daemon.log"
+    log_path.write_text(
+        "\n".join(
+            [
+                "2026-03-15T03:00:00 INFO switch from \"server-screen\" to \"remote-screen\" at 10,20",
+                "2026-03-15T03:00:02 INFO switch from \"remote-screen\" to \"server-screen\" at 10,20",
+                "2026-03-15T03:00:05 INFO switch from \"server-screen\" to \"remote-screen\" at 10,20",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    args = argparse.Namespace(
+        enable_remote_paste=True,
+        remote_paste_follow_deskflow_active_screen=True,
+        deskflow_active_screen_path=str(tmp_path / "missing.json"),
+        deskflow_log_path=str(log_path),
+        remote_paste_screen_name="remote-screen",
+    )
+    routing = resolve_remote_paste_routing(args)
+
+    assert routing.mode == "remote-only"
+    assert routing.commit_local is False
+    assert routing.send_remote is True
+    assert routing.active_screen == "remote-screen"
+    assert routing.deskflow_source == "log-file"
 
 
 def test_send_remote_paste_from_args_skips_remote_when_deskflow_active_screen_is_local(tmp_path: Path, monkeypatch) -> None:
@@ -132,6 +162,7 @@ def test_send_remote_paste_from_args_skips_remote_when_deskflow_active_screen_is
         remote_paste_sync_wait_s=0.35,
         remote_paste_follow_deskflow_active_screen=True,
         deskflow_active_screen_path=str(state_path),
+        deskflow_log_path="",
         remote_paste_screen_name="remote-screen",
     )
     result = send_remote_paste_from_args(args, "只应本地上屏")

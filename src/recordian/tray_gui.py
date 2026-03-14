@@ -2039,7 +2039,15 @@ class TrayApp:
                 key="deskflow_active_screen_path",
                 label="DeskFlow 状态文件",
                 value=current.get("deskflow_active_screen_path", "~/.local/state/deskflow/active_screen.json"),
-                hint="DeskFlow server 写出的 active_screen.json 路径。",
+                hint="优先读取这个 active_screen.json；如果不存在，再尝试解析 DeskFlow 日志。",
+            )
+            row = _add_field(
+                sec_remote,
+                row,
+                key="deskflow_log_path",
+                label="DeskFlow 日志文件",
+                value=current.get("deskflow_log_path", ""),
+                hint="可选。状态文件不可用时，解析日志里最新的 switch from/to 记录。",
             )
             _add_field(
                 sec_remote,
@@ -2847,6 +2855,7 @@ class TrayApp:
                         ),
                         "deskflow_active_screen_path": str(_get_value("deskflow_active_screen_path")).strip()
                         or str(current.get("deskflow_active_screen_path", "~/.local/state/deskflow/active_screen.json")),
+                        "deskflow_log_path": str(_get_value("deskflow_log_path")).strip(),
                         "remote_paste_screen_name": str(_get_value("remote_paste_screen_name")).strip(),
                         "warmup": bool(_get_value("warmup")),
                         "debug_diagnostics": bool(_get_value("debug_diagnostics")),

@@ -141,6 +141,8 @@ def test_parser_accepts_remote_paste_options() -> None:
             "--remote-paste-follow-deskflow-active-screen",
             "--deskflow-active-screen-path",
             "/tmp/deskflow-active.json",
+            "--deskflow-log-path",
+            "/tmp/deskflow-daemon.log",
             "--remote-paste-screen-name",
             "remote-screen",
         ]
@@ -150,6 +152,7 @@ def test_parser_accepts_remote_paste_options() -> None:
     assert args.remote_paste_port == 24872
     assert args.remote_paste_follow_deskflow_active_screen is True
     assert args.deskflow_active_screen_path == "/tmp/deskflow-active.json"
+    assert args.deskflow_log_path == "/tmp/deskflow-daemon.log"
     assert args.remote_paste_screen_name == "remote-screen"
 
 
@@ -297,6 +300,7 @@ def test_transcribe_and_commit_includes_remote_paste_result(monkeypatch, tmp_pat
         remote_paste_host="192.168.5.111",
         remote_paste_port=24872,
         remote_paste_timeout_s=3.0,
+        deskflow_log_path="",
     )
     text, _latency, commit_info = transcribe_and_commit(
         args=args,
@@ -349,6 +353,7 @@ def test_transcribe_and_commit_routes_to_remote_only_when_deskflow_screen_matche
         remote_paste_timeout_s=3.0,
         remote_paste_follow_deskflow_active_screen=True,
         deskflow_active_screen_path=str(state_path),
+        deskflow_log_path="",
         remote_paste_screen_name="remote-screen",
     )
     text, _latency, commit_info = transcribe_and_commit(
