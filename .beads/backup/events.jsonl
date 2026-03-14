@@ -264,3 +264,5 @@
 {"actor":"zz8011","comment":null,"created_at":"2026-03-15T02:00:45Z","event_type":"created","id":265,"issue_id":"Recordian-0iq","new_value":"","old_value":""}
 {"actor":"zz8011","comment":null,"created_at":"2026-03-15T02:00:59Z","event_type":"closed","id":266,"issue_id":"Recordian-0iq","new_value":"Added tray diagnostics window, reusable local vLLM config example, and coverage for the new diagnostics helpers.","old_value":""}
 {"actor":"zz8011","comment":null,"created_at":"2026-03-15T02:31:57Z","event_type":"created","id":267,"issue_id":"Recordian-24i","new_value":"","old_value":""}
+{"actor":"zz8011","comment":null,"created_at":"2026-03-15T02:32:18Z","event_type":"closed","id":268,"issue_id":"Recordian-24i","new_value":"Serialized remote paste requests and added a safer clipboard settle delay before issuing the X11 paste shortcut.","old_value":""}
+{"actor":"zz8011","comment":null,"created_at":"2026-03-15T02:50:35Z","event_type":"created","id":269,"issue_id":"Recordian-6te","new_value":"","old_value":""}
