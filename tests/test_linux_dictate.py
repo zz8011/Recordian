@@ -9,6 +9,7 @@ from recordian.linux_dictate import (
     build_parser,
     choose_record_backend,
     create_provider,
+    transcribe_and_commit,
 )
 
 
@@ -127,6 +128,22 @@ def test_parser_accepts_asr_context_options() -> None:
     assert args.asr_context == "OpenClaw, Recordian"
 
 
+def test_parser_accepts_remote_paste_options() -> None:
+    parser = build_parser()
+    args = parser.parse_args(
+        [
+            "--enable-remote-paste",
+            "--remote-paste-host",
+            "192.168.5.111",
+            "--remote-paste-port",
+            "24872",
+        ]
+    )
+    assert args.enable_remote_paste is True
+    assert args.remote_paste_host == "192.168.5.111"
+    assert args.remote_paste_port == 24872
+
+
 def test_create_provider_merges_asr_preset_and_custom_context(monkeypatch) -> None:
     captured: dict[str, object] = {}
 
@@ -243,3 +260,45 @@ def test_stop_record_process_closes_monitor_stream_for_handle() -> None:
     )
 
     monitor_stream.close.assert_called_once_with()
+
+
+def test_transcribe_and_commit_includes_remote_paste_result(monkeypatch, tmp_path: Path) -> None:
+    class _Provider:
+        def transcribe_file(self, audio_path: Path, hotwords: list[str]):  # noqa: ANN001
+            return type("AsrResult", (), {"text": "远端文本"})()
+
+    class _Committer:
+        backend_name = "stdout"
+
+        def commit(self, text: str):  # noqa: ANN001
+            return type("CommitResult", (), {"backend": "stdout", "committed": True, "detail": "local_ok"})()
+
+    captured: dict[str, object] = {}
+
+    def _fake_remote(args, text: str, *, log=None):  # noqa: ANN001
+        captured["text"] = text
+        if callable(log):
+            log("remote_ok")
+        return {"enabled": True, "attempted": True, "sent": True, "host": "192.168.5.111", "detail": "ok"}
+
+    monkeypatch.setattr("recordian.linux_dictate.send_remote_paste_from_args", _fake_remote)
+
+    args = argparse.Namespace(
+        enable_remote_paste=True,
+        remote_paste_host="192.168.5.111",
+        remote_paste_port=24872,
+        remote_paste_timeout_s=3.0,
+    )
+    text, _latency, commit_info = transcribe_and_commit(
+        args=args,
+        provider=_Provider(),
+        committer=_Committer(),
+        audio_path=tmp_path / "sample.wav",
+        hotwords=[],
+        auto_hard_enter=False,
+    )
+
+    assert text == "远端文本"
+    assert captured["text"] == "远端文本"
+    assert commit_info["committed"] is True
+    assert commit_info["remote_paste"]["sent"] is True

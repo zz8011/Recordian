@@ -10,6 +10,7 @@ from typing import Any
 
 from .audio import read_wav_mono_f32
 from .linux_commit import send_hard_enter
+from .remote_paste.client import send_remote_paste_from_args
 
 EventCallback = Callable[[dict[str, object]], None]
 
@@ -481,6 +482,13 @@ def run_postprocess_pipeline(context: PostprocessPipelineContext) -> None:
             text,
             auto_hard_enter=auto_hard_enter,
         )
+        remote_result = send_remote_paste_from_args(
+            context.args,
+            text,
+            log=lambda message: context.on_state({"event": "log", "message": message}),
+        )
+        if remote_result.get("enabled"):
+            commit_info["remote_paste"] = remote_result
         if auto_hard_enter and "hard_enter_failed" in str(commit_info.get("detail", "")):
             context.on_state({"event": "log", "message": f"auto_hard_enter_failed: {commit_info.get('detail', '')}"})
         if context.args.debug_diagnostics:

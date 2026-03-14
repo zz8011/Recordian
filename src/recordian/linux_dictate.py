@@ -16,6 +16,7 @@ from typing import Any, BinaryIO
 
 from .linux_commit import resolve_committer, send_hard_enter
 from .providers import ASRProvider, HttpCloudProvider, QwenASRProvider
+from .remote_paste.client import add_remote_paste_args, send_remote_paste_from_args
 from .runtime_deps import ensure_ffmpeg_available
 
 logger = logging.getLogger(__name__)
@@ -142,6 +143,7 @@ def add_dictate_args(parser: argparse.ArgumentParser) -> None:
         default=30.0,
         help="Timeout in seconds for http-cloud ASR requests",
     )
+    add_remote_paste_args(parser)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -431,6 +433,7 @@ def stop_record_process(
 
 def transcribe_and_commit(
     *,
+    args: argparse.Namespace,
     provider: QwenASRProvider,
     committer: Any,
     audio_path: Path,
@@ -465,6 +468,14 @@ def transcribe_and_commit(
             "committed": False,
             "detail": "empty_text",
         }
+
+    remote_result = send_remote_paste_from_args(
+        args,
+        asr.text,
+        log=lambda message: logger.info(message),
+    )
+    if remote_result.get("enabled"):
+        commit_info["remote_paste"] = remote_result
     return asr.text, transcribe_latency_ms, commit_info
 
 
@@ -500,6 +511,7 @@ def run_dictate_once(
         record_latency_ms = (time.perf_counter() - t0) * 1000
 
         text, transcribe_latency_ms, commit_info = transcribe_and_commit(
+            args=args,
             provider=provider,
             committer=committer,
             audio_path=audio_path,
