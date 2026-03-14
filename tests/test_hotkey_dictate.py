@@ -562,9 +562,10 @@ def test_owner_gate_level_hides_non_owner_activity() -> None:
 
 
 def test_should_skip_owner_gated_asr_requires_owner_presence() -> None:
-    assert _should_skip_owner_gated_asr(owner_filter_enabled=True, owner_seen=False) is True
-    assert _should_skip_owner_gated_asr(owner_filter_enabled=True, owner_seen=True) is False
-    assert _should_skip_owner_gated_asr(owner_filter_enabled=False, owner_seen=False) is False
+    assert _should_skip_owner_gated_asr(owner_filter_enabled=True, owner_seen=False, owner_last_score=0.12) is True
+    assert _should_skip_owner_gated_asr(owner_filter_enabled=True, owner_seen=True, owner_last_score=0.12) is False
+    assert _should_skip_owner_gated_asr(owner_filter_enabled=False, owner_seen=False, owner_last_score=0.12) is False
+    assert _should_skip_owner_gated_asr(owner_filter_enabled=True, owner_seen=False, owner_last_score=-1.0) is False
 
 
 def test_semantic_text_has_content_by_effective_chars() -> None:
@@ -1153,3 +1154,61 @@ def test_ptt_exit_waits_for_processing_completion(monkeypatch) -> None:
     assert stop_event.is_set() is True
     assert len(result_events) == 1
     assert result_events[0]["result"]["text"] == "退出等待"
+
+
+def test_voice_wake_owner_gate_inconclusive_falls_back_to_asr(monkeypatch) -> None:
+    events: list[dict[str, object]] = []
+
+    class _FakeProvider:
+        provider_name = "http-cloud"
+
+        def transcribe_file(self, audio_path: Path, hotwords: list[str]) -> SimpleNamespace:  # noqa: ANN001
+            return SimpleNamespace(text="语音唤醒识别成功")
+
+    class _FakeCommitter:
+        backend_name = "stdout"
+        target_window_id = None
+
+        def commit(self, text: str) -> SimpleNamespace:
+            return SimpleNamespace(backend="stdout", committed=True, detail="printed")
+
+    class _FakeProcess:
+        def poll(self) -> int:
+            return 0
+
+    def _fake_start_record_process(**kwargs) -> RecordProcessHandle:  # noqa: ANN003
+        output_path = kwargs["output_path"]
+        output_path.write_bytes(b"")
+        return RecordProcessHandle(
+            process=_FakeProcess(),
+            monitor_stream=io.BytesIO(b""),
+            monitor_sample_rate=16000,
+            monitor_channels=1,
+        )
+
+    monkeypatch.setattr("recordian.hotkey_dictate.ensure_ffmpeg_available", lambda: "/usr/bin/ffmpeg")
+    monkeypatch.setattr("recordian.hotkey_dictate.choose_record_backend", lambda requested, ffmpeg_bin: "ffmpeg-pulse")
+    monkeypatch.setattr("recordian.hotkey_dictate.resolve_committer", lambda backend: _FakeCommitter())
+    monkeypatch.setattr("recordian.hotkey_dictate.create_provider", lambda args: _FakeProvider())
+    monkeypatch.setattr("recordian.hotkey_dictate.get_focused_window_id", lambda: None)
+    monkeypatch.setattr("recordian.hotkey_dictate.start_record_process", _fake_start_record_process)
+    monkeypatch.setattr("recordian.hotkey_dictate.stop_record_process", lambda *args, **kwargs: None)
+
+    start_recording, stop_recording, _, _ = build_ptt_hotkey_handlers(
+        args=_fake_ptt_args(wake_owner_verify=True, record_format="ogg"),
+        on_result=events.append,
+        on_error=events.append,
+        on_busy=events.append,
+        on_state=events.append,
+    )
+
+    assert start_recording("voice_wake") is True
+    time.sleep(0.02)
+    assert stop_recording() is True
+    time.sleep(0.15)
+
+    result_events = [event for event in events if event.get("event") == "result"]
+    log_messages = [str(event.get("message", "")) for event in events if event.get("event") == "log"]
+    assert result_events
+    assert result_events[-1]["result"]["text"] == "语音唤醒识别成功"
+    assert "voice_owner_gate_inconclusive: fallback_to_asr" in log_messages

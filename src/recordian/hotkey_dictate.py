@@ -1682,18 +1682,17 @@ def build_ptt_hotkey_handlers(
                 if _should_skip_owner_gated_asr(
                     owner_filter_enabled=owner_filter_enabled,
                     owner_seen=owner_seen,
+                    owner_last_score=owner_last_score,
                 ):
-                    if args.debug_diagnostics:
-                        on_state(
-                            {
-                                "event": "log",
-                                "message": (
-                                    "diag owner_gate_skip_asr"
-                                    f" owner_seen={owner_seen}"
-                                    f" last_score={owner_last_score:.3f}"
-                                ),
-                            }
-                        )
+                    on_state(
+                        {
+                            "event": "log",
+                            "message": (
+                                "voice_owner_gate_rejected: "
+                                f"owner_seen={owner_seen} last_score={owner_last_score:.3f}"
+                            ),
+                        }
+                    )
                     on_result({"event": "result", "result": {
                         "audio_path": str(audio_path),
                         "record_backend": recorder_backend,
@@ -1709,6 +1708,13 @@ def build_ptt_hotkey_handlers(
                         },
                     }})
                     return
+                if owner_filter_enabled and not owner_seen and owner_last_score < 0.0:
+                    on_state(
+                        {
+                            "event": "log",
+                            "message": "voice_owner_gate_inconclusive: fallback_to_asr",
+                        }
+                    )
 
                 # 静音检测：仅对 WAV 格式有效，OGG 等格式跳过
                 try:
@@ -2620,8 +2626,15 @@ def _owner_gate_level(level: float, *, owner_filter_enabled: bool, owner_active:
     return 0.0
 
 
-def _should_skip_owner_gated_asr(*, owner_filter_enabled: bool, owner_seen: bool) -> bool:
-    return bool(owner_filter_enabled) and not bool(owner_seen)
+def _should_skip_owner_gated_asr(
+    *,
+    owner_filter_enabled: bool,
+    owner_seen: bool,
+    owner_last_score: float,
+) -> bool:
+    # Only skip ASR when owner verification produced an explicit non-owner signal.
+    # Negative score means verification never reached a usable decision window.
+    return bool(owner_filter_enabled) and not bool(owner_seen) and float(owner_last_score) >= 0.0
 
 
 def _semantic_text_signal_len(text: str) -> int:
