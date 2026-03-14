@@ -140,6 +140,10 @@ def normalize_runtime_config(
         str(normalized.get("auto_lexicon_db", DEFAULT_AUTO_LEXICON_DB)).strip() or DEFAULT_AUTO_LEXICON_DB,
         base_dir=config_base_dir,
     )
+    normalized["deskflow_active_screen_path"] = _normalize_path_string(
+        normalized.get("deskflow_active_screen_path", "~/.local/state/deskflow/active_screen.json"),
+        base_dir=config_base_dir,
+    )
     if include_sound_defaults:
         legacy_beep = str(normalized.get("wake_beep_path", "")).strip()
         normalized["sound_on_path"] = _normalize_path_string(

@@ -7,6 +7,10 @@ import time
 from dataclasses import asdict, dataclass
 from typing import Any
 
+from recordian.deskflow_active_screen import (
+    DEFAULT_DESKFLOW_ACTIVE_SCREEN_PATH,
+    load_deskflow_active_screen,
+)
 from recordian.linux_commit import _set_clipboard_text
 
 from .protocol import (
@@ -23,6 +27,20 @@ logger = logging.getLogger(__name__)
 DEFAULT_REMOTE_PASTE_HOST = "192.168.5.111"
 DEFAULT_REMOTE_PASTE_MODE = "direct"
 DEFAULT_REMOTE_PASTE_SYNC_WAIT_S = 0.35
+
+
+@dataclass(slots=True)
+class RemotePasteRoutingDecision:
+    commit_local: bool
+    send_remote: bool
+    mode: str
+    detail: str
+    active_screen: str = ""
+    remote_screen_name: str = ""
+    deskflow_state_path: str = ""
+    deskflow_server_name: str = ""
+    deskflow_updated_at: str = ""
+    follow_active_screen: bool = False
 
 
 @dataclass(slots=True)
@@ -70,6 +88,22 @@ def add_remote_paste_args(parser: argparse.ArgumentParser) -> None:
         type=float,
         default=DEFAULT_REMOTE_PASTE_SYNC_WAIT_S,
         help="When using shared-clipboard mode, wait this many seconds after staging the local clipboard before asking the remote agent to paste",
+    )
+    parser.add_argument(
+        "--remote-paste-follow-deskflow-active-screen",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Route text by DeskFlow active screen: target remote only when the mouse is on the configured remote screen",
+    )
+    parser.add_argument(
+        "--deskflow-active-screen-path",
+        default=DEFAULT_DESKFLOW_ACTIVE_SCREEN_PATH,
+        help="DeskFlow active screen state JSON path written by the DeskFlow server",
+    )
+    parser.add_argument(
+        "--remote-paste-screen-name",
+        default="",
+        help="DeskFlow screen name that should receive remote paste when active",
     )
 
 
@@ -138,6 +172,69 @@ def _read_response_line(sock: socket.socket) -> bytes:
     return bytes(chunks)
 
 
+def resolve_remote_paste_routing(args: argparse.Namespace) -> RemotePasteRoutingDecision:
+    enabled = bool(getattr(args, "enable_remote_paste", False))
+    if not enabled:
+        return RemotePasteRoutingDecision(
+            commit_local=True,
+            send_remote=False,
+            mode="local-only",
+            detail="remote_paste_disabled",
+        )
+
+    follow_active_screen = bool(getattr(args, "remote_paste_follow_deskflow_active_screen", False))
+    if not follow_active_screen:
+        return RemotePasteRoutingDecision(
+            commit_local=True,
+            send_remote=True,
+            mode="local-and-remote",
+            detail="remote_paste_enabled",
+            follow_active_screen=False,
+        )
+
+    remote_screen_name = str(getattr(args, "remote_paste_screen_name", "")).strip()
+    state_path = str(getattr(args, "deskflow_active_screen_path", DEFAULT_DESKFLOW_ACTIVE_SCREEN_PATH)).strip()
+    state_path = state_path or DEFAULT_DESKFLOW_ACTIVE_SCREEN_PATH
+
+    if not remote_screen_name:
+        return RemotePasteRoutingDecision(
+            commit_local=True,
+            send_remote=False,
+            mode="local-only",
+            detail="remote_screen_name_not_configured",
+            remote_screen_name="",
+            deskflow_state_path=state_path,
+            follow_active_screen=True,
+        )
+
+    try:
+        state = load_deskflow_active_screen(state_path)
+    except Exception as exc:  # noqa: BLE001
+        return RemotePasteRoutingDecision(
+            commit_local=True,
+            send_remote=False,
+            mode="local-only",
+            detail=f"deskflow_active_screen_unavailable:{exc}",
+            remote_screen_name=remote_screen_name,
+            deskflow_state_path=state_path,
+            follow_active_screen=True,
+        )
+
+    is_remote_active = state.screen == remote_screen_name
+    return RemotePasteRoutingDecision(
+        commit_local=not is_remote_active,
+        send_remote=is_remote_active,
+        mode="remote-only" if is_remote_active else "local-only",
+        detail="deskflow_remote_screen_active" if is_remote_active else "deskflow_local_screen_active",
+        active_screen=state.screen,
+        remote_screen_name=remote_screen_name,
+        deskflow_state_path=state.path,
+        deskflow_server_name=state.server_name,
+        deskflow_updated_at=state.updated_at,
+        follow_active_screen=True,
+    )
+
+
 def send_remote_paste_from_args(
     args: argparse.Namespace,
     text: str,
@@ -150,6 +247,7 @@ def send_remote_paste_from_args(
     timeout_s = float(getattr(args, "remote_paste_timeout_s", DEFAULT_REMOTE_PASTE_TIMEOUT_S))
     mode = str(getattr(args, "remote_paste_mode", DEFAULT_REMOTE_PASTE_MODE)).strip() or DEFAULT_REMOTE_PASTE_MODE
     sync_wait_s = float(getattr(args, "remote_paste_sync_wait_s", DEFAULT_REMOTE_PASTE_SYNC_WAIT_S))
+    routing = resolve_remote_paste_routing(args)
 
     result: dict[str, Any] = {
         "enabled": enabled,
@@ -159,11 +257,24 @@ def send_remote_paste_from_args(
         "port": port,
         "mode": mode,
         "detail": "disabled",
+        "routing_mode": routing.mode,
+        "routing_detail": routing.detail,
+        "follow_active_screen": routing.follow_active_screen,
+        "active_screen": routing.active_screen,
+        "remote_screen_name": routing.remote_screen_name,
+        "deskflow_active_screen_path": routing.deskflow_state_path,
+        "deskflow_server_name": routing.deskflow_server_name,
+        "deskflow_updated_at": routing.deskflow_updated_at,
     }
     if not enabled:
         return result
     if not text.strip():
         result["detail"] = "empty_text"
+        return result
+    if not routing.send_remote:
+        result["status"] = "skipped"
+        result["detail"] = routing.detail
+        _log_message(log, f"[RemotePaste] 跳过远端粘贴: {routing.detail}")
         return result
     if not host:
         result["detail"] = "host_not_configured"

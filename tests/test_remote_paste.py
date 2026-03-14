@@ -1,11 +1,12 @@
 import argparse
+import json
 import socketserver
 import threading
 import time
 from pathlib import Path
 
 from recordian.remote_paste.agent import RemotePasteAgent
-from recordian.remote_paste.client import send_remote_paste, send_remote_paste_from_args
+from recordian.remote_paste.client import resolve_remote_paste_routing, send_remote_paste, send_remote_paste_from_args
 from recordian.remote_paste.config import load_agent_config
 from recordian.remote_paste.protocol import decode_message, encode_message
 
@@ -88,6 +89,58 @@ def test_send_remote_paste_from_args_shared_clipboard_mode(monkeypatch) -> None:
     assert payload["action"] == "paste_only"
     assert payload["expected_text"] == "共享剪贴板测试"
     assert payload["clipboard_wait_s"] == 0.4
+
+
+def test_resolve_remote_paste_routing_remote_only_when_deskflow_active_screen_matches(tmp_path: Path) -> None:
+    state_path = tmp_path / "active_screen.json"
+    state_path.write_text(
+        json.dumps({"screen": "remote-screen", "server_name": "server-screen", "updated_at": "2026-03-15T00:00:00Z"}),
+        encoding="utf-8",
+    )
+
+    args = argparse.Namespace(
+        enable_remote_paste=True,
+        remote_paste_follow_deskflow_active_screen=True,
+        deskflow_active_screen_path=str(state_path),
+        remote_paste_screen_name="remote-screen",
+    )
+    routing = resolve_remote_paste_routing(args)
+
+    assert routing.mode == "remote-only"
+    assert routing.commit_local is False
+    assert routing.send_remote is True
+    assert routing.active_screen == "remote-screen"
+
+
+def test_send_remote_paste_from_args_skips_remote_when_deskflow_active_screen_is_local(tmp_path: Path, monkeypatch) -> None:
+    state_path = tmp_path / "active_screen.json"
+    state_path.write_text(
+        json.dumps({"screen": "server-screen", "server_name": "server-screen", "updated_at": "2026-03-15T00:00:00Z"}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "recordian.remote_paste.client._send_remote_command",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("should not send remote command")),
+    )
+
+    args = argparse.Namespace(
+        enable_remote_paste=True,
+        remote_paste_host="192.168.5.111",
+        remote_paste_port=24872,
+        remote_paste_timeout_s=3.0,
+        remote_paste_mode="direct",
+        remote_paste_sync_wait_s=0.35,
+        remote_paste_follow_deskflow_active_screen=True,
+        deskflow_active_screen_path=str(state_path),
+        remote_paste_screen_name="remote-screen",
+    )
+    result = send_remote_paste_from_args(args, "只应本地上屏")
+
+    assert result["attempted"] is False
+    assert result["sent"] is False
+    assert result["status"] == "skipped"
+    assert result["routing_mode"] == "local-only"
+    assert result["detail"] == "deskflow_local_screen_active"
 
 
 def test_load_agent_config_supports_flat_yaml_subset(tmp_path: Path) -> None:

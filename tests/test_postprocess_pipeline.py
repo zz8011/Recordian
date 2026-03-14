@@ -1,4 +1,5 @@
 import argparse
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -199,3 +200,81 @@ def test_run_postprocess_pipeline_records_remote_paste_result(tmp_path: Path, mo
     payload = result_events[0]["result"]
     assert payload["commit"]["committed"] is True
     assert payload["commit"]["remote_paste"]["sent"] is True
+
+
+def test_run_postprocess_pipeline_routes_to_remote_only_when_deskflow_screen_matches(tmp_path: Path, monkeypatch) -> None:
+    audio_path, state_events, result_events, error_events = _base_context(tmp_path)
+    state_path = tmp_path / "active_screen.json"
+    state_path.write_text(
+        json.dumps({"screen": "remote-screen", "server_name": "server-screen", "updated_at": "2026-03-15T00:00:00Z"}),
+        encoding="utf-8",
+    )
+
+    class _Provider:
+        def transcribe_file(self, audio_path: Path, hotwords: list[str]):  # noqa: ANN001
+            return SimpleNamespace(text="远端专用文本")
+
+    class _Committer:
+        backend_name = "stdout"
+        target_window_id = None
+
+        def commit(self, text: str) -> SimpleNamespace:
+            raise AssertionError("remote-only route should skip local commit")
+
+    monkeypatch.setattr(
+        "recordian.postprocess_pipeline.read_wav_mono_f32",
+        lambda path: np.array([0.3, -0.2, 0.1], dtype=np.float32),
+    )
+    monkeypatch.setattr(
+        "recordian.postprocess_pipeline.send_remote_paste_from_args",
+        lambda args, text, *, log=None: {
+            "enabled": True,
+            "attempted": True,
+            "sent": True,
+            "host": "192.168.5.111",
+            "detail": "ok",
+            "routing_mode": "remote-only",
+        },
+    )
+
+    context = PostprocessPipelineContext(
+        args=argparse.Namespace(
+            config_path="",
+            auto_hard_enter=False,
+            debug_diagnostics=False,
+            enable_streaming_refine=False,
+            enable_remote_paste=True,
+            remote_paste_host="192.168.5.111",
+            remote_paste_port=24872,
+            remote_paste_timeout_s=3.0,
+            remote_paste_follow_deskflow_active_screen=True,
+            deskflow_active_screen_path=str(state_path),
+            remote_paste_screen_name="remote-screen",
+        ),
+        audio_path=audio_path,
+        record_backend="ffmpeg-pulse",
+        record_latency_ms=111.0,
+        owner_filter_enabled=False,
+        owner_seen=False,
+        owner_last_score=-1.0,
+        state={"target_window_id": 88},
+        provider=_Provider(),
+        refiner=None,
+        committer=_Committer(),
+        auto_lexicon=None,
+        refine_postprocess_rule="none",
+        normalize_final_text=lambda text: str(text).strip(),
+        resolve_hotwords=lambda: [],
+        on_state=state_events.append,
+        on_result=result_events.append,
+        on_error=error_events.append,
+    )
+
+    run_postprocess_pipeline(context)
+
+    assert not error_events
+    payload = result_events[0]["result"]
+    assert payload["commit"]["backend"] == "remote-paste"
+    assert payload["commit"]["committed"] is True
+    assert payload["commit"]["detail"] == "ok"
+    assert payload["commit"]["remote_paste"]["routing_mode"] == "remote-only"

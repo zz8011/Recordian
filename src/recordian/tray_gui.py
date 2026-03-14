@@ -2022,6 +2022,33 @@ class TrayApp:
                 value=current.get("remote_paste_sync_wait_s", 0.35),
                 hint="仅 shared-clipboard 模式生效。等待 DeskFlow 把本机剪贴板同步到远端后再触发粘贴。",
             )
+            row += 1
+            row = _add_field(
+                sec_remote,
+                row,
+                key="remote_paste_follow_deskflow_active_screen",
+                label="按 DeskFlow 活动屏幕路由",
+                value=current.get("remote_paste_follow_deskflow_active_screen", False),
+                kind="bool",
+                default_bool=False,
+                hint="开启后：鼠标在远端屏幕时只远端上屏；否则只本地上屏。",
+            )
+            row = _add_field(
+                sec_remote,
+                row,
+                key="deskflow_active_screen_path",
+                label="DeskFlow 状态文件",
+                value=current.get("deskflow_active_screen_path", "~/.local/state/deskflow/active_screen.json"),
+                hint="DeskFlow server 写出的 active_screen.json 路径。",
+            )
+            _add_field(
+                sec_remote,
+                row,
+                key="remote_paste_screen_name",
+                label="远端屏幕名",
+                value=current.get("remote_paste_screen_name", ""),
+                hint="DeskFlow 配置里的远端 screen 名；命中该屏幕时才会走远端上屏。",
+            )
 
             sec_presets = _create_section(tab_presets, "文本精炼预设管理")
             preset_row = 0
@@ -2815,6 +2842,12 @@ class TrayApp:
                             "remote_paste_sync_wait_s",
                             float(current.get("remote_paste_sync_wait_s", 0.35)),
                         ),
+                        "remote_paste_follow_deskflow_active_screen": bool(
+                            _get_value("remote_paste_follow_deskflow_active_screen")
+                        ),
+                        "deskflow_active_screen_path": str(_get_value("deskflow_active_screen_path")).strip()
+                        or str(current.get("deskflow_active_screen_path", "~/.local/state/deskflow/active_screen.json")),
+                        "remote_paste_screen_name": str(_get_value("remote_paste_screen_name")).strip(),
                         "warmup": bool(_get_value("warmup")),
                         "debug_diagnostics": bool(_get_value("debug_diagnostics")),
                         "enable_voice_wake": bool(_get_value("enable_voice_wake")),

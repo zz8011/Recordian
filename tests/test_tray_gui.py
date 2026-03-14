@@ -142,6 +142,9 @@ def test_load_hotkey_default_config_matches_backend_defaults() -> None:
     assert defaults["remote_paste_port"] == 24872
     assert defaults["remote_paste_mode"] == "direct"
     assert defaults["remote_paste_sync_wait_s"] == 0.35
+    assert defaults["remote_paste_follow_deskflow_active_screen"] is False
+    assert defaults["deskflow_active_screen_path"] == str(Path("~/.local/state/deskflow/active_screen.json").expanduser())
+    assert defaults["remote_paste_screen_name"] == ""
     assert defaults["wake_auto_stop_silence_s"] == 1.5
 
 

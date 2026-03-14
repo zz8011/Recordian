@@ -10,7 +10,7 @@ from typing import Any
 
 from .audio import read_wav_mono_f32
 from .linux_commit import send_hard_enter
-from .remote_paste.client import send_remote_paste_from_args
+from .remote_paste.client import resolve_remote_paste_routing, send_remote_paste_from_args
 
 EventCallback = Callable[[dict[str, object]], None]
 
@@ -252,6 +252,15 @@ def _commit_text(committer: Any, text: str, *, auto_hard_enter: bool = False) ->
         return {"backend": committer.backend_name, "committed": False, "detail": str(exc)}
 
 
+def _remote_only_commit_info(remote_result: Mapping[str, Any]) -> dict[str, object]:
+    detail = str(remote_result.get("detail", "")).strip() or "remote_paste_failed"
+    return {
+        "backend": "remote-paste",
+        "committed": bool(remote_result.get("sent", False)),
+        "detail": detail,
+    }
+
+
 def _apply_target_window(committer: Any, state: Mapping[str, object]) -> None:
     """Set target window on committer when supported."""
     wid = state.get("target_window_id")
@@ -475,13 +484,21 @@ def run_postprocess_pipeline(context: PostprocessPipelineContext) -> None:
                     }
                 )
 
-        _apply_target_window(context.committer, context.state)
         auto_hard_enter = _resolve_auto_hard_enter(context.args)
-        commit_info = _commit_text(
-            context.committer,
-            text,
-            auto_hard_enter=auto_hard_enter,
-        )
+        routing = resolve_remote_paste_routing(context.args)
+        if routing.commit_local:
+            _apply_target_window(context.committer, context.state)
+            commit_info = _commit_text(
+                context.committer,
+                text,
+                auto_hard_enter=auto_hard_enter,
+            )
+        else:
+            commit_info = {
+                "backend": "remote-paste",
+                "committed": False,
+                "detail": "routed_to_remote_paste",
+            }
         remote_result = send_remote_paste_from_args(
             context.args,
             text,
@@ -489,6 +506,8 @@ def run_postprocess_pipeline(context: PostprocessPipelineContext) -> None:
         )
         if remote_result.get("enabled"):
             commit_info["remote_paste"] = remote_result
+        if not routing.commit_local:
+            commit_info.update(_remote_only_commit_info(remote_result))
         if auto_hard_enter and "hard_enter_failed" in str(commit_info.get("detail", "")):
             context.on_state({"event": "log", "message": f"auto_hard_enter_failed: {commit_info.get('detail', '')}"})
         if context.args.debug_diagnostics:

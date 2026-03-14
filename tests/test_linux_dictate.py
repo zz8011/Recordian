@@ -1,4 +1,5 @@
 import argparse
+import json
 from pathlib import Path
 
 import pytest
@@ -137,11 +138,19 @@ def test_parser_accepts_remote_paste_options() -> None:
             "192.168.5.111",
             "--remote-paste-port",
             "24872",
+            "--remote-paste-follow-deskflow-active-screen",
+            "--deskflow-active-screen-path",
+            "/tmp/deskflow-active.json",
+            "--remote-paste-screen-name",
+            "remote-screen",
         ]
     )
     assert args.enable_remote_paste is True
     assert args.remote_paste_host == "192.168.5.111"
     assert args.remote_paste_port == 24872
+    assert args.remote_paste_follow_deskflow_active_screen is True
+    assert args.deskflow_active_screen_path == "/tmp/deskflow-active.json"
+    assert args.remote_paste_screen_name == "remote-screen"
 
 
 def test_create_provider_merges_asr_preset_and_custom_context(monkeypatch) -> None:
@@ -302,3 +311,57 @@ def test_transcribe_and_commit_includes_remote_paste_result(monkeypatch, tmp_pat
     assert captured["text"] == "远端文本"
     assert commit_info["committed"] is True
     assert commit_info["remote_paste"]["sent"] is True
+
+
+def test_transcribe_and_commit_routes_to_remote_only_when_deskflow_screen_matches(monkeypatch, tmp_path: Path) -> None:
+    state_path = tmp_path / "active_screen.json"
+    state_path.write_text(
+        json.dumps({"screen": "remote-screen", "server_name": "server-screen", "updated_at": "2026-03-15T00:00:00Z"}),
+        encoding="utf-8",
+    )
+
+    class _Provider:
+        def transcribe_file(self, audio_path: Path, hotwords: list[str]):  # noqa: ANN001
+            return type("AsrResult", (), {"text": "远端文本"})()
+
+    class _Committer:
+        backend_name = "stdout"
+
+        def commit(self, text: str):  # noqa: ANN001
+            raise AssertionError("remote-only route should skip local commit")
+
+    monkeypatch.setattr(
+        "recordian.linux_dictate.send_remote_paste_from_args",
+        lambda args, text, *, log=None: {
+            "enabled": True,
+            "attempted": True,
+            "sent": True,
+            "host": "192.168.5.111",
+            "detail": "ok",
+            "routing_mode": "remote-only",
+        },
+    )
+
+    args = argparse.Namespace(
+        enable_remote_paste=True,
+        remote_paste_host="192.168.5.111",
+        remote_paste_port=24872,
+        remote_paste_timeout_s=3.0,
+        remote_paste_follow_deskflow_active_screen=True,
+        deskflow_active_screen_path=str(state_path),
+        remote_paste_screen_name="remote-screen",
+    )
+    text, _latency, commit_info = transcribe_and_commit(
+        args=args,
+        provider=_Provider(),
+        committer=_Committer(),
+        audio_path=tmp_path / "sample.wav",
+        hotwords=[],
+        auto_hard_enter=False,
+    )
+
+    assert text == "远端文本"
+    assert commit_info["backend"] == "remote-paste"
+    assert commit_info["committed"] is True
+    assert commit_info["detail"] == "ok"
+    assert commit_info["remote_paste"]["routing_mode"] == "remote-only"

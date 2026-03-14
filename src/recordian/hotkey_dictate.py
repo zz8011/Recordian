@@ -1201,6 +1201,15 @@ def _save_runtime_config(args: argparse.Namespace) -> None:
         "remote_paste_timeout_s": getattr(args, "remote_paste_timeout_s", 3.0),
         "remote_paste_mode": getattr(args, "remote_paste_mode", "direct"),
         "remote_paste_sync_wait_s": getattr(args, "remote_paste_sync_wait_s", 0.35),
+        "remote_paste_follow_deskflow_active_screen": bool(
+            getattr(args, "remote_paste_follow_deskflow_active_screen", False)
+        ),
+        "deskflow_active_screen_path": getattr(
+            args,
+            "deskflow_active_screen_path",
+            "~/.local/state/deskflow/active_screen.json",
+        ),
+        "remote_paste_screen_name": getattr(args, "remote_paste_screen_name", ""),
         "model": args.model,
         "device": args.device,
         "hub": args.hub,

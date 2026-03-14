@@ -16,7 +16,7 @@ from typing import Any, BinaryIO
 
 from .linux_commit import resolve_committer, send_hard_enter
 from .providers import ASRProvider, HttpCloudProvider, QwenASRProvider
-from .remote_paste.client import add_remote_paste_args, send_remote_paste_from_args
+from .remote_paste.client import add_remote_paste_args, resolve_remote_paste_routing, send_remote_paste_from_args
 from .runtime_deps import ensure_ffmpeg_available
 
 logger = logging.getLogger(__name__)
@@ -443,24 +443,32 @@ def transcribe_and_commit(
     t1 = time.perf_counter()
     asr = provider.transcribe_file(audio_path, hotwords=hotwords)
     transcribe_latency_ms = (time.perf_counter() - t1) * 1000
+    routing = resolve_remote_paste_routing(args)
 
     commit_info = {"backend": committer.backend_name, "committed": False, "detail": "disabled"}
     if asr.text.strip():
-        try:
-            result = committer.commit(asr.text)
-            detail = str(result.detail)
-            if result.committed and auto_hard_enter:
-                enter_result = send_hard_enter(committer)
-                if enter_result.committed:
-                    detail = f"{detail};{enter_result.detail}" if detail else str(enter_result.detail)
-                else:
-                    detail = f"{detail};{enter_result.detail}" if detail else str(enter_result.detail)
-            commit_info = {"backend": result.backend, "committed": result.committed, "detail": detail}
-        except Exception as exc:  # noqa: BLE001
+        if routing.commit_local:
+            try:
+                result = committer.commit(asr.text)
+                detail = str(result.detail)
+                if result.committed and auto_hard_enter:
+                    enter_result = send_hard_enter(committer)
+                    if enter_result.committed:
+                        detail = f"{detail};{enter_result.detail}" if detail else str(enter_result.detail)
+                    else:
+                        detail = f"{detail};{enter_result.detail}" if detail else str(enter_result.detail)
+                commit_info = {"backend": result.backend, "committed": result.committed, "detail": detail}
+            except Exception as exc:  # noqa: BLE001
+                commit_info = {
+                    "backend": committer.backend_name,
+                    "committed": False,
+                    "detail": str(exc),
+                }
+        else:
             commit_info = {
-                "backend": committer.backend_name,
+                "backend": "remote-paste",
                 "committed": False,
-                "detail": str(exc),
+                "detail": "routed_to_remote_paste",
             }
     else:
         commit_info = {
@@ -476,6 +484,14 @@ def transcribe_and_commit(
     )
     if remote_result.get("enabled"):
         commit_info["remote_paste"] = remote_result
+    if asr.text.strip() and not routing.commit_local:
+        commit_info.update(
+            {
+                "backend": "remote-paste",
+                "committed": bool(remote_result.get("sent", False)),
+                "detail": str(remote_result.get("detail", "")).strip() or "remote_paste_failed",
+            }
+        )
     return asr.text, transcribe_latency_ms, commit_info
 
 
