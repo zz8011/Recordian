@@ -22,6 +22,20 @@ def test_set_clipboard_text_prefers_xclip(monkeypatch) -> None:
     assert calls == [(["xclip", "-selection", "clipboard", "-i"], "你好，world")]
 
 
+def test_get_clipboard_text_prefers_xsel(monkeypatch) -> None:
+    class _Result:
+        stdout = "剪贴板内容"
+
+    monkeypatch.setattr(
+        linux_commit,
+        "which",
+        lambda name: "/usr/bin/xsel" if name == "xsel" else None,
+    )
+    monkeypatch.setattr("subprocess.run", lambda *args, **kwargs: _Result())
+
+    assert linux_commit._get_clipboard_text() == "剪贴板内容"
+
+
 
 def test_run_command_with_input_no_dead_returncode_check() -> None:
     import inspect

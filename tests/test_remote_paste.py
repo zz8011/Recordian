@@ -56,10 +56,9 @@ def test_send_remote_paste_from_args_shared_clipboard_mode(monkeypatch) -> None:
     calls: list[object] = []
 
     monkeypatch.setattr("recordian.remote_paste.client._set_clipboard_text", lambda text: calls.append(("clipboard", text)))
-    monkeypatch.setattr("recordian.remote_paste.client.time.sleep", lambda seconds: calls.append(("sleep", round(seconds, 2))))
     monkeypatch.setattr(
         "recordian.remote_paste.client._send_remote_command",
-        lambda host, payload, *, port, timeout_s: type(
+        lambda host, payload, *, port, timeout_s: calls.append(("payload", payload)) or type(
             "Result",
             (),
             {
@@ -83,7 +82,12 @@ def test_send_remote_paste_from_args_shared_clipboard_mode(monkeypatch) -> None:
 
     assert result["sent"] is True
     assert result["mode"] == "shared-clipboard"
-    assert calls == [("clipboard", "共享剪贴板测试"), ("sleep", 0.4)]
+    assert calls[0] == ("clipboard", "共享剪贴板测试")
+    assert calls[1][0] == "payload"
+    payload = calls[1][1]
+    assert payload["action"] == "paste_only"
+    assert payload["expected_text"] == "共享剪贴板测试"
+    assert payload["clipboard_wait_s"] == 0.4
 
 
 def test_load_agent_config_supports_flat_yaml_subset(tmp_path: Path) -> None:
@@ -149,6 +153,7 @@ def test_agent_handles_paste_only(monkeypatch) -> None:
     calls: dict[str, object] = {}
 
     monkeypatch.setattr("recordian.remote_paste.agent.get_focused_window_id", lambda: 4343)
+    monkeypatch.setattr("recordian.remote_paste.agent._get_clipboard_text", lambda: "测试")
     monkeypatch.setattr(
         "recordian.remote_paste.agent.send_paste_shortcut",
         lambda *, target_window_id=None: calls.update({"target_window_id": target_window_id}) or type(
@@ -167,10 +172,29 @@ def test_agent_handles_paste_only(monkeypatch) -> None:
             commit_backend="auto",
         )
     )
-    response = agent.handle_payload({"action": "paste_only", "preview": "测试"})
+    response = agent.handle_payload({"action": "paste_only", "preview": "测试", "expected_text": "测试", "clipboard_wait_s": 0.1})
 
     assert response["status"] == "ok"
     assert calls["target_window_id"] == 4343
+
+
+def test_agent_rejects_paste_only_when_clipboard_not_synced(monkeypatch) -> None:
+    monkeypatch.setattr("recordian.remote_paste.agent._get_clipboard_text", lambda: "旧内容")
+    monkeypatch.setattr("recordian.remote_paste.agent.time.sleep", lambda seconds: None)
+
+    agent = RemotePasteAgent(
+        argparse.Namespace(
+            hostname="remote-host",
+            enable_notify=False,
+            notify_backend="none",
+            paste_delay_ms=0,
+            commit_backend="auto",
+        )
+    )
+    response = agent.handle_payload({"action": "paste_only", "preview": "新内容", "expected_text": "新内容", "clipboard_wait_s": 0.1})
+
+    assert response["status"] == "error"
+    assert response["detail"] == "clipboard_not_synced"
 
 
 def test_agent_serializes_concurrent_paste_requests(monkeypatch) -> None:

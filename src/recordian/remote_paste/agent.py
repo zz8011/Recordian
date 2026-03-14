@@ -9,7 +9,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from recordian.linux_commit import get_focused_window_id, resolve_committer, send_paste_shortcut
+from recordian.linux_commit import _get_clipboard_text, get_focused_window_id, resolve_committer, send_paste_shortcut
 from recordian.linux_notify import Notification, resolve_notifier
 
 from .config import load_agent_config
@@ -137,10 +137,27 @@ class RemotePasteAgent:
 
     def _handle_paste_only(self, payload: dict[str, Any]) -> dict[str, Any]:
         preview = str(payload.get("preview", "")).strip()
+        expected_text = str(payload.get("expected_text", ""))
+        clipboard_wait_s = max(0.0, float(payload.get("clipboard_wait_s", 0.0) or 0.0))
         with self._paste_lock:
             delay_ms = max(0, int(getattr(self.args, "paste_delay_ms", 100)))
             if delay_ms:
                 time.sleep(delay_ms / 1000.0)
+
+            if expected_text:
+                deadline = time.monotonic() + clipboard_wait_s
+                current_clipboard = _get_clipboard_text()
+                while current_clipboard != expected_text and time.monotonic() < deadline:
+                    time.sleep(0.05)
+                    current_clipboard = _get_clipboard_text()
+                if current_clipboard != expected_text:
+                    logger.warning(
+                        "Remote paste-only clipboard mismatch on %s (expected=%s, actual=%s)",
+                        self.args.hostname,
+                        preview_text(expected_text),
+                        preview_text(current_clipboard) if current_clipboard else "<empty>",
+                    )
+                    return self.error_response("clipboard_not_synced")
 
             target_window_id = get_focused_window_id()
             result = send_paste_shortcut(target_window_id=target_window_id)

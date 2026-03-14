@@ -634,6 +634,54 @@ def _set_clipboard_text(text: str) -> None:
     root.destroy()
 
 
+def _get_clipboard_text() -> str:
+    if which("wl-paste"):
+        try:
+            result = subprocess.run(
+                ["wl-paste", "--no-newline"],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            return result.stdout
+        except (FileNotFoundError, subprocess.CalledProcessError):
+            return ""
+    if which("xsel"):
+        try:
+            result = subprocess.run(
+                ["xsel", "--clipboard", "--output"],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            return result.stdout
+        except (FileNotFoundError, subprocess.CalledProcessError):
+            return ""
+    if which("xclip"):
+        try:
+            result = subprocess.run(
+                ["xclip", "-selection", "clipboard", "-o"],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            return result.stdout
+        except (FileNotFoundError, subprocess.CalledProcessError):
+            return ""
+    try:
+        import tkinter as tk
+    except ModuleNotFoundError:
+        return ""
+    try:
+        root = tk.Tk()
+        root.withdraw()
+        text = root.clipboard_get()  # type: ignore[no-untyped-call]
+        root.destroy()
+        return str(text)
+    except Exception:
+        return ""
+
+
 def _start_transient_clipboard_owner(text: str) -> subprocess.Popen[str] | None:
     if not which("xsel"):
         return None

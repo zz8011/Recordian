@@ -91,11 +91,12 @@ def send_remote_paste_via_shared_clipboard(
     sync_wait_s: float,
 ) -> RemotePasteResult:
     _set_clipboard_text(text)
-    time.sleep(max(0.0, float(sync_wait_s)))
     request = {
         "action": "paste_only",
         "source": "shared-clipboard",
         "preview": preview_text(text, max_len=48),
+        "expected_text": text,
+        "clipboard_wait_s": max(0.0, float(sync_wait_s)),
         "timestamp": int(time.time()),
     }
     return _send_remote_command(host, request, port=port, timeout_s=timeout_s)
