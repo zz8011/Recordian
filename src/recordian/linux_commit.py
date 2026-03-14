@@ -72,6 +72,19 @@ class XDoToolCommitter(TextCommitter):
         return CommitResult(backend=self.backend_name, committed=True)
 
 
+def send_paste_shortcut(*, target_window_id: int | None = None) -> CommitResult:
+    if not which("xdotool"):
+        raise CommitError("xdotool not found in PATH")
+    shortcut = _resolve_paste_shortcut()
+    if shortcut == "ctrl+v" and target_window_id is not None and _is_terminal_window(target_window_id):
+        shortcut = "ctrl+shift+v"
+    _xdotool_key(shortcut, window_id=target_window_id)
+    detail = f"paste_only:{shortcut}"
+    if target_window_id is not None:
+        detail += f" wid:{target_window_id}"
+    return CommitResult(backend="paste-only", committed=True, detail=detail)
+
+
 def send_hard_enter(committer: TextCommitter) -> CommitResult:
     """Send a real Enter key event (not text newline) via current commit backend."""
     backend = getattr(committer, "backend_name", "unknown")
@@ -183,13 +196,8 @@ class XdotoolClipboardCommitter(TextCommitter):
                 self._clear_timer.start()
 
         try:
-            shortcut = _resolve_paste_shortcut()
-            # Terminals use Ctrl+Shift+V; override if target is a terminal.
-            wid = self.target_window_id
-            if shortcut == "ctrl+v" and wid is not None and _is_terminal_window(wid):
-                shortcut = "ctrl+shift+v"
-            _xdotool_key(shortcut, window_id=wid)
-            detail = f"paste:{shortcut}" + (f" wid:{wid}" if wid else "")
+            result = send_paste_shortcut(target_window_id=self.target_window_id)
+            detail = str(result.detail).replace("paste_only:", "paste:", 1)
             if self.clipboard_timeout_ms > 0:
                 detail += f" clear_after:{self.clipboard_timeout_ms}ms"
             return CommitResult(backend=self.backend_name, committed=True, detail=detail)

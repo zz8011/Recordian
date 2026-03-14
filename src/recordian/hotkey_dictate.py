@@ -1199,6 +1199,8 @@ def _save_runtime_config(args: argparse.Namespace) -> None:
         "remote_paste_host": getattr(args, "remote_paste_host", ""),
         "remote_paste_port": getattr(args, "remote_paste_port", 24872),
         "remote_paste_timeout_s": getattr(args, "remote_paste_timeout_s", 3.0),
+        "remote_paste_mode": getattr(args, "remote_paste_mode", "direct"),
+        "remote_paste_sync_wait_s": getattr(args, "remote_paste_sync_wait_s", 0.35),
         "model": args.model,
         "device": args.device,
         "hub": args.hub,

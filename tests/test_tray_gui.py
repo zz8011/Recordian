@@ -140,6 +140,8 @@ def test_load_hotkey_default_config_matches_backend_defaults() -> None:
     assert defaults["refine_api_model"] == "claude-3-5-sonnet-20241022"
     assert defaults["enable_remote_paste"] is False
     assert defaults["remote_paste_port"] == 24872
+    assert defaults["remote_paste_mode"] == "direct"
+    assert defaults["remote_paste_sync_wait_s"] == 0.35
     assert defaults["wake_auto_stop_silence_s"] == 1.5
 
 

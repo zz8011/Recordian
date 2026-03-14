@@ -7,17 +7,22 @@ import time
 from dataclasses import asdict, dataclass
 from typing import Any
 
+from recordian.linux_commit import _set_clipboard_text
+
 from .protocol import (
     DEFAULT_REMOTE_PASTE_PORT,
     DEFAULT_REMOTE_PASTE_TIMEOUT_S,
     MAX_MESSAGE_BYTES,
     decode_message,
     encode_message,
+    preview_text,
 )
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_REMOTE_PASTE_HOST = "192.168.5.111"
+DEFAULT_REMOTE_PASTE_MODE = "direct"
+DEFAULT_REMOTE_PASTE_SYNC_WAIT_S = 0.35
 
 
 @dataclass(slots=True)
@@ -54,12 +59,43 @@ def add_remote_paste_args(parser: argparse.ArgumentParser) -> None:
         default=DEFAULT_REMOTE_PASTE_TIMEOUT_S,
         help="Timeout for remote paste TCP request in seconds",
     )
+    parser.add_argument(
+        "--remote-paste-mode",
+        choices=["direct", "shared-clipboard"],
+        default=DEFAULT_REMOTE_PASTE_MODE,
+        help="Remote paste transport: direct sends text over TCP; shared-clipboard stages local clipboard for DeskFlow/Synergy-style sync",
+    )
+    parser.add_argument(
+        "--remote-paste-sync-wait-s",
+        type=float,
+        default=DEFAULT_REMOTE_PASTE_SYNC_WAIT_S,
+        help="When using shared-clipboard mode, wait this many seconds after staging the local clipboard before asking the remote agent to paste",
+    )
 
 
 def send_remote_paste(host: str, text: str, *, port: int, timeout_s: float) -> RemotePasteResult:
     request = {
         "action": "paste",
         "text": text,
+        "timestamp": int(time.time()),
+    }
+    return _send_remote_command(host, request, port=port, timeout_s=timeout_s)
+
+
+def send_remote_paste_via_shared_clipboard(
+    host: str,
+    text: str,
+    *,
+    port: int,
+    timeout_s: float,
+    sync_wait_s: float,
+) -> RemotePasteResult:
+    _set_clipboard_text(text)
+    time.sleep(max(0.0, float(sync_wait_s)))
+    request = {
+        "action": "paste_only",
+        "source": "shared-clipboard",
+        "preview": preview_text(text, max_len=48),
         "timestamp": int(time.time()),
     }
     return _send_remote_command(host, request, port=port, timeout_s=timeout_s)
@@ -111,6 +147,8 @@ def send_remote_paste_from_args(
     host = str(getattr(args, "remote_paste_host", "")).strip()
     port = int(getattr(args, "remote_paste_port", DEFAULT_REMOTE_PASTE_PORT))
     timeout_s = float(getattr(args, "remote_paste_timeout_s", DEFAULT_REMOTE_PASTE_TIMEOUT_S))
+    mode = str(getattr(args, "remote_paste_mode", DEFAULT_REMOTE_PASTE_MODE)).strip() or DEFAULT_REMOTE_PASTE_MODE
+    sync_wait_s = float(getattr(args, "remote_paste_sync_wait_s", DEFAULT_REMOTE_PASTE_SYNC_WAIT_S))
 
     result: dict[str, Any] = {
         "enabled": enabled,
@@ -118,6 +156,7 @@ def send_remote_paste_from_args(
         "sent": False,
         "host": host,
         "port": port,
+        "mode": mode,
         "detail": "disabled",
     }
     if not enabled:
@@ -131,7 +170,16 @@ def send_remote_paste_from_args(
 
     result["attempted"] = True
     try:
-        response = send_remote_paste(host, text, port=port, timeout_s=timeout_s)
+        if mode == "shared-clipboard":
+            response = send_remote_paste_via_shared_clipboard(
+                host,
+                text,
+                port=port,
+                timeout_s=timeout_s,
+                sync_wait_s=sync_wait_s,
+            )
+        else:
+            response = send_remote_paste(host, text, port=port, timeout_s=timeout_s)
         result.update(
             {
                 "sent": response.ok,
@@ -140,10 +188,11 @@ def send_remote_paste_from_args(
                 "response": response.response,
             }
         )
+        mode_label = "共享剪贴板" if mode == "shared-clipboard" else "直接传输"
         message = (
-            f"[RemotePaste] 向 {host}:{port} 发送粘贴命令成功"
+            f"[RemotePaste] 以{mode_label}模式向 {host}:{port} 发送粘贴命令成功"
             if response.ok
-            else f"[RemotePaste] 向 {host}:{port} 发送粘贴命令失败: {response.detail}"
+            else f"[RemotePaste] 以{mode_label}模式向 {host}:{port} 发送粘贴命令失败: {response.detail}"
         )
         _log_message(log, message)
     except Exception as exc:  # noqa: BLE001

@@ -52,6 +52,40 @@ def test_send_remote_paste_from_args_skips_when_disabled() -> None:
     assert result["detail"] == "disabled"
 
 
+def test_send_remote_paste_from_args_shared_clipboard_mode(monkeypatch) -> None:
+    calls: list[object] = []
+
+    monkeypatch.setattr("recordian.remote_paste.client._set_clipboard_text", lambda text: calls.append(("clipboard", text)))
+    monkeypatch.setattr("recordian.remote_paste.client.time.sleep", lambda seconds: calls.append(("sleep", round(seconds, 2))))
+    monkeypatch.setattr(
+        "recordian.remote_paste.client._send_remote_command",
+        lambda host, payload, *, port, timeout_s: type(
+            "Result",
+            (),
+            {
+                "ok": True,
+                "status": "ok",
+                "detail": "paste_only:ctrl+v",
+                "response": {"status": "ok", "detail": "paste_only:ctrl+v", "payload": payload},
+            },
+        )(),
+    )
+
+    args = argparse.Namespace(
+        enable_remote_paste=True,
+        remote_paste_host="192.168.5.111",
+        remote_paste_port=24872,
+        remote_paste_timeout_s=3.0,
+        remote_paste_mode="shared-clipboard",
+        remote_paste_sync_wait_s=0.4,
+    )
+    result = send_remote_paste_from_args(args, "共享剪贴板测试")
+
+    assert result["sent"] is True
+    assert result["mode"] == "shared-clipboard"
+    assert calls == [("clipboard", "共享剪贴板测试"), ("sleep", 0.4)]
+
+
 def test_load_agent_config_supports_flat_yaml_subset(tmp_path: Path) -> None:
     path = tmp_path / "agent_config.yaml"
     path.write_text(
@@ -109,6 +143,34 @@ def test_agent_resolves_committer_from_current_focused_window(monkeypatch) -> No
     assert calls["backend"] == "auto"
     assert calls["target_window_id"] == 4242
     assert calls["text"] == "hello"
+
+
+def test_agent_handles_paste_only(monkeypatch) -> None:
+    calls: dict[str, object] = {}
+
+    monkeypatch.setattr("recordian.remote_paste.agent.get_focused_window_id", lambda: 4343)
+    monkeypatch.setattr(
+        "recordian.remote_paste.agent.send_paste_shortcut",
+        lambda *, target_window_id=None: calls.update({"target_window_id": target_window_id}) or type(
+            "CommitResult",
+            (),
+            {"committed": True, "detail": "paste_only:ctrl+v"},
+        )(),
+    )
+
+    agent = RemotePasteAgent(
+        argparse.Namespace(
+            hostname="remote-host",
+            enable_notify=False,
+            notify_backend="none",
+            paste_delay_ms=0,
+            commit_backend="auto",
+        )
+    )
+    response = agent.handle_payload({"action": "paste_only", "preview": "测试"})
+
+    assert response["status"] == "ok"
+    assert calls["target_window_id"] == 4343
 
 
 def test_agent_serializes_concurrent_paste_requests(monkeypatch) -> None:

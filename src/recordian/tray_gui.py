@@ -1996,13 +1996,31 @@ class TrayApp:
                 value=current.get("remote_paste_port", 24872),
                 hint="仅在启用远程粘贴时生效，默认 24872",
             )
-            _add_field(
+            row = _add_field(
                 sec_remote,
                 row,
                 key="remote_paste_timeout_s",
                 label="远程超时 (s)",
                 value=current.get("remote_paste_timeout_s", 3.0),
                 hint="远程连接超时秒数，默认 3.0",
+            )
+            row = _add_field(
+                sec_remote,
+                row,
+                key="remote_paste_mode",
+                label="远程传输模式",
+                value=current.get("remote_paste_mode", "direct"),
+                kind="combo",
+                options=("direct", "shared-clipboard"),
+                hint="direct: 直接把文本发给远端 agent；shared-clipboard: 利用 DeskFlow/Synergy 共享剪贴板传输，远端只执行粘贴快捷键。",
+            )
+            _add_field(
+                sec_remote,
+                row,
+                key="remote_paste_sync_wait_s",
+                label="共享剪贴板等待 (s)",
+                value=current.get("remote_paste_sync_wait_s", 0.35),
+                hint="仅 shared-clipboard 模式生效。等待 DeskFlow 把本机剪贴板同步到远端后再触发粘贴。",
             )
 
             sec_presets = _create_section(tab_presets, "文本精炼预设管理")
@@ -2789,6 +2807,13 @@ class TrayApp:
                         "remote_paste_timeout_s": _parse_float_field(
                             "remote_paste_timeout_s",
                             float(current.get("remote_paste_timeout_s", 3.0)),
+                        ),
+                        "remote_paste_mode": str(_get_value("remote_paste_mode")).strip() or str(
+                            current.get("remote_paste_mode", "direct")
+                        ),
+                        "remote_paste_sync_wait_s": _parse_float_field(
+                            "remote_paste_sync_wait_s",
+                            float(current.get("remote_paste_sync_wait_s", 0.35)),
                         ),
                         "warmup": bool(_get_value("warmup")),
                         "debug_diagnostics": bool(_get_value("debug_diagnostics")),

@@ -9,7 +9,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from recordian.linux_commit import get_focused_window_id, resolve_committer
+from recordian.linux_commit import get_focused_window_id, resolve_committer, send_paste_shortcut
 from recordian.linux_notify import Notification, resolve_notifier
 
 from .config import load_agent_config
@@ -97,6 +97,8 @@ class RemotePasteAgent:
                 "hostname": self.args.hostname,
                 "uptime": int(time.monotonic() - self.started_at),
             }
+        if action == "paste_only":
+            return self._handle_paste_only(payload)
         if action == "paste":
             return self._handle_paste(payload)
         return self.error_response(f"unsupported_action:{action or 'missing'}")
@@ -129,6 +131,29 @@ class RemotePasteAgent:
                 preview_text(text),
             )
             detail = str(result.detail or "committed")
+            if target_window_id is not None:
+                detail = f"{detail};wid:{target_window_id}"
+            return {"status": "ok", "hostname": self.args.hostname, "detail": detail}
+
+    def _handle_paste_only(self, payload: dict[str, Any]) -> dict[str, Any]:
+        preview = str(payload.get("preview", "")).strip()
+        with self._paste_lock:
+            delay_ms = max(0, int(getattr(self.args, "paste_delay_ms", 100)))
+            if delay_ms:
+                time.sleep(delay_ms / 1000.0)
+
+            target_window_id = get_focused_window_id()
+            result = send_paste_shortcut(target_window_id=target_window_id)
+            if not result.committed:
+                return self.error_response(str(result.detail or "paste_only_failed"))
+
+            logger.info(
+                "Remote paste-only succeeded on %s (wid=%s, preview=%s)",
+                self.args.hostname,
+                target_window_id,
+                preview or "<empty>",
+            )
+            detail = str(result.detail or "paste_only")
             if target_window_id is not None:
                 detail = f"{detail};wid:{target_window_id}"
             return {"status": "ok", "hostname": self.args.hostname, "detail": detail}
