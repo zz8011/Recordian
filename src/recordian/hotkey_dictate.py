@@ -880,7 +880,7 @@ def build_ptt_hotkey_handlers(
                 recorder_backend=recorder_backend,
                 output_path=audio_path,
                 duration_s=None,
-                enable_monitor=False,
+                enable_monitor=True,
             )
             _update_state({
                 "process": record_handle,

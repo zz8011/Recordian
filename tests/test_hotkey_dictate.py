@@ -940,6 +940,7 @@ def _fake_ptt_args(**overrides: object) -> argparse.Namespace:
 
 def test_ptt_start_recording_returns_false_when_busy(monkeypatch) -> None:
     events: list[dict[str, object]] = []
+    start_kwargs: list[dict[str, object]] = []
 
     class _FakeProvider:
         provider_name = "http-cloud"
@@ -959,6 +960,7 @@ def test_ptt_start_recording_returns_false_when_busy(monkeypatch) -> None:
             return 0
 
     def _fake_start_record_process(**kwargs) -> RecordProcessHandle:  # noqa: ANN003
+        start_kwargs.append(dict(kwargs))
         output_path = kwargs["output_path"]
         output_path.write_bytes(b"")
         return RecordProcessHandle(process=_FakeProcess(), monitor_stream=io.BytesIO(b""))
@@ -986,6 +988,8 @@ def test_ptt_start_recording_returns_false_when_busy(monkeypatch) -> None:
 
     busy_events = [event for event in events if event.get("event") == "busy"]
     assert len(busy_events) == 1
+    assert start_kwargs
+    assert start_kwargs[0]["enable_monitor"] is True
 
 
 def test_ptt_start_failure_releases_lock_and_recovers(monkeypatch) -> None:
