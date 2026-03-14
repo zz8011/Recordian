@@ -256,3 +256,9 @@
 {"actor":"zz8011","comment":null,"created_at":"2026-03-15T01:23:02Z","event_type":"created","id":257,"issue_id":"Recordian-46t","new_value":"","old_value":""}
 {"actor":"zz8011","comment":null,"created_at":"2026-03-15T01:23:10Z","event_type":"closed","id":258,"issue_id":"Recordian-46t","new_value":"Completed","old_value":""}
 {"actor":"zz8011","comment":null,"created_at":"2026-03-15T01:36:41Z","event_type":"created","id":259,"issue_id":"Recordian-am9","new_value":"","old_value":""}
+{"actor":"zz8011","comment":null,"created_at":"2026-03-15T01:36:55Z","event_type":"closed","id":260,"issue_id":"Recordian-am9","new_value":"Completed","old_value":""}
+{"actor":"zz8011","comment":null,"created_at":"2026-03-15T01:43:58Z","event_type":"created","id":261,"issue_id":"Recordian-lp5","new_value":"","old_value":""}
+{"actor":"zz8011","comment":null,"created_at":"2026-03-15T01:44:06Z","event_type":"closed","id":262,"issue_id":"Recordian-lp5","new_value":"Completed","old_value":""}
+{"actor":"zz8011","comment":null,"created_at":"2026-03-15T01:50:41Z","event_type":"created","id":263,"issue_id":"Recordian-w0z","new_value":"","old_value":""}
+{"actor":"zz8011","comment":null,"created_at":"2026-03-15T01:51:07Z","event_type":"closed","id":264,"issue_id":"Recordian-w0z","new_value":"Fixed by starting wake-triggered recording with owner gate active and adding regression coverage.","old_value":""}
+{"actor":"zz8011","comment":null,"created_at":"2026-03-15T02:00:45Z","event_type":"created","id":265,"issue_id":"Recordian-0iq","new_value":"","old_value":""}
