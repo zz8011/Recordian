@@ -224,3 +224,8 @@
 {"actor":"zz8011","comment":null,"created_at":"2026-03-13T12:42:17Z","event_type":"closed","id":225,"issue_id":"Recordian-3l7","new_value":"Implemented ffmpeg recorder monitor stream for wake-session endpointing; default path no longer duplicates microphone monitoring","old_value":""}
 {"actor":"zz8011","comment":null,"created_at":"2026-03-13T12:42:17Z","event_type":"created","id":226,"issue_id":"Recordian-adt","new_value":"","old_value":""}
 {"actor":"zz8011","comment":null,"created_at":"2026-03-13T12:46:47Z","event_type":"created","id":227,"issue_id":"Recordian-6xq","new_value":"","old_value":""}
+{"actor":"zz8011","comment":null,"created_at":"2026-03-14T19:46:52Z","event_type":"created","id":228,"issue_id":"Recordian-bom","new_value":"","old_value":""}
+{"actor":"zz8011","comment":null,"created_at":"2026-03-14T19:47:00Z","event_type":"closed","id":229,"issue_id":"Recordian-bom","new_value":"Completed","old_value":""}
+{"actor":"zz8011","comment":null,"created_at":"2026-03-14T19:52:40Z","event_type":"created","id":230,"issue_id":"Recordian-zjw","new_value":"","old_value":""}
+{"actor":"zz8011","comment":null,"created_at":"2026-03-14T19:52:47Z","event_type":"closed","id":231,"issue_id":"Recordian-zjw","new_value":"Completed","old_value":""}
+{"actor":"zz8011","comment":null,"created_at":"2026-03-14T19:57:42Z","event_type":"created","id":232,"issue_id":"Recordian-47x","new_value":"","old_value":""}
