@@ -1039,7 +1039,7 @@ def _parse_args_with_config(parser: argparse.ArgumentParser) -> argparse.Namespa
         payload = ConfigManager.load(config_path)
         if isinstance(payload, dict):
             # Backward-compat config normalization.
-            defaults_payload = normalize_runtime_config(payload)
+            defaults_payload = normalize_runtime_config(payload, config_base_dir=config_path.parent)
             if "enable_thinking" not in defaults_payload and "refine_enable_thinking" in defaults_payload:
                 defaults_payload["enable_thinking"] = defaults_payload.get("refine_enable_thinking")
             if not defaults_payload.get("refine_model") and defaults_payload.get("refine_model_llamacpp"):
@@ -1056,7 +1056,11 @@ def _parse_args_with_config(parser: argparse.ArgumentParser) -> argparse.Namespa
 
     args = parser.parse_args()
     # Guard against invalid legacy values that may slip through argparse defaults.
-    apply_namespace_runtime_normalization(args, allow_auto_fallback_commit=True)
+    apply_namespace_runtime_normalization(
+        args,
+        allow_auto_fallback_commit=True,
+        config_base_dir=config_path.parent,
+    )
     args.auto_hard_enter = bool(getattr(args, "auto_hard_enter", False))
     try:
         wake_vad_aggressiveness = int(getattr(args, "wake_vad_aggressiveness", 2))
