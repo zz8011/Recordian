@@ -47,6 +47,7 @@ def test_xdotool_clipboard_committer_clears_clipboard_after_timeout(monkeypatch)
         pass
 
     monkeypatch.setattr("recordian.linux_commit._set_clipboard_text", _fake_set_clipboard)
+    monkeypatch.setattr("recordian.linux_commit._start_transient_clipboard_owner", lambda text: None)
     monkeypatch.setattr("recordian.linux_commit._xdotool_key", _fake_xdotool_key)
     monkeypatch.setattr("recordian.linux_commit.which", lambda x: "/usr/bin/" + x)
 
@@ -69,16 +70,34 @@ def test_xdotool_clipboard_committer_waits_for_clipboard_settle(monkeypatch):
     slept: list[float] = []
 
     monkeypatch.setattr("recordian.linux_commit.which", lambda x: "/usr/bin/" + x)
-    monkeypatch.setattr("recordian.linux_commit._set_clipboard_text", lambda text: order.append(f"clipboard:{text}"))
+    monkeypatch.setattr("recordian.linux_commit._start_transient_clipboard_owner", lambda text: object())
+    monkeypatch.setattr("recordian.linux_commit._stop_transient_clipboard_owner", lambda proc: order.append("owner:stop"))
     monkeypatch.setattr("recordian.linux_commit._xdotool_key", lambda shortcut, *, window_id=None: order.append(f"paste:{shortcut}"))
     monkeypatch.setattr("time.sleep", lambda seconds: slept.append(seconds))
 
     committer = XdotoolClipboardCommitter(clipboard_timeout_ms=0)
     committer.commit("测试文本")
 
-    assert order == ["clipboard:测试文本", "paste:ctrl+v"]
+    assert order == ["paste:ctrl+v", "owner:stop"]
     assert slept
     assert slept[0] >= 0.2
+
+
+def test_xdotool_clipboard_committer_falls_back_when_no_transient_owner(monkeypatch):
+    from recordian.linux_commit import XdotoolClipboardCommitter
+
+    order: list[str] = []
+
+    monkeypatch.setattr("recordian.linux_commit.which", lambda x: "/usr/bin/" + x)
+    monkeypatch.setattr("recordian.linux_commit._start_transient_clipboard_owner", lambda text: None)
+    monkeypatch.setattr("recordian.linux_commit._set_clipboard_text", lambda text: order.append(f"clipboard:{text}"))
+    monkeypatch.setattr("recordian.linux_commit._xdotool_key", lambda shortcut, *, window_id=None: order.append(f"paste:{shortcut}"))
+    monkeypatch.setattr("time.sleep", lambda seconds: None)
+
+    committer = XdotoolClipboardCommitter(clipboard_timeout_ms=0)
+    committer.commit("测试文本")
+
+    assert order == ["clipboard:测试文本", "paste:ctrl+v"]
 
 
 def test_clipboard_timeout_invalid_env_var_uses_default(monkeypatch):
@@ -118,6 +137,7 @@ def test_xdotool_clipboard_multiple_commits_cancel_previous_timer(monkeypatch):
         pass
 
     monkeypatch.setattr("recordian.linux_commit._set_clipboard_text", _fake_set_clipboard)
+    monkeypatch.setattr("recordian.linux_commit._start_transient_clipboard_owner", lambda text: None)
     monkeypatch.setattr("recordian.linux_commit._xdotool_key", _fake_xdotool_key)
     monkeypatch.setattr("recordian.linux_commit.which", lambda x: "/usr/bin/" + x)
 

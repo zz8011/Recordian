@@ -154,7 +154,9 @@ class XdotoolClipboardCommitter(TextCommitter):
     def commit(self, text: str) -> CommitResult:
         if not which("xdotool"):
             raise CommitError("xdotool not found in PATH")
-        _set_clipboard_text(text)
+        clipboard_owner = _start_transient_clipboard_owner(text)
+        if clipboard_owner is None:
+            _set_clipboard_text(text)
         # Give the clipboard owner time to publish the new selection before
         # sending the paste shortcut. This avoids stale clipboard pastes on X11.
         time.sleep(_CLIPBOARD_SETTLE_DELAY_S)
@@ -180,16 +182,19 @@ class XdotoolClipboardCommitter(TextCommitter):
                 self._clear_timer.daemon = True
                 self._clear_timer.start()
 
-        shortcut = _resolve_paste_shortcut()
-        # Terminals use Ctrl+Shift+V; override if target is a terminal.
-        wid = self.target_window_id
-        if shortcut == "ctrl+v" and wid is not None and _is_terminal_window(wid):
-            shortcut = "ctrl+shift+v"
-        _xdotool_key(shortcut, window_id=wid)
-        detail = f"paste:{shortcut}" + (f" wid:{wid}" if wid else "")
-        if self.clipboard_timeout_ms > 0:
-            detail += f" clear_after:{self.clipboard_timeout_ms}ms"
-        return CommitResult(backend=self.backend_name, committed=True, detail=detail)
+        try:
+            shortcut = _resolve_paste_shortcut()
+            # Terminals use Ctrl+Shift+V; override if target is a terminal.
+            wid = self.target_window_id
+            if shortcut == "ctrl+v" and wid is not None and _is_terminal_window(wid):
+                shortcut = "ctrl+shift+v"
+            _xdotool_key(shortcut, window_id=wid)
+            detail = f"paste:{shortcut}" + (f" wid:{wid}" if wid else "")
+            if self.clipboard_timeout_ms > 0:
+                detail += f" clear_after:{self.clipboard_timeout_ms}ms"
+            return CommitResult(backend=self.backend_name, committed=True, detail=detail)
+        finally:
+            _stop_transient_clipboard_owner(clipboard_owner)
 
 
 class CommitterWithFallback(TextCommitter):
@@ -619,6 +624,52 @@ def _set_clipboard_text(text: str) -> None:
         root.clipboard_append(text)
     root.update()
     root.destroy()
+
+
+def _start_transient_clipboard_owner(text: str) -> subprocess.Popen[str] | None:
+    if not which("xsel"):
+        return None
+    try:
+        proc = subprocess.Popen(
+            ["xsel", "--clipboard", "--input", "--nodetach"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        raise CommitError(f"failed to start xsel clipboard owner: {exc}") from exc
+
+    try:
+        assert proc.stdin is not None
+        proc.stdin.write(text)
+        proc.stdin.close()
+    except Exception:
+        try:
+            proc.terminate()
+            proc.wait(timeout=0.5)
+        except Exception:
+            pass
+        raise
+    return proc
+
+
+def _stop_transient_clipboard_owner(proc: subprocess.Popen[str] | None) -> None:
+    if proc is None:
+        return
+    if proc.poll() is not None:
+        return
+    try:
+        proc.terminate()
+        proc.wait(timeout=0.5)
+    except (OSError, subprocess.TimeoutExpired):
+        try:
+            proc.kill()
+            proc.wait(timeout=0.2)
+        except Exception:
+            pass
 
 
 def _xdotool_key(shortcut: str, *, window_id: int | None = None) -> None:
