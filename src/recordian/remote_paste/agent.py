@@ -8,7 +8,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from recordian.linux_commit import resolve_committer
+from recordian.linux_commit import get_focused_window_id, resolve_committer
 from recordian.linux_notify import Notification, resolve_notifier
 
 from .config import load_agent_config
@@ -83,7 +83,6 @@ class RemotePasteAgent:
     def __init__(self, args: argparse.Namespace) -> None:
         self.args = args
         self.started_at = time.monotonic()
-        self.committer = resolve_committer(args.commit_backend)
         self.notifier = resolve_notifier("none" if not args.enable_notify else args.notify_backend)
 
     def handle_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -112,13 +111,23 @@ class RemotePasteAgent:
         if delay_ms:
             time.sleep(delay_ms / 1000.0)
 
-        result = self.committer.commit(text)
+        target_window_id = get_focused_window_id()
+        committer = resolve_committer(self.args.commit_backend, target_window_id=target_window_id)
+        result = committer.commit(text)
         if not result.committed:
             return self.error_response(str(result.detail or "commit_failed"))
 
         self._notify_success(text)
-        logger.info("Remote paste succeeded on %s", self.args.hostname)
-        return {"status": "ok", "hostname": self.args.hostname, "detail": str(result.detail or "committed")}
+        logger.info(
+            "Remote paste succeeded on %s (wid=%s, backend=%s)",
+            self.args.hostname,
+            target_window_id,
+            getattr(committer, "backend_name", self.args.commit_backend),
+        )
+        detail = str(result.detail or "committed")
+        if target_window_id is not None:
+            detail = f"{detail};wid:{target_window_id}"
+        return {"status": "ok", "hostname": self.args.hostname, "detail": detail}
 
     def _notify_success(self, text: str) -> None:
         body = f"已在 {self.args.hostname} 粘贴: {preview_text(text)}"

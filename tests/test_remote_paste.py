@@ -3,6 +3,7 @@ import socketserver
 import threading
 from pathlib import Path
 
+from recordian.remote_paste.agent import RemotePasteAgent
 from recordian.remote_paste.client import send_remote_paste, send_remote_paste_from_args
 from recordian.remote_paste.config import load_agent_config
 from recordian.remote_paste.protocol import decode_message, encode_message
@@ -72,3 +73,38 @@ def test_load_agent_config_supports_flat_yaml_subset(tmp_path: Path) -> None:
     assert payload["enable_notify"] is True
     assert payload["paste_delay_ms"] == 150
     assert payload["log_level"] == "DEBUG"
+
+
+def test_agent_resolves_committer_from_current_focused_window(monkeypatch) -> None:
+    calls: dict[str, object] = {}
+
+    class _Committer:
+        backend_name = "xdotool-clipboard"
+
+        def commit(self, text: str):  # noqa: ANN001
+            calls["text"] = text
+            return type("CommitResult", (), {"committed": True, "detail": "paste:ctrl+shift+v"})()
+
+    monkeypatch.setattr("recordian.remote_paste.agent.get_focused_window_id", lambda: 4242)
+    monkeypatch.setattr(
+        "recordian.remote_paste.agent.resolve_committer",
+        lambda backend, *, target_window_id=None: calls.update(
+            {"backend": backend, "target_window_id": target_window_id}
+        ) or _Committer(),
+    )
+
+    agent = RemotePasteAgent(
+        argparse.Namespace(
+            hostname="remote-host",
+            enable_notify=False,
+            notify_backend="none",
+            paste_delay_ms=0,
+            commit_backend="auto",
+        )
+    )
+    response = agent.handle_payload({"action": "paste", "text": "hello"})
+
+    assert response["status"] == "ok"
+    assert calls["backend"] == "auto"
+    assert calls["target_window_id"] == 4242
+    assert calls["text"] == "hello"
