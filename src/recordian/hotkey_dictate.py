@@ -13,6 +13,7 @@ from tempfile import TemporaryDirectory
 from typing import Any
 
 from recordian.config import ConfigManager
+from recordian.runtime_config import apply_namespace_runtime_normalization, normalize_runtime_config
 
 from .audio import read_wav_mono_f32, write_wav_mono_f32
 from .audio_feedback import default_sound_off_path, default_sound_on_path, play_sound
@@ -34,7 +35,6 @@ from .voice_wake import (
     VoiceWakeService,
     make_wake_model_config,
     make_wake_runtime_config,
-    normalize_tokens_type,
 )
 
 DEFAULT_CONFIG_PATH = "~/.config/recordian/hotkey.json"
@@ -1883,19 +1883,11 @@ def _parse_args_with_config(parser: argparse.ArgumentParser) -> argparse.Namespa
         payload = ConfigManager.load(config_path)
         if isinstance(payload, dict):
             # Backward-compat config normalization.
-            defaults_payload = dict(payload)
+            defaults_payload = normalize_runtime_config(payload)
             if "enable_thinking" not in defaults_payload and "refine_enable_thinking" in defaults_payload:
                 defaults_payload["enable_thinking"] = defaults_payload.get("refine_enable_thinking")
             if not defaults_payload.get("refine_model") and defaults_payload.get("refine_model_llamacpp"):
                 defaults_payload["refine_model"] = defaults_payload.get("refine_model_llamacpp")
-            if defaults_payload.get("refine_provider") == "llama.cpp":
-                defaults_payload["refine_provider"] = "llamacpp"
-            if defaults_payload.get("record_backend") == "ffmpeg":
-                defaults_payload["record_backend"] = "ffmpeg-pulse"
-            if defaults_payload.get("record_format") == "mp3":
-                defaults_payload["record_format"] = "ogg"
-            if defaults_payload.get("commit_backend") == "pynput":
-                defaults_payload["commit_backend"] = "auto"
 
             allowed = {
                 action.dest
@@ -1908,30 +1900,7 @@ def _parse_args_with_config(parser: argparse.ArgumentParser) -> argparse.Namespa
 
     args = parser.parse_args()
     # Guard against invalid legacy values that may slip through argparse defaults.
-    if getattr(args, "refine_provider", "local") == "llama.cpp":
-        args.refine_provider = "llamacpp"
-    if getattr(args, "refine_provider", "local") not in {"local", "cloud", "llamacpp"}:
-        args.refine_provider = "local"
-    if getattr(args, "record_backend", "auto") == "ffmpeg":
-        args.record_backend = "ffmpeg-pulse"
-    if getattr(args, "record_backend", "auto") not in {"auto", "ffmpeg-pulse", "arecord"}:
-        args.record_backend = "auto"
-    if getattr(args, "record_format", "ogg") == "mp3":
-        args.record_format = "ogg"
-    if getattr(args, "record_format", "ogg") not in {"ogg", "wav"}:
-        args.record_format = "ogg"
-    if getattr(args, "commit_backend", "auto") == "pynput":
-        args.commit_backend = "auto"
-    if getattr(args, "commit_backend", "auto") not in {
-        "none",
-        "auto",
-        "auto-fallback",
-        "wtype",
-        "xdotool",
-        "xdotool-clipboard",
-        "stdout",
-    }:
-        args.commit_backend = "auto"
+    apply_namespace_runtime_normalization(args, allow_auto_fallback_commit=True)
     args.auto_hard_enter = bool(getattr(args, "auto_hard_enter", False))
     try:
         wake_vad_aggressiveness = int(getattr(args, "wake_vad_aggressiveness", 2))
@@ -1999,9 +1968,6 @@ def _parse_args_with_config(parser: argparse.ArgumentParser) -> argparse.Namespa
     args.wake_allow_name_only = _coerce_bool(getattr(args, "wake_allow_name_only", True), default=True)
     args.wake_stats = _coerce_bool(getattr(args, "wake_stats", False), default=False)
     args.wake_owner_verify = _coerce_bool(getattr(args, "wake_owner_verify", False), default=False)
-    args.wake_owner_profile = str(Path(getattr(args, "wake_owner_profile", "~/.config/recordian/owner_voice_profile.json")).expanduser())
-    owner_sample = str(getattr(args, "wake_owner_sample", "")).strip()
-    args.wake_owner_sample = str(Path(owner_sample).expanduser()) if owner_sample else ""
     try:
         args.wake_owner_threshold = min(0.99, max(0.0, float(getattr(args, "wake_owner_threshold", 0.72))))
     except Exception:
@@ -2044,8 +2010,6 @@ def _parse_args_with_config(parser: argparse.ArgumentParser) -> argparse.Namespa
         args.auto_lexicon_max_terms = max(100, int(getattr(args, "auto_lexicon_max_terms", 5000)))
     except Exception:
         args.auto_lexicon_max_terms = 5000
-    args.auto_lexicon_db = str(Path(getattr(args, "auto_lexicon_db", "~/.config/recordian/auto_lexicon.db")).expanduser())
-    args.wake_tokens_type = normalize_tokens_type(str(getattr(args, "wake_tokens_type", "ppinyin")))
     args.config_path = str(Path(args.config_path).expanduser())
     return args
 

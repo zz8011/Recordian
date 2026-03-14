@@ -17,6 +17,7 @@ from recordian.audio_feedback import play_sound
 from recordian.backend_manager import BackendManager
 from recordian.config import ConfigManager
 from recordian.preset_manager import PresetManager
+from recordian.runtime_config import normalize_commit_backend, normalize_notify_backend, normalize_runtime_config
 from recordian.voice_wake import DEFAULT_WAKE_KEYWORD_THRESHOLD, DEFAULT_WAKE_NUM_THREADS
 from recordian.waveform_renderer import WaveformRenderer
 
@@ -468,61 +469,21 @@ class TrayApp:
 
 
     def open_settings(self) -> None:
-        current = ConfigManager.load(self.config_path)
+        current = normalize_runtime_config(
+            ConfigManager.load(self.config_path),
+            include_sound_defaults=True,
+            allow_auto_fallback_commit=False,
+        )
         current_record_backend = str(current.get("record_backend", "auto"))
-        if current_record_backend == "ffmpeg":
-            current_record_backend = "ffmpeg-pulse"
-        if current_record_backend not in {"auto", "ffmpeg-pulse", "arecord"}:
-            current_record_backend = "auto"
-
-        current_record_format = str(current.get("record_format", "ogg")).lower()
-        if current_record_format == "mp3":
-            current_record_format = "ogg"
-        if current_record_format not in {"ogg", "wav"}:
-            current_record_format = "ogg"
-
+        current_record_format = str(current.get("record_format", "ogg"))
         current_refine_provider = str(current.get("refine_provider", "local"))
-        if current_refine_provider == "llama.cpp":
-            current_refine_provider = "llamacpp"
-        if current_refine_provider not in {"local", "cloud", "llamacpp"}:
-            current_refine_provider = "local"
-
-        current_commit_backend = str(current.get("commit_backend", "auto"))
-        if current_commit_backend == "pynput":
-            current_commit_backend = "auto"
-        if current_commit_backend not in {"none", "auto", "wtype", "xdotool", "xdotool-clipboard", "stdout"}:
-            current_commit_backend = "auto"
-
+        current_commit_backend = normalize_commit_backend(
+            current.get("commit_backend", "auto"),
+            allow_auto_fallback=False,
+        )
         current_enable_thinking = current.get("enable_thinking", current.get("refine_enable_thinking", False))
-        current_notify_backend = str(current.get("notify_backend", "auto"))
-        if current_notify_backend not in {"none", "auto", "notify-send", "stdout"}:
-            current_notify_backend = "auto"
+        current_notify_backend = normalize_notify_backend(current.get("notify_backend", "auto"))
         current["auto_hard_enter"] = bool(current.get("auto_hard_enter", False))
-        wake_prefix = current.get("wake_prefix", ["嗨", "嘿"])
-        if isinstance(wake_prefix, str):
-            current["wake_prefix"] = [part.strip() for part in wake_prefix.split(",") if part.strip()] or ["嗨", "嘿"]
-        elif isinstance(wake_prefix, list):
-            current["wake_prefix"] = [str(part).strip() for part in wake_prefix if str(part).strip()] or ["嗨", "嘿"]
-        else:
-            current["wake_prefix"] = ["嗨", "嘿"]
-        wake_name = current.get("wake_name", ["小二"])
-        if isinstance(wake_name, str):
-            current["wake_name"] = [part.strip() for part in wake_name.split(",") if part.strip()] or ["小二"]
-        elif isinstance(wake_name, list):
-            current["wake_name"] = [str(part).strip() for part in wake_name if str(part).strip()] or ["小二"]
-        else:
-            current["wake_name"] = ["小二"]
-        wake_tokens_type = str(current.get("wake_tokens_type", "ppinyin")).strip().lower()
-        if wake_tokens_type in {"char", "cjkchar"}:
-            wake_tokens_type = "ppinyin"
-        if wake_tokens_type not in {"ppinyin", "bpe", "fpinyin", "cjkchar"}:
-            wake_tokens_type = "ppinyin"
-        current["wake_tokens_type"] = wake_tokens_type
-        default_sound_on = str(Path(__file__).parent.parent.parent / "assets" / "wake-on.mp3")
-        default_sound_off = str(Path(__file__).parent.parent.parent / "assets" / "wake-off.mp3")
-        legacy_beep = str(current.get("wake_beep_path", "")).strip()
-        current["sound_on_path"] = str(current.get("sound_on_path", legacy_beep or default_sound_on)).strip()
-        current["sound_off_path"] = str(current.get("sound_off_path", legacy_beep or default_sound_off)).strip()
         current["wake_use_webrtcvad"] = bool(current.get("wake_use_webrtcvad", True))
         try:
             wake_vad_aggr = int(current.get("wake_vad_aggressiveness", 2))
@@ -2405,30 +2366,6 @@ class TrayApp:
 
                 try:
                     latest_config = ConfigManager.load(self.config_path)
-                    record_format = str(_get_value("record_format")).strip().lower() or "ogg"
-                    if record_format == "mp3":
-                        record_format = "ogg"
-                    if record_format not in {"ogg", "wav"}:
-                        record_format = "ogg"
-
-                    record_backend = str(_get_value("record_backend")).strip() or "auto"
-                    if record_backend == "ffmpeg":
-                        record_backend = "ffmpeg-pulse"
-                    if record_backend not in {"auto", "ffmpeg-pulse", "arecord"}:
-                        record_backend = "auto"
-
-                    refine_provider = str(_get_value("refine_provider")).strip() or "local"
-                    if refine_provider == "llama.cpp":
-                        refine_provider = "llamacpp"
-                    if refine_provider not in {"local", "cloud", "llamacpp"}:
-                        refine_provider = "local"
-
-                    commit_backend = str(_get_value("commit_backend")).strip() or "auto"
-                    if commit_backend == "pynput":
-                        commit_backend = "auto"
-                    if commit_backend not in {"none", "auto", "wtype", "xdotool", "xdotool-clipboard", "stdout"}:
-                        commit_backend = "auto"
-
                     payload = {
                         "hotkey": str(_get_value("hotkey")).strip(),
                         "stop_hotkey": str(_get_value("stop_hotkey")).strip(),
@@ -2441,9 +2378,9 @@ class TrayApp:
                         "sample_rate": _parse_int_field("sample_rate", 16000),
                         "channels": _parse_int_field("channels", 1),
                         "input_device": str(_get_value("input_device")).strip() or "default",
-                        "record_format": record_format,
-                        "record_backend": record_backend,
-                        "commit_backend": commit_backend,
+                        "record_format": str(_get_value("record_format")).strip(),
+                        "record_backend": str(_get_value("record_backend")).strip(),
+                        "commit_backend": str(_get_value("commit_backend")).strip(),
                         "auto_hard_enter": bool(_get_value("auto_hard_enter")),
                         "asr_provider": str(_get_value("asr_provider")).strip() or "qwen-asr",
                         "qwen_model": str(_get_value("qwen_model")).strip(),
@@ -2456,7 +2393,7 @@ class TrayApp:
                         "asr_timeout_s": _parse_float_field("asr_timeout_s", 30.0),
                         "device": str(_get_value("device")).strip() or "cuda",
                         "enable_text_refine": bool(_get_value("enable_text_refine")),
-                        "refine_provider": refine_provider,
+                        "refine_provider": str(_get_value("refine_provider")).strip(),
                         "refine_preset": str(_get_value("refine_preset")).strip() or "default",
                         "refine_model": str(_get_value("refine_model")).strip(),
                         "refine_device": str(_get_value("refine_device")).strip() or "cuda",
@@ -2523,6 +2460,11 @@ class TrayApp:
                         "hotword": latest_config.get("hotword", []),
                         "enable_streaming_refine": latest_config.get("enable_streaming_refine", False),
                     }
+                    payload = normalize_runtime_config(
+                        payload,
+                        include_sound_defaults=False,
+                        allow_auto_fallback_commit=False,
+                    )
                     if payload["wake_vad_aggressiveness"] not in {0, 1, 2, 3}:
                         payload["wake_vad_aggressiveness"] = 2
                     if payload["wake_vad_frame_ms"] not in {10, 20, 30}:
