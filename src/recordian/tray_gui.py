@@ -9,6 +9,7 @@ import threading
 import time
 import tkinter as tk
 import wave
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -72,6 +73,43 @@ def _export_auto_lexicon_db(db_path: Path, export_path: Path) -> None:
 
 def _import_auto_lexicon_db(import_path: Path, db_path: Path) -> None:
     _sqlite_backup(import_path, db_path)
+
+
+def _load_hotkey_default_config(*, include_sound_defaults: bool) -> dict[str, Any]:
+    # Reuse the hotkey parser's defaults so the tray never invents a second set
+    # of fallback values for the same runtime knobs.
+    from recordian.hotkey_dictate import build_parser as build_hotkey_parser
+
+    parser = build_hotkey_parser()
+    defaults = vars(parser.parse_args([]))
+    return normalize_runtime_config(
+        defaults,
+        include_sound_defaults=include_sound_defaults,
+        allow_auto_fallback_commit=False,
+    )
+
+
+def _save_config_changes(
+    config_path: Path,
+    changes: dict[str, object],
+    *,
+    apply_now: bool,
+    restart_callback: Callable[[], None] | None = None,
+) -> tuple[SettingEffect, bool, list[str]]:
+    current = ConfigManager.load(config_path)
+    changed_keys = [key for key, value in changes.items() if current.get(key) != value]
+    if not changed_keys:
+        return SettingEffect.IMMEDIATE, False, []
+
+    merged = dict(current)
+    merged.update(changes)
+    ConfigManager.save(config_path, merged)
+
+    effect = combined_setting_effect(changed_keys)
+    restarted = bool(apply_now and effect is SettingEffect.RESTART_REQUIRED and restart_callback is not None)
+    if restarted and restart_callback is not None:
+        restart_callback()
+    return effect, restarted, changed_keys
 
 
 @dataclass(slots=True)
@@ -324,50 +362,52 @@ class TrayApp:
 
     def toggle_quick_mode(self, enabled: bool) -> None:
         """切换快速模式（跳过文字优化）"""
-        config = ConfigManager.load(self.config_path)
-        config["enable_text_refine"] = not enabled  # enabled=True 表示快速模式，即不启用文字优化
-        ConfigManager.save(self.config_path, config)
-
         mode_text = "快速模式" if enabled else "质量模式"
-        effect = combined_setting_effect(["enable_text_refine"])
+        effect, restarted, _ = _save_config_changes(
+            self.config_path,
+            {"enable_text_refine": not enabled},
+            apply_now=True,
+            restart_callback=lambda: self.root.after(0, self.backend.restart),
+        )
         self.events.put({"event": "log", "message": f"已切换到{mode_text}（{effect_label(effect)}）"})
 
         # 显示通知反馈
         try:
             from .linux_notify import notify
-            notify(f"已切换到{mode_text}，正在重启后端", title="Recordian")
+
+            notify(effect_status_message(effect, restarted=restarted), title=f"Recordian: {mode_text}")
         except Exception:  # noqa: BLE001
             pass  # 通知失败不影响功能
 
-        if effect is SettingEffect.RESTART_REQUIRED:
-            self.backend.restart()
         self._update_tray_menu()
 
     def toggle_voice_wake(self, enabled: bool) -> None:
         """切换语音唤醒模式"""
-        config = ConfigManager.load(self.config_path)
-        config["enable_voice_wake"] = enabled
-        ConfigManager.save(self.config_path, config)
         mode_text = "已开启语音唤醒" if enabled else "已关闭语音唤醒"
-        effect = combined_setting_effect(["enable_voice_wake"])
+        effect, _restarted, _ = _save_config_changes(
+            self.config_path,
+            {"enable_voice_wake": enabled},
+            apply_now=True,
+            restart_callback=lambda: self.root.after(0, self.backend.restart),
+        )
         self.events.put({"event": "log", "message": f"{mode_text}（{effect_label(effect)}）"})
-        if effect is SettingEffect.RESTART_REQUIRED:
-            self.backend.restart()
         self._update_tray_menu()
 
     def toggle_auto_hard_enter(self, enabled: bool) -> None:
         """切换自动硬回车"""
-        config = ConfigManager.load(self.config_path)
-        config["auto_hard_enter"] = bool(enabled)
-        ConfigManager.save(self.config_path, config)
         mode_text = "已开启自动硬回车" if enabled else "已关闭自动硬回车"
-        effect = combined_setting_effect(["auto_hard_enter"])
+        effect, restarted, _ = _save_config_changes(
+            self.config_path,
+            {"auto_hard_enter": bool(enabled)},
+            apply_now=True,
+            restart_callback=lambda: self.root.after(0, self.backend.restart),
+        )
         self.events.put({"event": "log", "message": f"{mode_text}（{effect_label(effect)}）"})
 
         try:
             from .linux_notify import notify
 
-            notify(mode_text, title="Recordian")
+            notify(effect_status_message(effect, restarted=restarted), title=f"Recordian: {mode_text}")
         except Exception:  # noqa: BLE001
             pass
 
@@ -388,11 +428,12 @@ class TrayApp:
 
     def switch_preset(self, preset_name: str) -> None:
         """切换文字优化 preset"""
-        config = ConfigManager.load(self.config_path)
-        config["refine_preset"] = preset_name
-        ConfigManager.save(self.config_path, config)
-
-        effect = combined_setting_effect(["refine_preset"])
+        effect, _restarted, _ = _save_config_changes(
+            self.config_path,
+            {"refine_preset": preset_name},
+            apply_now=True,
+            restart_callback=lambda: self.root.after(0, self.backend.restart),
+        )
         self.events.put({"event": "log", "message": f"已切换到 {preset_name} preset（{effect_label(effect)}）"})
 
         # 更新托盘菜单以反映新的选中状态
@@ -474,8 +515,16 @@ class TrayApp:
 
 
     def open_settings(self) -> None:
+        current = _load_hotkey_default_config(include_sound_defaults=True)
+        current.update(
+            normalize_runtime_config(
+                ConfigManager.load(self.config_path),
+                include_sound_defaults=True,
+                allow_auto_fallback_commit=False,
+            )
+        )
         current = normalize_runtime_config(
-            ConfigManager.load(self.config_path),
+            current,
             include_sound_defaults=True,
             allow_auto_fallback_commit=False,
         )
@@ -833,11 +882,16 @@ class TrayApp:
                     end_iter = text_buffer.get_end_iter()
                     context_text = text_buffer.get_text(start_iter, end_iter, False).strip()
 
-                    # 更新配置
-                    current["asr_context"] = context_text
-                    ConfigManager.save(self.config_path, current)
+                    effect, restarted, _ = _save_config_changes(
+                        self.config_path,
+                        {"asr_context": context_text},
+                        apply_now=True,
+                        restart_callback=lambda: self.root.after(0, self.backend.restart),
+                    )
 
-                    status_label.set_markup('<span foreground="green">✓ 保存成功！</span>')
+                    status_label.set_markup(
+                        f'<span foreground="green">✓ {effect_status_message(effect, restarted=restarted)}</span>'
+                    )
                     self.events.put({"event": "log", "message": f"常用词已更新: {context_text[:50]}..."})
 
                     # 1秒后关闭窗口
@@ -1186,12 +1240,18 @@ class TrayApp:
                         target_rate=sample_rate,
                     )
 
-                    # Update config
-                    config["wake_owner_verify"] = True
-                    config["wake_owner_profile"] = str(profile_path)
-                    ConfigManager.save(self.config_path, config)
-
-                    status_label.set_text(f"声纹档案已保存: {profile_path}")
+                    effect, restarted, _ = _save_config_changes(
+                        self.config_path,
+                        {
+                            "wake_owner_verify": True,
+                            "wake_owner_profile": str(profile_path),
+                        },
+                        apply_now=True,
+                        restart_callback=lambda: self.root.after(0, self.backend.restart),
+                    )
+                    status_label.set_text(
+                        f"声纹档案已保存: {profile_path}；{effect_status_message(effect, restarted=restarted)}"
+                    )
 
                 except Exception as exc:  # noqa: BLE001
                     status_label.set_text(f"保存失败: {type(exc).__name__}: {exc}")
@@ -2133,9 +2193,7 @@ class TrayApp:
                 value=current.get("wake_semantic_timeout_ms", 1200),
             )
 
-            status_label = Gtk.Label(
-                label="已载入当前配置。仅“保存并重启”可确保录音、ASR、精炼与语音唤醒设置立即生效。"
-            )
+            status_label = Gtk.Label(label="已载入当前配置。保存后会按设置类型立即生效、下次录音生效，或在必要时重启后端。")
             status_label.set_xalign(0.0)
             status_label.set_opacity(0.78)
             status_label_ref["widget"] = status_label
@@ -2377,34 +2435,36 @@ class TrayApp:
                         "stop_hotkey": str(_get_value("stop_hotkey")).strip(),
                         "toggle_hotkey": str(_get_value("toggle_hotkey")).strip(),
                         "exit_hotkey": str(latest_config.get("exit_hotkey", "<ctrl>+<alt>+q")).strip(),
-                        "cooldown_ms": _parse_int_field("cooldown_ms", 300),
-                        "trigger_mode": str(_get_value("trigger_mode")).strip() or "ptt",
-                        "notify_backend": str(_get_value("notify_backend")).strip() or "auto",
-                        "duration": _parse_float_field("duration", 4.0),
-                        "sample_rate": _parse_int_field("sample_rate", 16000),
-                        "channels": _parse_int_field("channels", 1),
-                        "input_device": str(_get_value("input_device")).strip() or "default",
+                        "cooldown_ms": _parse_int_field("cooldown_ms", int(current.get("cooldown_ms", 300))),
+                        "trigger_mode": str(_get_value("trigger_mode")).strip() or str(current.get("trigger_mode", "ptt")),
+                        "notify_backend": str(_get_value("notify_backend")).strip() or str(current.get("notify_backend", "auto")),
+                        "duration": _parse_float_field("duration", float(current.get("duration", 4.0))),
+                        "sample_rate": _parse_int_field("sample_rate", int(current.get("sample_rate", 16000))),
+                        "channels": _parse_int_field("channels", int(current.get("channels", 1))),
+                        "input_device": str(_get_value("input_device")).strip() or str(current.get("input_device", "default")),
                         "record_format": str(_get_value("record_format")).strip(),
                         "record_backend": str(_get_value("record_backend")).strip(),
                         "commit_backend": str(_get_value("commit_backend")).strip(),
                         "auto_hard_enter": bool(_get_value("auto_hard_enter")),
-                        "asr_provider": str(_get_value("asr_provider")).strip() or "qwen-asr",
+                        "asr_provider": str(_get_value("asr_provider")).strip() or str(current.get("asr_provider", "qwen-asr")),
                         "qwen_model": str(_get_value("qwen_model")).strip(),
-                        "qwen_language": str(_get_value("qwen_language")).strip() or "Chinese",
-                        "qwen_max_new_tokens": _parse_int_field("qwen_max_new_tokens", 1024),
+                        "qwen_language": str(_get_value("qwen_language")).strip() or str(current.get("qwen_language", "Chinese")),
+                        "qwen_max_new_tokens": _parse_int_field("qwen_max_new_tokens", int(current.get("qwen_max_new_tokens", 1024))),
                         "asr_context_preset": str(_get_value("asr_context_preset")).strip(),
                         "asr_context": str(_get_value("asr_context")).strip(),
-                        "asr_endpoint": str(_get_value("asr_endpoint")).strip() or "http://127.0.0.1:8000/v1/audio/transcriptions",
+                        "asr_endpoint": str(_get_value("asr_endpoint")).strip() or str(
+                            current.get("asr_endpoint", "http://127.0.0.1:8000/v1/audio/transcriptions")
+                        ),
                         "asr_api_key": str(_get_value("asr_api_key")).strip(),
-                        "asr_timeout_s": _parse_float_field("asr_timeout_s", 30.0),
-                        "device": str(_get_value("device")).strip() or "cuda",
+                        "asr_timeout_s": _parse_float_field("asr_timeout_s", float(current.get("asr_timeout_s", 30.0))),
+                        "device": str(_get_value("device")).strip() or str(current.get("device", "cuda")),
                         "enable_text_refine": bool(_get_value("enable_text_refine")),
                         "refine_provider": str(_get_value("refine_provider")).strip(),
                         "refine_preset": str(_get_value("refine_preset")).strip() or "default",
                         "refine_model": str(_get_value("refine_model")).strip(),
-                        "refine_device": str(_get_value("refine_device")).strip() or "cuda",
-                        "refine_n_gpu_layers": _parse_int_field("refine_n_gpu_layers", -1),
-                        "refine_max_tokens": _parse_int_field("refine_max_tokens", 512),
+                        "refine_device": str(_get_value("refine_device")).strip() or str(current.get("refine_device", "cuda")),
+                        "refine_n_gpu_layers": _parse_int_field("refine_n_gpu_layers", int(current.get("refine_n_gpu_layers", -1))),
+                        "refine_max_tokens": _parse_int_field("refine_max_tokens", int(current.get("refine_max_tokens", 512))),
                         "enable_thinking": bool(_get_value("enable_thinking")),
                         "refine_api_base": str(_get_value("refine_api_base")).strip(),
                         "refine_api_key": str(_get_value("refine_api_key")).strip(),
@@ -2412,40 +2472,92 @@ class TrayApp:
                         "warmup": bool(_get_value("warmup")),
                         "debug_diagnostics": bool(_get_value("debug_diagnostics")),
                         "enable_voice_wake": bool(_get_value("enable_voice_wake")),
-                        "wake_prefix": _parse_csv_field("wake_prefix", ["嗨", "嘿"]),
-                        "wake_name": _parse_csv_field("wake_name", ["小二"]),
-                        "wake_cooldown_s": _parse_float_field("wake_cooldown_s", 3.0),
-                        "wake_auto_stop_silence_s": _parse_float_field("wake_auto_stop_silence_s", 1.0),
-                        "wake_min_speech_s": _parse_float_field("wake_min_speech_s", 0.5),
+                        "wake_prefix": _parse_csv_field("wake_prefix", list(current.get("wake_prefix", ["嗨", "嘿"]))),
+                        "wake_name": _parse_csv_field("wake_name", list(current.get("wake_name", ["小二"]))),
+                        "wake_cooldown_s": _parse_float_field("wake_cooldown_s", float(current.get("wake_cooldown_s", 3.0))),
+                        "wake_auto_stop_silence_s": _parse_float_field(
+                            "wake_auto_stop_silence_s",
+                            float(current.get("wake_auto_stop_silence_s", 1.5)),
+                        ),
+                        "wake_min_speech_s": _parse_float_field("wake_min_speech_s", float(current.get("wake_min_speech_s", 0.5))),
                         "wake_use_webrtcvad": bool(_get_value("wake_use_webrtcvad")),
-                        "wake_vad_aggressiveness": _parse_int_field("wake_vad_aggressiveness", 2),
-                        "wake_vad_frame_ms": _parse_int_field("wake_vad_frame_ms", 30),
-                        "wake_no_speech_timeout_s": _parse_float_field("wake_no_speech_timeout_s", 2.0),
-                        "wake_speech_confirm_s": _parse_float_field("wake_speech_confirm_s", 0.18),
+                        "wake_vad_aggressiveness": _parse_int_field("wake_vad_aggressiveness", int(current.get("wake_vad_aggressiveness", 2))),
+                        "wake_vad_frame_ms": _parse_int_field("wake_vad_frame_ms", int(current.get("wake_vad_frame_ms", 30))),
+                        "wake_no_speech_timeout_s": _parse_float_field(
+                            "wake_no_speech_timeout_s",
+                            float(current.get("wake_no_speech_timeout_s", 2.0)),
+                        ),
+                        "wake_speech_confirm_s": _parse_float_field(
+                            "wake_speech_confirm_s",
+                            float(current.get("wake_speech_confirm_s", 0.18)),
+                        ),
                         "wake_stats": bool(_get_value("wake_stats")),
                         "wake_pre_vad": bool(_get_value("wake_pre_vad")),
-                        "wake_pre_vad_aggressiveness": _parse_int_field("wake_pre_vad_aggressiveness", 3),
-                        "wake_pre_vad_frame_ms": _parse_int_field("wake_pre_vad_frame_ms", 30),
-                        "wake_pre_vad_enter_frames": _parse_int_field("wake_pre_vad_enter_frames", 4),
-                        "wake_pre_vad_hangover_ms": _parse_int_field("wake_pre_vad_hangover_ms", 120),
-                        "wake_pre_roll_ms": _parse_int_field("wake_pre_roll_ms", 300),
-                        "wake_decode_budget_per_cycle": _parse_int_field("wake_decode_budget_per_cycle", 1),
-                        "wake_decode_budget_per_sec": _parse_float_field("wake_decode_budget_per_sec", 16.0),
+                        "wake_pre_vad_aggressiveness": _parse_int_field(
+                            "wake_pre_vad_aggressiveness",
+                            int(current.get("wake_pre_vad_aggressiveness", 3)),
+                        ),
+                        "wake_pre_vad_frame_ms": _parse_int_field(
+                            "wake_pre_vad_frame_ms",
+                            int(current.get("wake_pre_vad_frame_ms", 30)),
+                        ),
+                        "wake_pre_vad_enter_frames": _parse_int_field(
+                            "wake_pre_vad_enter_frames",
+                            int(current.get("wake_pre_vad_enter_frames", 4)),
+                        ),
+                        "wake_pre_vad_hangover_ms": _parse_int_field(
+                            "wake_pre_vad_hangover_ms",
+                            int(current.get("wake_pre_vad_hangover_ms", 120)),
+                        ),
+                        "wake_pre_roll_ms": _parse_int_field("wake_pre_roll_ms", int(current.get("wake_pre_roll_ms", 300))),
+                        "wake_decode_budget_per_cycle": _parse_int_field(
+                            "wake_decode_budget_per_cycle",
+                            int(current.get("wake_decode_budget_per_cycle", 1)),
+                        ),
+                        "wake_decode_budget_per_sec": _parse_float_field(
+                            "wake_decode_budget_per_sec",
+                            float(current.get("wake_decode_budget_per_sec", 16.0)),
+                        ),
                         "wake_auto_name_variants": bool(_get_value("wake_auto_name_variants")),
                         "wake_auto_prefix_variants": bool(_get_value("wake_auto_prefix_variants")),
                         "wake_allow_name_only": bool(_get_value("wake_allow_name_only")),
                         "wake_use_semantic_gate": bool(_get_value("wake_use_semantic_gate")),
-                        "wake_semantic_probe_interval_s": _parse_float_field("wake_semantic_probe_interval_s", 0.45),
-                        "wake_semantic_window_s": _parse_float_field("wake_semantic_window_s", 1.2),
-                        "wake_semantic_end_silence_s": _parse_float_field("wake_semantic_end_silence_s", 1.0),
-                        "wake_semantic_min_chars": _parse_int_field("wake_semantic_min_chars", 1),
-                        "wake_semantic_timeout_ms": _parse_int_field("wake_semantic_timeout_ms", 1200),
+                        "wake_semantic_probe_interval_s": _parse_float_field(
+                            "wake_semantic_probe_interval_s",
+                            float(current.get("wake_semantic_probe_interval_s", 0.45)),
+                        ),
+                        "wake_semantic_window_s": _parse_float_field(
+                            "wake_semantic_window_s",
+                            float(current.get("wake_semantic_window_s", 1.2)),
+                        ),
+                        "wake_semantic_end_silence_s": _parse_float_field(
+                            "wake_semantic_end_silence_s",
+                            float(current.get("wake_semantic_end_silence_s", 1.0)),
+                        ),
+                        "wake_semantic_min_chars": _parse_int_field(
+                            "wake_semantic_min_chars",
+                            int(current.get("wake_semantic_min_chars", 1)),
+                        ),
+                        "wake_semantic_timeout_ms": _parse_int_field(
+                            "wake_semantic_timeout_ms",
+                            int(current.get("wake_semantic_timeout_ms", 1200)),
+                        ),
                         "wake_owner_verify": bool(_get_value("wake_owner_verify")),
                         "wake_owner_sample": str(_get_value("wake_owner_sample")).strip(),
-                        "wake_owner_profile": str(_get_value("wake_owner_profile")).strip() or "~/.config/recordian/owner_voice_profile.json",
-                        "wake_owner_threshold": _parse_float_field("wake_owner_threshold", 0.72),
-                        "wake_owner_window_s": _parse_float_field("wake_owner_window_s", 1.6),
-                        "wake_owner_silence_extend_s": _parse_float_field("wake_owner_silence_extend_s", 0.5),
+                        "wake_owner_profile": str(_get_value("wake_owner_profile")).strip()
+                        or str(current.get("wake_owner_profile", "~/.config/recordian/owner_voice_profile.json")),
+                        "wake_owner_threshold": _parse_float_field(
+                            "wake_owner_threshold",
+                            float(current.get("wake_owner_threshold", 0.72)),
+                        ),
+                        "wake_owner_window_s": _parse_float_field(
+                            "wake_owner_window_s",
+                            float(current.get("wake_owner_window_s", 1.6)),
+                        ),
+                        "wake_owner_silence_extend_s": _parse_float_field(
+                            "wake_owner_silence_extend_s",
+                            float(current.get("wake_owner_silence_extend_s", 0.5)),
+                        ),
                         "sound_on_path": str(_get_value("sound_on_path")).strip(),
                         "sound_off_path": str(_get_value("sound_off_path")).strip(),
                         # Legacy key kept for backward compatibility; when present it acts as fallback.
@@ -2455,12 +2567,21 @@ class TrayApp:
                         "wake_joiner": str(_get_value("wake_joiner")).strip(),
                         "wake_tokens": str(_get_value("wake_tokens")).strip(),
                         "wake_keywords_file": str(_get_value("wake_keywords_file")).strip(),
-                        "wake_tokens_type": str(_get_value("wake_tokens_type")).strip() or "ppinyin",
-                        "wake_provider": str(_get_value("wake_provider")).strip() or "cpu",
-                        "wake_num_threads": _parse_int_field("wake_num_threads", DEFAULT_WAKE_NUM_THREADS),
-                        "wake_sample_rate": _parse_int_field("wake_sample_rate", 16000),
-                        "wake_keyword_score": _parse_float_field("wake_keyword_score", 1.5),
-                        "wake_keyword_threshold": _parse_float_field("wake_keyword_threshold", DEFAULT_WAKE_KEYWORD_THRESHOLD),
+                        "wake_tokens_type": str(_get_value("wake_tokens_type")).strip() or str(current.get("wake_tokens_type", "ppinyin")),
+                        "wake_provider": str(_get_value("wake_provider")).strip() or str(current.get("wake_provider", "cpu")),
+                        "wake_num_threads": _parse_int_field(
+                            "wake_num_threads",
+                            int(current.get("wake_num_threads", DEFAULT_WAKE_NUM_THREADS)),
+                        ),
+                        "wake_sample_rate": _parse_int_field("wake_sample_rate", int(current.get("wake_sample_rate", 16000))),
+                        "wake_keyword_score": _parse_float_field(
+                            "wake_keyword_score",
+                            float(current.get("wake_keyword_score", 1.5)),
+                        ),
+                        "wake_keyword_threshold": _parse_float_field(
+                            "wake_keyword_threshold",
+                            float(current.get("wake_keyword_threshold", DEFAULT_WAKE_KEYWORD_THRESHOLD)),
+                        ),
                         "hub": latest_config.get("hub", "ms"),
                         "remote_code": latest_config.get("remote_code", ""),
                         "hotword": latest_config.get("hotword", []),
@@ -2494,10 +2615,12 @@ class TrayApp:
                     payload["wake_owner_threshold"] = min(0.99, max(0.0, float(payload["wake_owner_threshold"])))
                     payload["wake_owner_window_s"] = max(0.6, float(payload["wake_owner_window_s"]))
                     payload["wake_owner_silence_extend_s"] = max(0.0, float(payload["wake_owner_silence_extend_s"]))
-                    changed_keys = [key for key, value in payload.items() if latest_config.get(key) != value]
-                    merged_config = dict(latest_config)
-                    merged_config.update(payload)
-                    ConfigManager.save(self.config_path, merged_config)
+                    effect, restarted, changed_keys = _save_config_changes(
+                        self.config_path,
+                        payload,
+                        apply_now=restart_backend,
+                        restart_callback=lambda: self.root.after(0, self.backend.restart),
+                    )
                 except ValueError as exc:
                     status_label.set_text(f"保存失败：数值格式不正确 ({exc})")
                     return
@@ -2505,19 +2628,14 @@ class TrayApp:
                     status_label.set_text(f"保存失败：{exc}")
                     return
 
-                effect = combined_setting_effect(changed_keys)
-                if restart_backend and changed_keys:
-                    status_label.set_text(f"{effect_status_message(effect, restarted=True)} ({self.config_path})")
-                    self.root.after(0, self.backend.restart)
-                else:
-                    status_label.set_text(f"{effect_status_message(effect, restarted=False)} ({self.config_path})")
+                status_label.set_text(f"{effect_status_message(effect, restarted=restarted)} ({self.config_path})")
                 self._update_tray_menu()
 
-            btn_save = Gtk.Button(label="仅保存到配置")
+            btn_save = Gtk.Button(label="仅保存")
             btn_save.connect("clicked", lambda *_: _save(restart_backend=False))
             footer.pack_end(btn_save, False, False, 0)
 
-            btn_save_restart = Gtk.Button(label="保存并重启后端")
+            btn_save_restart = Gtk.Button(label="保存并应用")
             btn_save_restart.connect("clicked", lambda *_: _save(restart_backend=True))
             footer.pack_end(btn_save_restart, False, False, 0)
 

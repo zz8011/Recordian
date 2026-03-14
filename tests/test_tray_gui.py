@@ -7,8 +7,10 @@ from recordian.tray_gui import (
     _export_auto_lexicon_db,
     _hex_with_alpha,
     _import_auto_lexicon_db,
+    _load_hotkey_default_config,
     _overlay_hide_delay_seconds,
     _parse_bool,
+    _save_config_changes,
     _sqlite_backup,
     _truncate,
 )
@@ -125,3 +127,40 @@ def test_export_and_import_auto_lexicon_db(tmp_path: Path) -> None:
         assert row == ("recordian", 3)
     finally:
         check.close()
+
+
+def test_load_hotkey_default_config_matches_backend_defaults() -> None:
+    defaults = _load_hotkey_default_config(include_sound_defaults=True)
+
+    assert defaults["refine_model"] == "Qwen/Qwen3-0.6B"
+    assert defaults["refine_api_base"] == "https://api.minimaxi.com/anthropic"
+    assert defaults["refine_api_model"] == "claude-3-5-sonnet-20241022"
+    assert defaults["wake_auto_stop_silence_s"] == 1.5
+
+
+def test_save_config_changes_restarts_only_for_restart_required_settings(tmp_path: Path) -> None:
+    path = tmp_path / "cfg.json"
+    ConfigManager.save(path, {"auto_hard_enter": False, "enable_voice_wake": False})
+
+    restart_calls: list[str] = []
+    effect, restarted, changed = _save_config_changes(
+        path,
+        {"auto_hard_enter": True},
+        apply_now=True,
+        restart_callback=lambda: restart_calls.append("restart"),
+    )
+    assert effect.value == "immediate"
+    assert restarted is False
+    assert changed == ["auto_hard_enter"]
+    assert restart_calls == []
+
+    effect, restarted, changed = _save_config_changes(
+        path,
+        {"enable_voice_wake": True},
+        apply_now=True,
+        restart_callback=lambda: restart_calls.append("restart"),
+    )
+    assert effect.value == "restart_required"
+    assert restarted is True
+    assert changed == ["enable_voice_wake"]
+    assert restart_calls == ["restart"]
