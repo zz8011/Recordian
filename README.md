@@ -128,6 +128,7 @@ recordian-tray
 - 快速参考：[`QUICK_REFERENCE.md`](QUICK_REFERENCE.md)
 - 故障排查：[`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md)
 - Preset 说明：[`presets/README.md`](presets/README.md)
+- 本地 vLLM/OpenAI 兼容 ASR 配置示例：[`examples/hotkey.http-cloud.local-vllm.json`](examples/hotkey.http-cloud.local-vllm.json)
 
 常见配置项包括：
 

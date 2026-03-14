@@ -110,6 +110,7 @@ recordian-hotkey-dictate --save-config
 - 主运行配置：`~/.config/recordian/hotkey.json`
 - 自动词库数据库：`~/.config/recordian/auto_lexicon.db`
 - 主人声纹画像：`~/.config/recordian/owner_voice_profile.json`
+- 参考示例：`examples/hotkey.http-cloud.local-vllm.json`
 
 ## 5. 关键配置
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import queue
 import sqlite3
@@ -9,10 +10,13 @@ import threading
 import time
 import tkinter as tk
 import wave
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlparse, urlunparse
+from urllib.request import Request, urlopen
 
 from recordian.audio_feedback import play_sound
 from recordian.backend_manager import BackendManager
@@ -112,6 +116,147 @@ def _save_config_changes(
     return effect, restarted, changed_keys
 
 
+def _derive_openai_models_endpoint(endpoint: str) -> str | None:
+    raw = str(endpoint).strip()
+    if not raw:
+        return None
+    parsed = urlparse(raw)
+    path = parsed.path or ""
+    suffix = "/audio/transcriptions"
+    if path.lower().endswith(suffix):
+        models_path = path[:-len(suffix)] + "/models"
+        return urlunparse(parsed._replace(path=models_path, params="", query="", fragment=""))
+    return None
+
+
+def _fetch_json_url(url: str, *, headers: Mapping[str, str], timeout_s: float) -> tuple[int, dict[str, Any]]:
+    request = Request(url, headers=dict(headers), method="GET")
+    with urlopen(request, timeout=timeout_s) as response:
+        status = int(getattr(response, "status", response.getcode()))
+        payload = json.loads(response.read().decode("utf-8", errors="replace"))
+    if not isinstance(payload, dict):
+        raise ValueError("response is not a JSON object")
+    return status, payload
+
+
+def collect_runtime_diagnostics(
+    config: Mapping[str, Any],
+    *,
+    config_path: Path,
+    backend_running: bool,
+    backend_pid: int | None,
+    fetch_json: Callable[[str], tuple[int, dict[str, Any]]] | None = None,
+) -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = []
+
+    def _add(label: str, status: str, detail: str) -> None:
+        rows.append({"label": label, "status": status, "detail": detail})
+
+    normalized = normalize_runtime_config(
+        dict(config),
+        include_sound_defaults=True,
+        allow_auto_fallback_commit=False,
+        config_base_dir=config_path.parent,
+    )
+
+    _add(
+        "配置文件",
+        "ok" if config_path.exists() else "warn",
+        str(config_path),
+    )
+    if backend_running:
+        detail = f"运行中 (PID {backend_pid})" if backend_pid is not None else "运行中"
+        _add("后端进程", "ok", detail)
+    else:
+        _add("后端进程", "warn", "未运行")
+
+    asr_provider = str(normalized.get("asr_provider", "qwen-asr")).strip() or "qwen-asr"
+    _add("ASR 提供方", "info", asr_provider)
+
+    if asr_provider == "http-cloud":
+        endpoint = str(normalized.get("asr_endpoint", "")).strip()
+        model_name = str(normalized.get("qwen_model", "")).strip()
+        _add("ASR 接口", "info", endpoint or "未配置")
+
+        if endpoint:
+            models_endpoint = _derive_openai_models_endpoint(endpoint)
+            if models_endpoint:
+                headers = {"Accept": "application/json"}
+                api_key = str(normalized.get("asr_api_key", "")).strip()
+                if api_key:
+                    headers["Authorization"] = f"Bearer {api_key}"
+                fetch = fetch_json or (lambda url: _fetch_json_url(url, headers=headers, timeout_s=2.0))
+                try:
+                    status_code, payload = fetch(models_endpoint)
+                    available_ids: list[str] = []
+                    data = payload.get("data")
+                    if isinstance(data, list):
+                        for item in data:
+                            if not isinstance(item, dict):
+                                continue
+                            model_id = item.get("id")
+                            if isinstance(model_id, str) and model_id.strip():
+                                available_ids.append(model_id.strip())
+                    if status_code == 200:
+                        if model_name and model_name in available_ids:
+                            _add("ASR 模型", "ok", f"{model_name} (已匹配远端模型)")
+                        elif model_name and "/" in model_name and model_name.rsplit("/", 1)[-1] in available_ids:
+                            short_name = model_name.rsplit("/", 1)[-1]
+                            _add("ASR 模型", "ok", f"{model_name} -> {short_name}")
+                        elif model_name and available_ids:
+                            _add("ASR 模型", "warn", f"{model_name} (远端可用: {', '.join(available_ids[:3])})")
+                        elif available_ids:
+                            _add("ASR 模型", "ok", ", ".join(available_ids[:3]))
+                        else:
+                            _add("ASR 模型", "warn", "接口可达，但未返回模型列表")
+                    else:
+                        _add("ASR 模型", "warn", f"{model_name or '未配置'} (模型探测返回 {status_code})")
+                except HTTPError as exc:
+                    _add("ASR 模型", "error", f"{model_name or '未配置'} (HTTP {exc.code})")
+                except URLError as exc:
+                    _add("ASR 模型", "error", f"{model_name or '未配置'} ({exc.reason})")
+                except Exception as exc:  # noqa: BLE001
+                    _add("ASR 模型", "error", f"{model_name or '未配置'} ({type(exc).__name__}: {exc})")
+            else:
+                _add("ASR 模型", "info", model_name or "未配置")
+        else:
+            _add("ASR 模型", "warn", model_name or "未配置")
+    else:
+        model_path = str(normalized.get("qwen_model", "")).strip()
+        model_exists = bool(model_path) and Path(model_path).exists()
+        _add("ASR 模型", "ok" if model_exists else "warn", model_path or "未配置")
+
+    voice_wake_enabled = bool(normalized.get("enable_voice_wake", False))
+    _add("语音唤醒", "ok" if voice_wake_enabled else "info", "已开启" if voice_wake_enabled else "已关闭")
+
+    if voice_wake_enabled:
+        owner_verify = bool(normalized.get("wake_owner_verify", False))
+        _add("声纹校验", "ok" if owner_verify else "info", "已开启" if owner_verify else "已关闭")
+
+        owner_profile = str(normalized.get("wake_owner_profile", "")).strip()
+        owner_profile_exists = bool(owner_profile) and Path(owner_profile).exists()
+        _add("声纹档案", "ok" if owner_profile_exists else "warn", owner_profile or "未配置")
+
+    lexicon_db = str(normalized.get("auto_lexicon_db", "")).strip()
+    lexicon_exists = bool(lexicon_db) and Path(lexicon_db).exists()
+    _add("自动词库", "ok" if lexicon_exists else "info", lexicon_db or "未配置")
+
+    return rows
+
+
+def _format_diagnostic_report(rows: list[dict[str, str]]) -> str:
+    prefix_map = {
+        "ok": "[OK]",
+        "warn": "[WARN]",
+        "error": "[ERROR]",
+        "info": "[INFO]",
+    }
+    return "\n".join(
+        f"{prefix_map.get(row.get('status', 'info'), '[INFO]')} {row.get('label', '')}: {row.get('detail', '')}"
+        for row in rows
+    )
+
+
 @dataclass(slots=True)
 class UiState:
     status: str = "idle"
@@ -176,6 +321,11 @@ class TrayApp:
             on_menu_update=self._update_tray_menu,
         )
         self._gtk_settings_window: Any = None
+        self._diagnostics_window: tk.Toplevel | None = None
+        self._diagnostics_text: tk.Text | None = None
+        self._diagnostics_status_var: tk.StringVar | None = None
+        self._diagnostics_refresh_button: tk.Button | None = None
+        self._diagnostics_report = ""
         self._appindicator_preset_submenu: Any = None
         self._appindicator_preset_items: dict[str, Any] = {}
         self._appindicator_preset_names: list[str] = []
@@ -429,6 +579,126 @@ class TrayApp:
             self.events.put({"event": "log", "message": f"已复制: {self.state.last_text[:30]}..."})
         except Exception as e:
             self.events.put({"event": "log", "message": f"复制失败: {e}"})
+
+    def open_diagnostics(self) -> None:
+        window = self._diagnostics_window
+        if window is not None and window.winfo_exists():
+            window.deiconify()
+            window.lift()
+            window.focus_force()
+            self.refresh_diagnostics()
+            return
+
+        window = tk.Toplevel(self.root)
+        window.title("Recordian 诊断状态")
+        window.geometry("760x520")
+        window.minsize(640, 420)
+
+        header = tk.Label(
+            window,
+            text="用于快速确认后端、ASR 接口、模型名、唤醒与声纹配置是否一致。",
+            anchor="w",
+            justify="left",
+        )
+        header.pack(fill="x", padx=12, pady=(12, 6))
+
+        status_var = tk.StringVar(value="准备检查…")
+        status_label = tk.Label(window, textvariable=status_var, anchor="w", justify="left")
+        status_label.pack(fill="x", padx=12, pady=(0, 8))
+
+        text = tk.Text(window, wrap="word")
+        text.pack(fill="both", expand=True, padx=12, pady=(0, 8))
+
+        button_row = tk.Frame(window)
+        button_row.pack(fill="x", padx=12, pady=(0, 12))
+
+        def _on_destroy() -> None:
+            self._diagnostics_window = None
+            self._diagnostics_text = None
+            self._diagnostics_status_var = None
+            self._diagnostics_refresh_button = None
+            self._diagnostics_report = ""
+            window.destroy()
+
+        refresh_button = tk.Button(button_row, text="刷新", command=self.refresh_diagnostics)
+        refresh_button.pack(side="left")
+
+        copy_button = tk.Button(button_row, text="复制报告", command=self.copy_diagnostics_report)
+        copy_button.pack(side="left", padx=(8, 0))
+
+        close_button = tk.Button(button_row, text="关闭", command=_on_destroy)
+        close_button.pack(side="right")
+
+        window.protocol("WM_DELETE_WINDOW", _on_destroy)
+
+        self._diagnostics_window = window
+        self._diagnostics_text = text
+        self._diagnostics_status_var = status_var
+        self._diagnostics_refresh_button = refresh_button
+        self.refresh_diagnostics()
+
+    def refresh_diagnostics(self) -> None:
+        text = self._diagnostics_text
+        status_var = self._diagnostics_status_var
+        refresh_button = self._diagnostics_refresh_button
+        if text is None or status_var is None or refresh_button is None:
+            return
+
+        status_var.set("检查中…")
+        refresh_button.configure(state="disabled")
+        text.configure(state="normal")
+        text.delete("1.0", "end")
+        text.insert("1.0", "正在检查，请稍候…")
+        text.configure(state="disabled")
+
+        config_path = self.config_path
+        config = ConfigManager.load(config_path)
+        backend_proc = self.backend.proc
+        backend_running = backend_proc is not None and backend_proc.poll() is None
+        backend_pid = backend_proc.pid if backend_running else None
+
+        def _worker() -> None:
+            try:
+                rows = collect_runtime_diagnostics(
+                    config,
+                    config_path=config_path,
+                    backend_running=backend_running,
+                    backend_pid=backend_pid,
+                )
+                report = _format_diagnostic_report(rows)
+                status_text = f"最近更新: {time.strftime('%H:%M:%S')}"
+            except Exception as exc:  # noqa: BLE001
+                report = f"[ERROR] 诊断失败: {type(exc).__name__}: {exc}"
+                status_text = "诊断失败"
+
+            def _apply() -> None:
+                text_widget = self._diagnostics_text
+                status_widget = self._diagnostics_status_var
+                refresh_widget = self._diagnostics_refresh_button
+                if text_widget is None or status_widget is None or refresh_widget is None:
+                    return
+                text_widget.configure(state="normal")
+                text_widget.delete("1.0", "end")
+                text_widget.insert("1.0", report)
+                text_widget.configure(state="disabled")
+                status_widget.set(status_text)
+                refresh_widget.configure(state="normal")
+                self._diagnostics_report = report
+
+            self.root.after(0, _apply)
+
+        threading.Thread(target=_worker, daemon=True, name="tray-diagnostics").start()
+
+    def copy_diagnostics_report(self) -> None:
+        if not self._diagnostics_report:
+            return
+        try:
+            self.root.clipboard_clear()
+            self.root.clipboard_append(self._diagnostics_report)
+            self.root.update()
+            self.events.put({"event": "log", "message": "诊断报告已复制到剪贴板"})
+        except Exception as exc:  # noqa: BLE001
+            self.events.put({"event": "log", "message": f"复制诊断报告失败: {exc}"})
 
     def switch_preset(self, preset_name: str) -> None:
         """切换文字优化 preset"""
@@ -2826,6 +3096,10 @@ class TrayApp:
         settings_item = Gtk.MenuItem(label="设置...")
         settings_item.connect("activate", lambda _: self.root.after(0, self.open_settings))
         menu.append(settings_item)
+
+        diagnostics_item = Gtk.MenuItem(label="诊断状态...")
+        diagnostics_item.connect("activate", lambda _: self.root.after(0, self.open_diagnostics))
+        menu.append(diagnostics_item)
 
         menu.append(Gtk.SeparatorMenuItem())
 

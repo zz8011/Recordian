@@ -1,0 +1,22 @@
+{
+  "asr_provider": "http-cloud",
+  "asr_endpoint": "http://127.0.0.1:8000/v1/audio/transcriptions",
+  "qwen_model": "Qwen3-ASR-1.7B",
+  "commit_backend": "auto",
+  "notify_backend": "auto",
+  "enable_text_refine": true,
+  "refine_provider": "cloud",
+  "refine_api_base": "http://127.0.0.1:8001/v1",
+  "refine_api_model": "",
+  "refine_api_key": "",
+  "enable_remote_paste": false,
+  "enable_voice_wake": true,
+  "wake_owner_verify": true,
+  "wake_owner_threshold": 0.3,
+  "wake_owner_window_s": 1.8,
+  "wake_speech_confirm_s": 0.3,
+  "wake_pre_roll_ms": 500,
+  "wake_owner_profile": "owner_voice_profile.json",
+  "auto_lexicon_db": "auto_lexicon.db",
+  "toggle_hotkey": "<alt_r>+<space>"
+}

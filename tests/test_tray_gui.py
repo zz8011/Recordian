@@ -4,7 +4,9 @@ from recordian.backend_manager import parse_backend_event_line
 from recordian.config import ConfigManager
 from recordian.tray_gui import (
     _blend_hex,
+    _derive_openai_models_endpoint,
     _export_auto_lexicon_db,
+    _format_diagnostic_report,
     _hex_with_alpha,
     _import_auto_lexicon_db,
     _load_hotkey_default_config,
@@ -13,6 +15,7 @@ from recordian.tray_gui import (
     _save_config_changes,
     _sqlite_backup,
     _truncate,
+    collect_runtime_diagnostics,
 )
 from recordian.waveform_renderer import WaveformRenderer
 
@@ -138,6 +141,47 @@ def test_load_hotkey_default_config_matches_backend_defaults() -> None:
     assert defaults["enable_remote_paste"] is False
     assert defaults["remote_paste_port"] == 24872
     assert defaults["wake_auto_stop_silence_s"] == 1.5
+
+
+def test_derive_openai_models_endpoint() -> None:
+    assert (
+        _derive_openai_models_endpoint("http://127.0.0.1:8000/v1/audio/transcriptions")
+        == "http://127.0.0.1:8000/v1/models"
+    )
+    assert _derive_openai_models_endpoint("http://127.0.0.1:8000/asr") is None
+
+
+def test_collect_runtime_diagnostics_reports_http_cloud_probe(tmp_path: Path) -> None:
+    config_path = tmp_path / "hotkey.json"
+    config_path.write_text("{}", encoding="utf-8")
+
+    owner_profile = tmp_path / "owner_voice_profile.json"
+    owner_profile.write_text("{}", encoding="utf-8")
+
+    rows = collect_runtime_diagnostics(
+        {
+            "asr_provider": "http-cloud",
+            "asr_endpoint": "http://127.0.0.1:8000/v1/audio/transcriptions",
+            "qwen_model": "Qwen3-ASR-1.7B",
+            "enable_voice_wake": True,
+            "wake_owner_verify": True,
+            "wake_owner_profile": str(owner_profile),
+            "auto_lexicon_db": str(tmp_path / "auto_lexicon.db"),
+        },
+        config_path=config_path,
+        backend_running=True,
+        backend_pid=4321,
+        fetch_json=lambda url: (200, {"data": [{"id": "Qwen3-ASR-1.7B"}]}),
+    )
+
+    assert {"label": "后端进程", "status": "ok", "detail": "运行中 (PID 4321)"} in rows
+    assert {"label": "语音唤醒", "status": "ok", "detail": "已开启"} in rows
+    assert {"label": "声纹校验", "status": "ok", "detail": "已开启"} in rows
+    assert {"label": "ASR 模型", "status": "ok", "detail": "Qwen3-ASR-1.7B (已匹配远端模型)"} in rows
+
+    report = _format_diagnostic_report(rows)
+    assert "[OK] 后端进程: 运行中 (PID 4321)" in report
+    assert "[OK] ASR 模型: Qwen3-ASR-1.7B (已匹配远端模型)" in report
 
 
 def test_save_config_changes_restarts_only_for_restart_required_settings(tmp_path: Path) -> None:
