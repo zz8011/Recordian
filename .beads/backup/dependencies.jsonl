@@ -32,6 +32,7 @@
 {"created_at":"2026-03-02T05:19:02Z","created_by":"zz8011","depends_on_id":"Recordian-88l.4","issue_id":"Recordian-88l.5","type":"blocks"}
 {"created_at":"2026-03-02T05:17:50Z","created_by":"zz8011","depends_on_id":"Recordian-88l","issue_id":"Recordian-88l.6","type":"parent-child"}
 {"created_at":"2026-03-02T05:19:02Z","created_by":"zz8011","depends_on_id":"Recordian-88l.5","issue_id":"Recordian-88l.6","type":"blocks"}
+{"created_at":"2026-03-14T20:56:52Z","created_by":"zz8011","depends_on_id":"Recordian-93u","issue_id":"Recordian-8mp","type":"discovered-from"}
 {"created_at":"2026-03-03T00:35:15Z","created_by":"zz8011","depends_on_id":"Recordian-8wd","issue_id":"Recordian-8wd.1","type":"parent-child"}
 {"created_at":"2026-03-03T00:35:40Z","created_by":"zz8011","depends_on_id":"Recordian-8wd","issue_id":"Recordian-8wd.2","type":"parent-child"}
 {"created_at":"2026-03-03T00:35:43Z","created_by":"zz8011","depends_on_id":"Recordian-8wd","issue_id":"Recordian-8wd.3","type":"parent-child"}
@@ -42,6 +43,7 @@
 {"created_at":"2026-03-03T01:07:45Z","created_by":"zz8011","depends_on_id":"Recordian-8wd","issue_id":"Recordian-8wd.5","type":"parent-child"}
 {"created_at":"2026-03-03T01:07:48Z","created_by":"zz8011","depends_on_id":"Recordian-8wd","issue_id":"Recordian-8wd.6","type":"parent-child"}
 {"created_at":"2026-03-03T01:08:13Z","created_by":"zz8011","depends_on_id":"Recordian-8wd.2","issue_id":"Recordian-8wd.6","type":"blocks"}
+{"created_at":"2026-03-14T20:47:41Z","created_by":"zz8011","depends_on_id":"Recordian-6bs","issue_id":"Recordian-93u","type":"discovered-from"}
 {"created_at":"2026-03-13T12:42:17Z","created_by":"zz8011","depends_on_id":"Recordian-3l7","issue_id":"Recordian-adt","type":"discovered-from"}
 {"created_at":"2026-03-02T03:31:12Z","created_by":"zz8011","depends_on_id":"Recordian-ge3","issue_id":"Recordian-ge3.1","type":"parent-child"}
 {"created_at":"2026-03-02T03:31:13Z","created_by":"zz8011","depends_on_id":"Recordian-ge3","issue_id":"Recordian-ge3.2","type":"parent-child"}
