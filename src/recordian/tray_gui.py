@@ -321,23 +321,22 @@ class TrayApp:
             pass
 
     def toggle_quick_mode(self, enabled: bool) -> None:
-        """切换快速模式（跳过文字优化）- 热切换"""
+        """切换快速模式（跳过文字优化）- 重启后端生效"""
         config = ConfigManager.load(self.config_path)
         config["enable_text_refine"] = not enabled  # enabled=True 表示快速模式，即不启用文字优化
         ConfigManager.save(self.config_path, config)
 
-        # 热切换：只更新配置文件，不重启后端
         mode_text = "快速模式" if enabled else "质量模式"
-        self.events.put({"event": "log", "message": f"已切换到{mode_text}（热切换）"})
+        self.events.put({"event": "log", "message": f"已切换到{mode_text}（重启后端生效）"})
 
         # 显示通知反馈
         try:
             from .linux_notify import notify
-            notify(f"已切换到{mode_text}", title="Recordian")
+            notify(f"已切换到{mode_text}，正在重启后端", title="Recordian")
         except Exception:  # noqa: BLE001
             pass  # 通知失败不影响功能
 
-        # 更新托盘菜单以反映新状态
+        self.backend.restart()
         self._update_tray_menu()
 
     def toggle_voice_wake(self, enabled: bool) -> None:
@@ -2168,7 +2167,9 @@ class TrayApp:
                 value=current.get("wake_semantic_timeout_ms", 1200),
             )
 
-            status_label = Gtk.Label(label="已载入当前配置。")
+            status_label = Gtk.Label(
+                label="已载入当前配置。仅“保存并重启”可确保录音、ASR、精炼与语音唤醒设置立即生效。"
+            )
             status_label.set_xalign(0.0)
             status_label.set_opacity(0.78)
             status_label_ref["widget"] = status_label
@@ -2559,14 +2560,16 @@ class TrayApp:
                     status_label.set_text(f"已保存并重启后端 ({self.config_path})")
                     self.root.after(0, self.backend.restart)
                 else:
-                    status_label.set_text(f"已保存 ({self.config_path})")
+                    status_label.set_text(
+                        f"已保存到配置文件 ({self.config_path})；当前后端未重启，部分设置会在下次重启后生效"
+                    )
                 self._update_tray_menu()
 
-            btn_save = Gtk.Button(label="仅保存")
+            btn_save = Gtk.Button(label="仅保存到配置")
             btn_save.connect("clicked", lambda *_: _save(restart_backend=False))
             footer.pack_end(btn_save, False, False, 0)
 
-            btn_save_restart = Gtk.Button(label="保存并重启")
+            btn_save_restart = Gtk.Button(label="保存并重启后端")
             btn_save_restart.connect("clicked", lambda *_: _save(restart_backend=True))
             footer.pack_end(btn_save_restart, False, False, 0)
 
