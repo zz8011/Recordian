@@ -18,6 +18,7 @@ from recordian.backend_manager import BackendManager
 from recordian.config import ConfigManager
 from recordian.preset_manager import PresetManager
 from recordian.runtime_config import normalize_commit_backend, normalize_notify_backend, normalize_runtime_config
+from recordian.setting_effects import SettingEffect, combined_setting_effect, effect_label, effect_status_message
 from recordian.voice_wake import DEFAULT_WAKE_KEYWORD_THRESHOLD, DEFAULT_WAKE_NUM_THREADS
 from recordian.waveform_renderer import WaveformRenderer
 
@@ -322,13 +323,14 @@ class TrayApp:
             pass
 
     def toggle_quick_mode(self, enabled: bool) -> None:
-        """切换快速模式（跳过文字优化）- 重启后端生效"""
+        """切换快速模式（跳过文字优化）"""
         config = ConfigManager.load(self.config_path)
         config["enable_text_refine"] = not enabled  # enabled=True 表示快速模式，即不启用文字优化
         ConfigManager.save(self.config_path, config)
 
         mode_text = "快速模式" if enabled else "质量模式"
-        self.events.put({"event": "log", "message": f"已切换到{mode_text}（重启后端生效）"})
+        effect = combined_setting_effect(["enable_text_refine"])
+        self.events.put({"event": "log", "message": f"已切换到{mode_text}（{effect_label(effect)}）"})
 
         # 显示通知反馈
         try:
@@ -337,26 +339,30 @@ class TrayApp:
         except Exception:  # noqa: BLE001
             pass  # 通知失败不影响功能
 
-        self.backend.restart()
+        if effect is SettingEffect.RESTART_REQUIRED:
+            self.backend.restart()
         self._update_tray_menu()
 
     def toggle_voice_wake(self, enabled: bool) -> None:
-        """切换语音唤醒模式（需重启后端生效）"""
+        """切换语音唤醒模式"""
         config = ConfigManager.load(self.config_path)
         config["enable_voice_wake"] = enabled
         ConfigManager.save(self.config_path, config)
         mode_text = "已开启语音唤醒" if enabled else "已关闭语音唤醒"
-        self.events.put({"event": "log", "message": f"{mode_text}（重启后端生效）"})
-        self.backend.restart()
+        effect = combined_setting_effect(["enable_voice_wake"])
+        self.events.put({"event": "log", "message": f"{mode_text}（{effect_label(effect)}）"})
+        if effect is SettingEffect.RESTART_REQUIRED:
+            self.backend.restart()
         self._update_tray_menu()
 
     def toggle_auto_hard_enter(self, enabled: bool) -> None:
-        """切换自动硬回车（热切换，无需重启）"""
+        """切换自动硬回车"""
         config = ConfigManager.load(self.config_path)
         config["auto_hard_enter"] = bool(enabled)
         ConfigManager.save(self.config_path, config)
         mode_text = "已开启自动硬回车" if enabled else "已关闭自动硬回车"
-        self.events.put({"event": "log", "message": f"{mode_text}（热切换）"})
+        effect = combined_setting_effect(["auto_hard_enter"])
+        self.events.put({"event": "log", "message": f"{mode_text}（{effect_label(effect)}）"})
 
         try:
             from .linux_notify import notify
@@ -381,14 +387,13 @@ class TrayApp:
             self.events.put({"event": "log", "message": f"复制失败: {e}"})
 
     def switch_preset(self, preset_name: str) -> None:
-        """切换文字优化 preset（热切换，不重启后端）"""
+        """切换文字优化 preset"""
         config = ConfigManager.load(self.config_path)
         config["refine_preset"] = preset_name
         ConfigManager.save(self.config_path, config)
 
-        # 热切换：只更新配置文件，后端下次录音时会读取新配置
-        # 不需要重启后端，避免重新加载模型
-        self.events.put({"event": "log", "message": f"已切换到 {preset_name} preset（热切换）"})
+        effect = combined_setting_effect(["refine_preset"])
+        self.events.put({"event": "log", "message": f"已切换到 {preset_name} preset（{effect_label(effect)}）"})
 
         # 更新托盘菜单以反映新的选中状态
         self._update_tray_menu()
@@ -2305,9 +2310,9 @@ class TrayApp:
                     return
                 _set_refine_preset_entry(selected)
                 try:
-                    # 与托盘菜单行为保持一致：立即写配置并热切换
+                    # 与托盘菜单行为保持一致：立即写配置并按设置语义生效
                     self.switch_preset(str(selected))
-                    _set_status(f"当前精炼预设已设为：{selected}（热切换）")
+                    _set_status(f"当前精炼预设已设为：{selected}（{effect_label(combined_setting_effect(['refine_preset']))}）")
                 except Exception as exc:  # noqa: BLE001
                     _set_status(f"设置失败：{exc}")
 
@@ -2349,6 +2354,7 @@ class TrayApp:
 
             def _save(*, restart_backend: bool) -> None:
                 latest_config: dict[str, object] = {}
+                changed_keys: list[str] = []
 
                 def _parse_int_field(key: str, default: int) -> int:
                     raw = str(_get_value(key)).strip()
@@ -2488,6 +2494,7 @@ class TrayApp:
                     payload["wake_owner_threshold"] = min(0.99, max(0.0, float(payload["wake_owner_threshold"])))
                     payload["wake_owner_window_s"] = max(0.6, float(payload["wake_owner_window_s"]))
                     payload["wake_owner_silence_extend_s"] = max(0.0, float(payload["wake_owner_silence_extend_s"]))
+                    changed_keys = [key for key, value in payload.items() if latest_config.get(key) != value]
                     merged_config = dict(latest_config)
                     merged_config.update(payload)
                     ConfigManager.save(self.config_path, merged_config)
@@ -2498,13 +2505,12 @@ class TrayApp:
                     status_label.set_text(f"保存失败：{exc}")
                     return
 
-                if restart_backend:
-                    status_label.set_text(f"已保存并重启后端 ({self.config_path})")
+                effect = combined_setting_effect(changed_keys)
+                if restart_backend and changed_keys:
+                    status_label.set_text(f"{effect_status_message(effect, restarted=True)} ({self.config_path})")
                     self.root.after(0, self.backend.restart)
                 else:
-                    status_label.set_text(
-                        f"已保存到配置文件 ({self.config_path})；当前后端未重启，部分设置会在下次重启后生效"
-                    )
+                    status_label.set_text(f"{effect_status_message(effect, restarted=False)} ({self.config_path})")
                 self._update_tray_menu()
 
             btn_save = Gtk.Button(label="仅保存到配置")
