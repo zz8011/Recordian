@@ -96,3 +96,89 @@ class TestCloudLLMRefinerInit:
 
         result = refiner.refine("   ")
         assert result == ""
+
+    def test_openai_payload_disables_thinking_by_default(self, monkeypatch) -> None:
+        """测试 OpenAI 兼容接口默认显式关闭 thinking"""
+        from recordian.providers.cloud_llm_refiner import CloudLLMRefiner
+
+        captured: dict[str, object] = {}
+
+        class _Response:
+            status_code = 200
+
+            def json(self) -> dict[str, object]:
+                return {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": "整理完成",
+                            }
+                        }
+                    ]
+                }
+
+        def _fake_post(url: str, *, headers: dict[str, str], json: dict[str, object], timeout: int) -> _Response:  # noqa: ANN001
+            captured["url"] = url
+            captured["headers"] = headers
+            captured["json"] = json
+            captured["timeout"] = timeout
+            return _Response()
+
+        import requests
+
+        monkeypatch.setattr(requests, "post", _fake_post)
+
+        refiner = CloudLLMRefiner(
+            api_base="http://192.168.5.111/v1",
+            api_key="test-key",
+            model="demo-model",
+            api_format="openai",
+            enable_thinking=False,
+        )
+
+        result = refiner.refine("测试一下")
+
+        assert result == "整理完成"
+        assert captured["url"] == "http://192.168.5.111/v1/chat/completions"
+        assert captured["json"]["chat_template_kwargs"] == {"enable_thinking": False}
+
+    def test_openai_payload_can_enable_thinking_when_requested(self, monkeypatch) -> None:
+        """测试显式开启 thinking 时会透传到 OpenAI 兼容接口"""
+        from recordian.providers.cloud_llm_refiner import CloudLLMRefiner
+
+        captured: dict[str, object] = {}
+
+        class _Response:
+            status_code = 200
+
+            def json(self) -> dict[str, object]:
+                return {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": "整理完成",
+                            }
+                        }
+                    ]
+                }
+
+        def _fake_post(url: str, *, headers: dict[str, str], json: dict[str, object], timeout: int) -> _Response:  # noqa: ANN001
+            captured["json"] = json
+            return _Response()
+
+        import requests
+
+        monkeypatch.setattr(requests, "post", _fake_post)
+
+        refiner = CloudLLMRefiner(
+            api_base="http://192.168.5.111/v1",
+            api_key="test-key",
+            model="demo-model",
+            api_format="openai",
+            enable_thinking=True,
+        )
+
+        result = refiner.refine("测试一下")
+
+        assert result == "整理完成"
+        assert captured["json"]["chat_template_kwargs"] == {"enable_thinking": True}

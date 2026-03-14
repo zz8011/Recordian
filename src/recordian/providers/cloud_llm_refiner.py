@@ -174,6 +174,11 @@ class CloudLLMRefiner(BaseTextRefiner):
                     "content": prompt,
                 }
             ],
+            # vLLM/GPUStack serving Qwen3.5 defaults to reasoning mode unless
+            # chat_template_kwargs.enable_thinking is explicitly disabled.
+            "chat_template_kwargs": {
+                "enable_thinking": bool(self.enable_thinking),
+            },
         }
 
         response = requests.post(
