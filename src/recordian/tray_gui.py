@@ -360,16 +360,16 @@ class TrayApp:
             # 音效失败不应影响主流程
             pass
 
-    def toggle_quick_mode(self, enabled: bool) -> None:
-        """切换快速模式（跳过文字优化）"""
-        mode_text = "快速模式" if enabled else "质量模式"
+    def toggle_text_refine(self, enabled: bool) -> None:
+        """切换文本精炼；关闭时等同于快速模式。"""
+        mode_text = "已启用文本精炼" if enabled else "已切换到快速模式"
         effect, restarted, _ = _save_config_changes(
             self.config_path,
-            {"enable_text_refine": not enabled},
+            {"enable_text_refine": enabled},
             apply_now=True,
             restart_callback=lambda: self.root.after(0, self.backend.restart),
         )
-        self.events.put({"event": "log", "message": f"已切换到{mode_text}（{effect_label(effect)}）"})
+        self.events.put({"event": "log", "message": f"{mode_text}（{effect_label(effect)}）"})
 
         # 显示通知反馈
         try:
@@ -380,6 +380,10 @@ class TrayApp:
             pass  # 通知失败不影响功能
 
         self._update_tray_menu()
+
+    def toggle_quick_mode(self, enabled: bool) -> None:
+        """兼容旧调用；快速模式开启时会关闭文本精炼。"""
+        self.toggle_text_refine(not enabled)
 
     def toggle_voice_wake(self, enabled: bool) -> None:
         """切换语音唤醒模式"""
@@ -1618,6 +1622,16 @@ class TrayApp:
 
             sec_refine = _create_section(tab_refine, "文本精炼")
             row = 0
+            current_refine_preset_name = {"value": str(current.get("refine_preset", "default")).strip() or "default"}
+
+            def _get_current_refine_preset_name() -> str:
+                return str(current_refine_preset_name["value"]).strip() or "default"
+
+            def _set_current_refine_preset_name(name: str) -> None:
+                current_refine_preset_name["value"] = str(name).strip() or "default"
+                if current_preset_value_label is not None:
+                    current_preset_value_label.set_text(_get_current_refine_preset_name())
+
             row = _add_field(
                 sec_refine,
                 row,
@@ -1626,6 +1640,7 @@ class TrayApp:
                 value=current.get("enable_text_refine", False),
                 kind="bool",
                 default_bool=False,
+                hint="关闭后直接输出识别结果，等同于托盘里的快速模式。",
             )
             row = _add_field(
                 sec_refine,
@@ -1636,7 +1651,21 @@ class TrayApp:
                 kind="combo",
                 options=("local", "cloud", "llamacpp"),
             )
-            row = _add_field(sec_refine, row, key="refine_preset", label="精炼预设", value=current.get("refine_preset", "default"))
+            refine_preset_label = Gtk.Label(label="当前精炼预设")
+            refine_preset_label.set_xalign(0.0)
+            sec_refine.attach(refine_preset_label, 0, row, 1, 1)
+
+            current_preset_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+            current_preset_box.set_hexpand(True)
+            current_preset_value_label = Gtk.Label(label=_get_current_refine_preset_name())
+            current_preset_value_label.set_xalign(0.0)
+            current_preset_box.pack_start(current_preset_value_label, False, False, 0)
+            current_preset_hint = Gtk.Label(label="切换请到“预设管理”页，或直接使用托盘菜单。")
+            current_preset_hint.set_xalign(0.0)
+            current_preset_hint.set_opacity(0.75)
+            current_preset_box.pack_start(current_preset_hint, False, False, 0)
+            sec_refine.attach(current_preset_box, 1, row, 1, 1)
+            row += 1
             row = _add_field(
                 sec_refine,
                 row,
@@ -1672,7 +1701,7 @@ class TrayApp:
             sec_presets = _create_section(tab_presets, "文本精炼预设管理")
             preset_row = 0
 
-            preset_select_label = Gtk.Label(label="选择预设")
+            preset_select_label = Gtk.Label(label="编辑预设")
             preset_select_label.set_xalign(0.0)
             sec_presets.attach(preset_select_label, 0, preset_row, 1, 1)
 
@@ -2205,36 +2234,6 @@ class TrayApp:
             footer.pack_start(status_label, True, True, 0)
             root_box.pack_start(footer, False, False, 0)
 
-            def _set_refine_preset_entry(name: str) -> None:
-                target = entries.get("refine_preset")
-                if not target:
-                    return
-                kind, widget = target
-                if kind == "entry" and hasattr(widget, "set_text"):
-                    widget.set_text(name)
-                elif kind == "combo" and hasattr(widget, "set_active"):
-                    model = widget.get_model()
-                    if model is None:
-                        return
-                    active_idx = -1
-                    for idx, row in enumerate(model):
-                        if str(row[0]) == name:
-                            active_idx = idx
-                            break
-                    widget.set_active(active_idx)
-
-            def _read_refine_preset_value() -> str:
-                target = entries.get("refine_preset")
-                if not target:
-                    return ""
-                kind, widget = target
-                if kind == "entry" and hasattr(widget, "get_text"):
-                    return str(widget.get_text()).strip()
-                if kind == "combo" and hasattr(widget, "get_active_text"):
-                    text = widget.get_active_text()
-                    return str(text).strip() if text is not None else ""
-                return ""
-
             def _load_selected_preset() -> None:
                 selected = preset_combo.get_active_text()
                 if not selected:
@@ -2266,7 +2265,7 @@ class TrayApp:
                     _load_selected_preset()
                     return
 
-                target = prefer or _read_refine_preset_value() or str(current.get("refine_preset", "default"))
+                target = prefer or _get_current_refine_preset_name()
                 if target in names:
                     idx = names.index(target)
                 else:
@@ -2299,9 +2298,8 @@ class TrayApp:
                     path.write_text(template, encoding="utf-8")
                     preset_manager.clear_cache()
                     _reload_preset_combo(prefer=name)
-                    _set_refine_preset_entry(name)
                     preset_name_entry.set_text("")
-                    _set_status(f"已新建预设：{name}")
+                    _set_status(f"已新建预设：{name}；如需使用，请点击“设为当前”。")
                     self._update_tray_menu()
                 except Exception as exc:  # noqa: BLE001
                     _set_status(f"新建失败：{exc}")
@@ -2352,9 +2350,15 @@ class TrayApp:
                     names = _list_editable_refine_presets()
                     fallback = "default" if "default" in names else (names[0] if names else "")
                     _reload_preset_combo(prefer=fallback)
-                    if str(_get_value("refine_preset")).strip() == selected:
-                        _set_refine_preset_entry(fallback)
-                    _set_status(f"已删除预设：{selected}")
+                    if _get_current_refine_preset_name() == selected:
+                        if fallback:
+                            _set_current_refine_preset_name(fallback)
+                            self.switch_preset(fallback)
+                            _set_status(f"已删除预设：{selected}；当前预设已切换为：{fallback}")
+                        else:
+                            _set_status(f"已删除预设：{selected}；当前没有可用预设。")
+                    else:
+                        _set_status(f"已删除预设：{selected}")
                     self._update_tray_menu()
                 except FileNotFoundError:
                     _set_status("预设文件不存在")
@@ -2366,10 +2370,10 @@ class TrayApp:
                 if not selected:
                     _set_status("请先选择预设")
                     return
-                _set_refine_preset_entry(selected)
                 try:
                     # 与托盘菜单行为保持一致：立即写配置并按设置语义生效
                     self.switch_preset(str(selected))
+                    _set_current_refine_preset_name(str(selected))
                     _set_status(f"当前精炼预设已设为：{selected}（{effect_label(combined_setting_effect(['refine_preset']))}）")
                 except Exception as exc:  # noqa: BLE001
                     _set_status(f"设置失败：{exc}")
@@ -2460,7 +2464,7 @@ class TrayApp:
                         "device": str(_get_value("device")).strip() or str(current.get("device", "cuda")),
                         "enable_text_refine": bool(_get_value("enable_text_refine")),
                         "refine_provider": str(_get_value("refine_provider")).strip(),
-                        "refine_preset": str(_get_value("refine_preset")).strip() or "default",
+                        "refine_preset": _get_current_refine_preset_name(),
                         "refine_model": str(_get_value("refine_model")).strip(),
                         "refine_device": str(_get_value("refine_device")).strip() or str(current.get("refine_device", "cuda")),
                         "refine_n_gpu_layers": _parse_int_field("refine_n_gpu_layers", int(current.get("refine_n_gpu_layers", -1))),
@@ -2723,14 +2727,14 @@ class TrayApp:
 
         menu.append(Gtk.SeparatorMenuItem())
 
-        # Quick Mode toggle
-        quick_mode_item = Gtk.CheckMenuItem(label="快速模式（跳过文字优化）")
+        # Text refine toggle
+        text_refine_item = Gtk.CheckMenuItem(label="启用文本精炼")
         config = ConfigManager.load(self.config_path)
-        quick_mode_enabled = not config.get("enable_text_refine", True)
-        quick_mode_item.set_active(quick_mode_enabled)
-        quick_mode_item.connect("toggled", lambda item: self.root.after(0, lambda: self.toggle_quick_mode(item.get_active())))
-        menu.append(quick_mode_item)
-        self._appindicator_quick_mode_item = quick_mode_item
+        text_refine_enabled = bool(config.get("enable_text_refine", True))
+        text_refine_item.set_active(text_refine_enabled)
+        text_refine_item.connect("toggled", lambda item: self.root.after(0, lambda: self.toggle_text_refine(item.get_active())))
+        menu.append(text_refine_item)
+        self._appindicator_text_refine_item = text_refine_item
 
         voice_wake_item = Gtk.CheckMenuItem(label="语音唤醒模式")
         voice_wake_enabled = bool(config.get("enable_voice_wake", False))
@@ -2824,9 +2828,9 @@ class TrayApp:
                     if copy_text_item is not None:
                         copy_text_item.set_sensitive(bool(self.state.last_text))
                     cfg = ConfigManager.load(self.config_path)
-                    quick_mode_item = getattr(self, "_appindicator_quick_mode_item", None)
-                    if quick_mode_item is not None:
-                        quick_mode_item.set_active(not bool(cfg.get("enable_text_refine", True)))
+                    text_refine_item = getattr(self, "_appindicator_text_refine_item", None)
+                    if text_refine_item is not None:
+                        text_refine_item.set_active(bool(cfg.get("enable_text_refine", True)))
                     voice_wake_item = getattr(self, "_appindicator_voice_wake_item", None)
                     if voice_wake_item is not None:
                         voice_wake_item.set_active(bool(cfg.get("enable_voice_wake", False)))
