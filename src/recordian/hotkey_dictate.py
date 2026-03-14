@@ -885,8 +885,27 @@ def build_ptt_hotkey_handlers(
         if refiner:
             on_state({"event": "refiner_warmup", "status": "starting", "provider": refiner.provider_name})
             t0 = time.perf_counter()
-            refiner.refine("测试")
-            on_state({"event": "refiner_warmup", "status": "ready", "provider": refiner.provider_name, "latency_ms": (time.perf_counter() - t0) * 1000})
+            try:
+                refiner.refine("测试")
+            except Exception as exc:  # noqa: BLE001
+                on_state(
+                    {
+                        "event": "refiner_warmup",
+                        "status": "failed",
+                        "provider": refiner.provider_name,
+                        "error": f"{type(exc).__name__}: {exc}",
+                    }
+                )
+                on_state({"event": "log", "message": f"refiner_warmup_failed: {type(exc).__name__}: {exc}"})
+            else:
+                on_state(
+                    {
+                        "event": "refiner_warmup",
+                        "status": "ready",
+                        "provider": refiner.provider_name,
+                        "latency_ms": (time.perf_counter() - t0) * 1000,
+                    }
+                )
 
     state_lock = threading.RLock()
     state: dict[str, object] = {
@@ -1715,10 +1734,10 @@ def build_ptt_hotkey_handlers(
                     on_state({"event": "log", "message": f"ASR 原始输出: {text}"})
 
                     # 使用流式输出或非流式输出
+                    refined_text = ""
                     try:
                         if getattr(args, "enable_streaming_refine", False):
                             # 流式输出：逐字显示
-                            refined_text = ""
                             for chunk in refiner.refine_stream(text):
                                 refined_text += chunk
                                 # 发送流式更新事件
@@ -1730,15 +1749,16 @@ def build_ptt_hotkey_handlers(
                         else:
                             # 非流式输出：一次性返回
                             refined_text = refiner.refine(text)
+                    except Exception as exc:  # noqa: BLE001
+                        on_state({"event": "log", "message": f"text_refine_failed: {type(exc).__name__}: {exc}"})
                     finally:
                         if prompt_with_guards != base_prompt_template:
                             refiner.prompt_template = base_prompt_template
 
-                    # 调试：输出精炼后文本
-                    on_state({"event": "log", "message": f"精炼后输出: {refined_text}"})
-
                     refine_latency_ms = (time.perf_counter() - t1) * 1000
                     if refined_text.strip():
+                        # 调试：输出精炼后文本
+                        on_state({"event": "log", "message": f"精炼后输出: {refined_text}"})
                         text = refined_text
                     text = _apply_refine_postprocess(text, rule=refine_postprocess_rule)
                     if args.debug_diagnostics:

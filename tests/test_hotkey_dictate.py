@@ -1,7 +1,9 @@
 import argparse
+import io
 import json
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 from recordian.hotkey_dictate import (
     _adaptive_vad_threshold,
@@ -32,9 +34,10 @@ from recordian.hotkey_dictate import (
     _update_speech_evidence,
     _vad_frame_bytes,
     build_hotkey_handlers,
+    build_ptt_hotkey_handlers,
     parse_hotkey_spec,
 )
-from recordian.linux_dictate import DictateResult
+from recordian.linux_dictate import DictateResult, RecordProcessHandle
 
 
 def _fake_args() -> argparse.Namespace:
@@ -727,3 +730,182 @@ def test_apply_target_window_applies_window_anchor() -> None:
     }
     _apply_target_window(committer, state)
     assert committer.target_window_id == 456
+
+
+def test_ptt_handlers_survive_refiner_warmup_failure(monkeypatch) -> None:
+    events: list[dict[str, object]] = []
+
+    class _FakeProvider:
+        provider_name = "http-cloud"
+
+        def transcribe_file(self, audio_path: Path, hotwords: list[str]) -> SimpleNamespace:  # noqa: ANN001
+            return SimpleNamespace(text="你好")
+
+    class _FakeCommitter:
+        backend_name = "stdout"
+        target_window_id = None
+
+        def commit(self, text: str) -> SimpleNamespace:
+            return SimpleNamespace(backend="stdout", committed=True, detail="printed")
+
+    class _BrokenRefiner:
+        provider_name = "cloud-llm:test"
+        model = "test"
+        prompt_template = "原文：{text}"
+
+        def __init__(self, **kwargs) -> None:  # noqa: ANN003
+            pass
+
+        def refine(self, text: str) -> str:
+            raise ConnectionError("refiner down")
+
+    class _PresetManager:
+        def load_preset(self, name: str) -> str:
+            return "原文：{text}"
+
+    monkeypatch.setattr("recordian.hotkey_dictate.ensure_ffmpeg_available", lambda: "/usr/bin/ffmpeg")
+    monkeypatch.setattr("recordian.hotkey_dictate.choose_record_backend", lambda requested, ffmpeg_bin: "ffmpeg-pulse")
+    monkeypatch.setattr("recordian.hotkey_dictate.resolve_committer", lambda backend: _FakeCommitter())
+    monkeypatch.setattr("recordian.hotkey_dictate.create_provider", lambda args: _FakeProvider())
+    monkeypatch.setattr("recordian.providers.CloudLLMRefiner", _BrokenRefiner)
+    monkeypatch.setattr("recordian.preset_manager.PresetManager", _PresetManager)
+
+    args = argparse.Namespace(
+        cooldown_ms=0,
+        record_backend="ffmpeg-pulse",
+        commit_backend="stdout",
+        enable_auto_lexicon=False,
+        debug_diagnostics=False,
+        enable_text_refine=True,
+        refine_prompt="",
+        refine_preset="default",
+        refine_provider="cloud",
+        refine_api_key="token",
+        refine_api_base="http://127.0.0.1:8018/v1",
+        refine_api_model="demo",
+        refine_max_tokens=128,
+        enable_thinking=False,
+        warmup=True,
+    )
+
+    start_recording, stop_recording, exit_daemon, stop_event = build_ptt_hotkey_handlers(
+        args=args,
+        on_result=events.append,
+        on_error=events.append,
+        on_busy=events.append,
+        on_state=events.append,
+    )
+
+    assert callable(start_recording)
+    assert callable(stop_recording)
+    assert callable(exit_daemon)
+    assert stop_event.is_set() is False
+    assert any(
+        event.get("event") == "refiner_warmup" and event.get("status") == "failed"
+        for event in events
+    )
+
+
+def test_ptt_handlers_fall_back_to_raw_text_when_refiner_fails(monkeypatch) -> None:
+    events: list[dict[str, object]] = []
+
+    class _FakeProvider:
+        provider_name = "http-cloud"
+
+        def transcribe_file(self, audio_path: Path, hotwords: list[str]) -> SimpleNamespace:  # noqa: ANN001
+            return SimpleNamespace(text="你好")
+
+    class _FakeCommitter:
+        backend_name = "stdout"
+        target_window_id = None
+
+        def commit(self, text: str) -> SimpleNamespace:
+            return SimpleNamespace(backend="stdout", committed=True, detail="printed")
+
+    class _BrokenRefiner:
+        provider_name = "cloud-llm:test"
+        model = "test"
+        prompt_template = "原文：{text}"
+
+        def __init__(self, **kwargs) -> None:  # noqa: ANN003
+            pass
+
+        def refine(self, text: str) -> str:
+            raise ConnectionError("refiner down")
+
+    class _PresetManager:
+        def load_preset(self, name: str) -> str:
+            return "原文：{text}"
+
+    class _FakeProcess:
+        def poll(self) -> int:
+            return 0
+
+    def _fake_start_record_process(**kwargs) -> RecordProcessHandle:  # noqa: ANN003
+        output_path = kwargs["output_path"]
+        output_path.write_bytes(b"")
+        return RecordProcessHandle(
+            process=_FakeProcess(),
+            monitor_stream=io.BytesIO(b""),
+            monitor_sample_rate=16000,
+            monitor_channels=1,
+        )
+
+    monkeypatch.setattr("recordian.hotkey_dictate.ensure_ffmpeg_available", lambda: "/usr/bin/ffmpeg")
+    monkeypatch.setattr("recordian.hotkey_dictate.choose_record_backend", lambda requested, ffmpeg_bin: "ffmpeg-pulse")
+    monkeypatch.setattr("recordian.hotkey_dictate.resolve_committer", lambda backend: _FakeCommitter())
+    monkeypatch.setattr("recordian.hotkey_dictate.create_provider", lambda args: _FakeProvider())
+    monkeypatch.setattr("recordian.hotkey_dictate.get_focused_window_id", lambda: None)
+    monkeypatch.setattr("recordian.hotkey_dictate.start_record_process", _fake_start_record_process)
+    monkeypatch.setattr("recordian.hotkey_dictate.stop_record_process", lambda *args, **kwargs: None)
+    monkeypatch.setattr("recordian.providers.CloudLLMRefiner", _BrokenRefiner)
+    monkeypatch.setattr("recordian.preset_manager.PresetManager", _PresetManager)
+
+    args = argparse.Namespace(
+        cooldown_ms=0,
+        record_backend="ffmpeg-pulse",
+        commit_backend="stdout",
+        enable_auto_lexicon=False,
+        debug_diagnostics=False,
+        enable_text_refine=True,
+        refine_prompt="",
+        refine_preset="default",
+        refine_provider="cloud",
+        refine_api_key="token",
+        refine_api_base="http://127.0.0.1:8018/v1",
+        refine_api_model="demo",
+        refine_max_tokens=128,
+        enable_thinking=False,
+        warmup=False,
+        record_format="ogg",
+        input_device="default",
+        channels=1,
+        sample_rate=16000,
+        wake_use_semantic_gate=False,
+        wake_owner_verify=False,
+        hotword=[],
+        auto_hard_enter=False,
+        enable_streaming_refine=False,
+    )
+
+    start_recording, stop_recording, _, _ = build_ptt_hotkey_handlers(
+        args=args,
+        on_result=events.append,
+        on_error=events.append,
+        on_busy=events.append,
+        on_state=events.append,
+    )
+
+    start_recording("voice_wake")
+    time.sleep(0.02)
+    stop_recording()
+    time.sleep(0.15)
+
+    result_events = [event for event in events if event.get("event") == "result"]
+    assert result_events
+    assert result_events[-1]["result"]["text"] == "你好"
+    assert any(
+        "text_refine_failed" in str(event.get("message", ""))
+        for event in events
+        if event.get("event") == "log"
+    )
