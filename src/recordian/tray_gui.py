@@ -1698,6 +1698,43 @@ class TrayApp:
             row = _add_field(sec_refine, row, key="refine_api_key", label="云端 API Key", value=current.get("refine_api_key", ""), secret=True)
             _add_field(sec_refine, row, key="refine_api_model", label="云端 API 模型", value=current.get("refine_api_model", ""))
 
+            sec_remote = _create_section(tab_advanced, "远程粘贴")
+            row = 0
+            row = _add_field(
+                sec_remote,
+                row,
+                key="enable_remote_paste",
+                label="启用远程粘贴",
+                value=current.get("enable_remote_paste", False),
+                kind="bool",
+                default_bool=False,
+                hint="默认关闭。开启后会把最终文本发送到远端 Recordian paste agent。",
+            )
+            row = _add_field(
+                sec_remote,
+                row,
+                key="remote_paste_host",
+                label="远程主机",
+                value=current.get("remote_paste_host", ""),
+                hint="仅在启用远程粘贴时生效，例如 192.168.5.111",
+            )
+            row = _add_field(
+                sec_remote,
+                row,
+                key="remote_paste_port",
+                label="远程端口",
+                value=current.get("remote_paste_port", 24872),
+                hint="仅在启用远程粘贴时生效，默认 24872",
+            )
+            _add_field(
+                sec_remote,
+                row,
+                key="remote_paste_timeout_s",
+                label="远程超时 (s)",
+                value=current.get("remote_paste_timeout_s", 3.0),
+                hint="远程连接超时秒数，默认 3.0",
+            )
+
             sec_presets = _create_section(tab_presets, "文本精炼预设管理")
             preset_row = 0
 
@@ -2473,6 +2510,16 @@ class TrayApp:
                         "refine_api_base": str(_get_value("refine_api_base")).strip(),
                         "refine_api_key": str(_get_value("refine_api_key")).strip(),
                         "refine_api_model": str(_get_value("refine_api_model")).strip(),
+                        "enable_remote_paste": bool(_get_value("enable_remote_paste")),
+                        "remote_paste_host": str(_get_value("remote_paste_host")).strip(),
+                        "remote_paste_port": _parse_int_field(
+                            "remote_paste_port",
+                            int(current.get("remote_paste_port", 24872)),
+                        ),
+                        "remote_paste_timeout_s": _parse_float_field(
+                            "remote_paste_timeout_s",
+                            float(current.get("remote_paste_timeout_s", 3.0)),
+                        ),
                         "warmup": bool(_get_value("warmup")),
                         "debug_diagnostics": bool(_get_value("debug_diagnostics")),
                         "enable_voice_wake": bool(_get_value("enable_voice_wake")),
