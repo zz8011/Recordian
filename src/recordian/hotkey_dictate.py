@@ -15,7 +15,7 @@ from typing import Any
 from recordian.config import ConfigManager
 from recordian.runtime_config import apply_namespace_runtime_normalization, normalize_runtime_config
 
-from .audio import read_wav_mono_f32, write_wav_mono_f32
+from .audio import write_wav_mono_f32
 from .audio_feedback import default_sound_off_path, default_sound_on_path, play_sound
 from .auto_lexicon import AutoLexicon
 from .linux_commit import get_focused_window_id, resolve_committer, send_hard_enter
@@ -28,6 +28,46 @@ from .linux_dictate import (
     stop_record_process,
 )
 from .linux_notify import Notification, resolve_notifier
+from .postprocess_pipeline import (
+    PostprocessPipelineContext,
+    run_postprocess_pipeline,
+)
+from .postprocess_pipeline import (
+    _apply_refine_postprocess as _pipeline_apply_refine_postprocess,
+)
+from .postprocess_pipeline import (
+    _apply_target_window as _pipeline_apply_target_window,
+)
+from .postprocess_pipeline import (
+    _build_refine_prompt_with_protected_terms as _pipeline_build_refine_prompt_with_protected_terms,
+)
+from .postprocess_pipeline import (
+    _cleanup_repeat_lite_text as _pipeline_cleanup_repeat_lite_text,
+)
+from .postprocess_pipeline import (
+    _cleanup_stutter_text as _pipeline_cleanup_stutter_text,
+)
+from .postprocess_pipeline import (
+    _coerce_bool as _pipeline_coerce_bool,
+)
+from .postprocess_pipeline import (
+    _extract_refine_postprocess_rule as _pipeline_extract_refine_postprocess_rule,
+)
+from .postprocess_pipeline import (
+    _preview_text as _pipeline_preview_text,
+)
+from .postprocess_pipeline import (
+    _resolve_auto_hard_enter as _pipeline_resolve_auto_hard_enter,
+)
+from .postprocess_pipeline import (
+    _select_refine_protected_terms as _pipeline_select_refine_protected_terms,
+)
+from .postprocess_pipeline import (
+    _should_skip_owner_gated_asr as _pipeline_should_skip_owner_gated_asr,
+)
+from .postprocess_pipeline import (
+    _text_contains_term as _pipeline_text_contains_term,
+)
 from .runtime_deps import ensure_ffmpeg_available
 from .voice_wake import (
     DEFAULT_WAKE_KEYWORD_THRESHOLD,
@@ -46,6 +86,19 @@ _DEFAULT_WAKE_JOINER = _DEFAULT_WAKE_MODEL_DIR / "joiner-epoch-12-avg-2-chunk-16
 _DEFAULT_WAKE_TOKENS = _DEFAULT_WAKE_MODEL_DIR / "tokens.txt"
 _DEFAULT_SOUND_ON = default_sound_on_path()
 _DEFAULT_SOUND_OFF = default_sound_off_path()
+
+_extract_refine_postprocess_rule = _pipeline_extract_refine_postprocess_rule
+_cleanup_stutter_text = _pipeline_cleanup_stutter_text
+_cleanup_repeat_lite_text = _pipeline_cleanup_repeat_lite_text
+_apply_refine_postprocess = _pipeline_apply_refine_postprocess
+_text_contains_term = _pipeline_text_contains_term
+_select_refine_protected_terms = _pipeline_select_refine_protected_terms
+_build_refine_prompt_with_protected_terms = _pipeline_build_refine_prompt_with_protected_terms
+_preview_text = _pipeline_preview_text
+_coerce_bool = _pipeline_coerce_bool
+_resolve_auto_hard_enter = _pipeline_resolve_auto_hard_enter
+_apply_target_window = _pipeline_apply_target_window
+_should_skip_owner_gated_asr = _pipeline_should_skip_owner_gated_asr
 
 
 class RecordingState(enum.Enum):
@@ -471,243 +524,11 @@ def _normalize_final_text(text: str) -> str:
             normalized = normalized[:-tail]
             break
     return normalized
-
-
-def _extract_refine_postprocess_rule(prompt_template: str | None) -> tuple[str, str | None]:
-    if not prompt_template:
-        return "none", prompt_template
-    lines = prompt_template.splitlines()
-    for idx, raw in enumerate(lines):
-        stripped = raw.strip()
-        if not stripped:
-            continue
-        if stripped.lower().startswith("@postprocess:"):
-            rule = stripped.split(":", 1)[1].strip().lower() or "none"
-            if rule not in {"none", "repeat-lite", "zh-stutter-lite"}:
-                rule = "none"
-            lines.pop(idx)
-            cleaned_prompt = "\n".join(lines).strip()
-            return rule, (cleaned_prompt or None)
-        break
-    return "none", prompt_template
-
-
-def _cleanup_stutter_text(text: str) -> str:
-    """Conservative deterministic cleanup for common stutter repetitions."""
-    import re
-
-    if not text:
-        return ""
-
-    cleaned = str(text)
-    clause_boundary = r"(?:(?<=^)|(?<=[，。！？；：、,.!?\s]))"
-    following_content = r"(?=[\u4e00-\u9fffA-Za-z0-9])"
-
-    # Collapse repeated functional words (e.g. "这个这个问题" -> "这个问题").
-    # This list only contains high-frequency filler/function terms.
-    common_words = [
-        "这个",
-        "那个",
-        "就是",
-        "然后",
-        "我们",
-        "你们",
-        "他们",
-        "她们",
-        "它们",
-    ]
-    for token in common_words:
-        cleaned = re.sub(rf"(?:{re.escape(token)})(?:\s*{re.escape(token)})+", token, cleaned)
-
-    # Collapse repeated common stutter single characters near clause boundaries
-    # (e.g. "要要要把" -> "要把"), while leaving normal reduplications such as
-    # names/idioms outside this conservative token set untouched.
-    stutter_chars = "我你他她它这那要就先再嗯啊呃额诶欸"
-    cleaned = re.sub(
-        rf"{clause_boundary}([{stutter_chars}])(?:\s*\1)+{following_content}",
-        r"\1",
-        cleaned,
-    )
-
-    # Remove filler chains around clause boundaries such as:
-    # "然后呢，同时呢，然后a，然后这个 ..."
-    filler_tokens = [
-        "然后呢",
-        "然后",
-        "同时呢",
-        "同时",
-        "这个呢",
-        "这个",
-        "那个呢",
-        "那个",
-        "就是",
-        "嗯",
-        "啊",
-        "呃",
-        "额",
-        "诶",
-        "欸",
-        "a",
-        "A",
-    ]
-    filler_group = "|".join(re.escape(token) for token in filler_tokens)
-    cleaned = re.sub(
-        rf"(?:(?<=^)|(?<=[。！？；]))(?:\s*(?:{filler_group})[，、,\s]*){{2,6}}(?=[\u4e00-\u9fffA-Za-z0-9])",
-        "",
-        cleaned,
-    )
-    cleaned = re.sub(
-        rf"([，,]\s*)(?:{filler_group})(?=[，,])",
-        r"\1",
-        cleaned,
-    )
-    cleaned = re.sub(r"[，,]\s*[，,]+", "，", cleaned)
-    cleaned = re.sub(r"\s{2,}", " ", cleaned).strip()
-
-    return cleaned
-
-
-def _cleanup_repeat_lite_text(text: str) -> str:
-    import re
-
-    if not text:
-        return ""
-    cleaned = str(text)
-    # Generic word-level stutter collapse for space-separated languages:
-    # "I I I think" -> "I think", "the the issue" -> "the issue".
-    cleaned = re.sub(
-        r"(?i)\b([a-z][a-z0-9'_-]{0,31})(?:\s+\1){1,}\b",
-        r"\1",
-        cleaned,
-    )
-    return cleaned
-
-
-def _apply_refine_postprocess(text: str, *, rule: str) -> str:
-    normalized_rule = str(rule or "none").strip().lower()
-    if normalized_rule == "zh-stutter-lite":
-        return _cleanup_stutter_text(text)
-    if normalized_rule == "repeat-lite":
-        return _cleanup_repeat_lite_text(text)
-    return text
-
-
-_REFINE_PROTECTED_STOPWORDS = {
-    "这个",
-    "那个",
-    "就是",
-    "然后",
-    "我们",
-    "你们",
-    "他们",
-    "她们",
-    "它们",
-    "可以",
-    "一下",
-    "还有",
-    "是不是",
-    "现在",
-    "时候",
-    "what",
-    "this",
-    "that",
-    "and",
-    "then",
-}
-
-
-def _text_contains_term(text: str, term: str) -> bool:
-    source = str(text or "")
-    token = str(term or "").strip()
-    if not source or not token:
-        return False
-    if token.isascii():
-        return token.lower() in source.lower()
-    return token in source
-
-
-def _select_refine_protected_terms(text: str, hotwords: list[str], *, max_terms: int = 12) -> list[str]:
-    selected: list[str] = []
-    seen: set[str] = set()
-    for raw in hotwords:
-        token = str(raw).strip()
-        if not token:
-            continue
-        key = token.lower() if token.isascii() else token
-        if key in seen:
-            continue
-        seen.add(key)
-        if len(token) < 2 or len(token) > 32:
-            continue
-        if key in _REFINE_PROTECTED_STOPWORDS:
-            continue
-        if not _text_contains_term(text, token):
-            continue
-        selected.append(token)
-        if len(selected) >= max(0, int(max_terms)):
-            break
-    return selected
-
-
-def _build_refine_prompt_with_protected_terms(prompt_template: str | None, protected_terms: list[str]) -> str | None:
-    if not prompt_template:
-        return prompt_template
-    terms = [str(t).strip() for t in protected_terms if str(t).strip()]
-    if not terms:
-        return prompt_template
-    term_line = "、".join(terms)
-    guard = (
-        "附加约束（必须遵守）：下列词语如果在原文中出现，输出时必须原样保留，"
-        "不得改写、同义替换或删除："
-        f"{term_line}\n"
-    )
-    return guard + "\n" + prompt_template
-
-
-def _preview_text(text: str, max_len: int = 48) -> str:
-    normalized = " ".join(text.strip().split())
-    if len(normalized) <= max_len:
-        return normalized
-    return normalized[: max_len - 3] + "..."
-
-
 def _play_global_cue(args: argparse.Namespace, cue: str) -> None:
     custom_path = getattr(args, "sound_on_path", "") if cue == "on" else getattr(args, "sound_off_path", "")
     # Backward compatibility: older config only had wake_beep_path.
     legacy = getattr(args, "wake_beep_path", "")
     play_sound(cue=cue, custom_path=custom_path, legacy_beep_path=legacy)
-
-
-def _coerce_bool(value: object, default: bool = False) -> bool:
-    if isinstance(value, bool):
-        return value
-    if value is None:
-        return default
-    if isinstance(value, (int, float)):
-        return bool(value)
-    token = str(value).strip().lower()
-    if token in {"1", "true", "yes", "on"}:
-        return True
-    if token in {"0", "false", "no", "off"}:
-        return False
-    return default
-
-
-def _resolve_auto_hard_enter(args: argparse.Namespace) -> bool:
-    default = bool(getattr(args, "auto_hard_enter", False))
-    raw_path = str(getattr(args, "config_path", "")).strip()
-    if not raw_path:
-        return default
-    try:
-        path = Path(raw_path).expanduser()
-        if not path.exists():
-            return default
-        payload = json.loads(path.read_text(encoding="utf-8"))
-        if isinstance(payload, dict):
-            return _coerce_bool(payload.get("auto_hard_enter", default), default=default)
-    except Exception:
-        return default
-    return default
 
 
 def _commit_text(committer: Any, text: str, *, auto_hard_enter: bool = False) -> dict[str, object]:
@@ -724,13 +545,6 @@ def _commit_text(committer: Any, text: str, *, auto_hard_enter: bool = False) ->
         return {"backend": result.backend, "committed": result.committed, "detail": detail}
     except Exception as exc:  # noqa: BLE001
         return {"backend": committer.backend_name, "committed": False, "detail": str(exc)}
-
-
-def _apply_target_window(committer: Any, state: dict[str, object]) -> None:
-    """Set target window on committer when supported."""
-    wid = state.get("target_window_id")
-    if hasattr(committer, "target_window_id"):
-        committer.target_window_id = wid if isinstance(wid, int) else None
 
 
 def build_ptt_hotkey_handlers(
@@ -1679,180 +1493,28 @@ def build_ptt_hotkey_handlers(
 
         def _worker() -> None:
             try:
-                if _should_skip_owner_gated_asr(
-                    owner_filter_enabled=owner_filter_enabled,
-                    owner_seen=owner_seen,
-                    owner_last_score=owner_last_score,
-                ):
-                    on_state(
-                        {
-                            "event": "log",
-                            "message": (
-                                "voice_owner_gate_rejected: "
-                                f"owner_seen={owner_seen} last_score={owner_last_score:.3f}"
-                            ),
-                        }
+                run_postprocess_pipeline(
+                    PostprocessPipelineContext(
+                        args=args,
+                        audio_path=audio_path,
+                        record_backend=recorder_backend,
+                        record_latency_ms=record_latency_ms,
+                        owner_filter_enabled=owner_filter_enabled,
+                        owner_seen=owner_seen,
+                        owner_last_score=owner_last_score,
+                        state=state,
+                        provider=provider,
+                        refiner=refiner,
+                        committer=committer,
+                        auto_lexicon=auto_lexicon,
+                        refine_postprocess_rule=refine_postprocess_rule,
+                        normalize_final_text=_normalize_final_text,
+                        resolve_hotwords=_resolve_hotwords,
+                        on_state=on_state,
+                        on_result=on_result,
+                        on_error=on_error,
                     )
-                    on_result({"event": "result", "result": {
-                        "audio_path": str(audio_path),
-                        "record_backend": recorder_backend,
-                        "duration_s": record_latency_ms / 1000.0,
-                        "record_latency_ms": record_latency_ms,
-                        "transcribe_latency_ms": 0.0,
-                        "refine_latency_ms": 0.0,
-                        "text": "",
-                        "commit": {
-                            "backend": "none",
-                            "committed": False,
-                            "detail": "owner_gate_rejected_no_owner_speech",
-                        },
-                    }})
-                    return
-                if owner_filter_enabled and not owner_seen and owner_last_score < 0.0:
-                    on_state(
-                        {
-                            "event": "log",
-                            "message": "voice_owner_gate_inconclusive: fallback_to_asr",
-                        }
-                    )
-
-                # 静音检测：仅对 WAV 格式有效，OGG 等格式跳过
-                try:
-                    import numpy as np
-                    samples = read_wav_mono_f32(audio_path)
-                    rms = float(np.sqrt(np.mean(samples ** 2)))
-                    if rms < 0.003:
-                        on_state({"event": "log", "message": f"静音跳过 ASR (rms={rms:.4f})"})
-                        on_result({"event": "result", "result": {
-                            "audio_path": str(audio_path),
-                            "record_backend": recorder_backend,
-                            "duration_s": 0.0,
-                            "record_latency_ms": 0.0,
-                            "transcribe_latency_ms": 0.0,
-                            "refine_latency_ms": 0.0,
-                            "text": "",
-                            "commit": {"backend": "none", "committed": False, "detail": "silence_skipped"},
-                        }})
-                        return
-                except Exception:
-                    pass  # 非 WAV 格式或读取失败，跳过静音检测继续正常流程
-
-                t0 = time.perf_counter()
-                effective_hotwords = _resolve_hotwords()
-                asr = provider.transcribe_file(audio_path, hotwords=effective_hotwords)
-                transcribe_latency_ms = (time.perf_counter() - t0) * 1000
-                text = _normalize_final_text(asr.text)
-
-                # Apply text refinement if enabled
-                refine_latency_ms = 0.0
-                if refiner and text.strip():
-                    # 检查配置是否变化，动态更新 preset（热切换）
-                    if hasattr(refiner, 'update_preset'):
-                        try:
-                            # 重新读取配置文件
-                            import json
-                            config_path = getattr(args, 'config_path', None)
-                            if config_path and Path(config_path).exists():
-                                with open(config_path, encoding='utf-8') as f:
-                                    current_config = json.load(f)
-                                new_preset = current_config.get('refine_preset', 'default')
-                                old_preset = getattr(args, 'refine_preset', 'default')
-
-                                # 如果 preset 变化，更新 refiner
-                                if new_preset != old_preset:
-                                    refiner.update_preset(new_preset)
-                                    args.refine_preset = new_preset  # 更新 args 中的值
-                                    on_state({"event": "log", "message": f"已切换到 {new_preset} preset"})
-                        except Exception as e:
-                            on_state({"event": "log", "message": f"preset 热切换失败: {e}"})
-
-                    t1 = time.perf_counter()
-                    base_prompt_template = getattr(refiner, "prompt_template", None)
-                    protected_terms = _select_refine_protected_terms(text, effective_hotwords)
-                    prompt_with_guards = _build_refine_prompt_with_protected_terms(base_prompt_template, protected_terms)
-                    if prompt_with_guards != base_prompt_template:
-                        refiner.prompt_template = prompt_with_guards
-                    if args.debug_diagnostics and protected_terms:
-                        on_state({"event": "log", "message": f"diag refine_protected_terms={protected_terms}"})
-
-                    # 调试：输出 ASR 原始文本
-                    on_state({"event": "log", "message": f"ASR 原始输出: {text}"})
-
-                    # 使用流式输出或非流式输出
-                    refined_text = ""
-                    try:
-                        if getattr(args, "enable_streaming_refine", False):
-                            # 流式输出：逐字显示
-                            for chunk in refiner.refine_stream(text):
-                                refined_text += chunk
-                                # 发送流式更新事件
-                                on_state({
-                                    "event": "refine_stream_chunk",
-                                    "chunk": chunk,
-                                    "accumulated": refined_text,
-                                })
-                        else:
-                            # 非流式输出：一次性返回
-                            refined_text = refiner.refine(text)
-                    except Exception as exc:  # noqa: BLE001
-                        on_state({"event": "log", "message": f"text_refine_failed: {type(exc).__name__}: {exc}"})
-                    finally:
-                        if prompt_with_guards != base_prompt_template:
-                            refiner.prompt_template = base_prompt_template
-
-                    refine_latency_ms = (time.perf_counter() - t1) * 1000
-                    if refined_text.strip():
-                        # 调试：输出精炼后文本
-                        on_state({"event": "log", "message": f"精炼后输出: {refined_text}"})
-                        text = refined_text
-                    text = _apply_refine_postprocess(text, rule=refine_postprocess_rule)
-                    if args.debug_diagnostics:
-                        on_state({"event": "log", "message": (
-                            f"text_refine original_len={len(asr.text)}"
-                            f" refined_len={len(text)}"
-                            f" latency_ms={refine_latency_ms:.1f}"
-                            f" streaming={getattr(args, 'enable_streaming_refine', False)}"
-                        )})
-
-                _apply_target_window(committer, state)
-                auto_hard_enter = _resolve_auto_hard_enter(args)
-                commit_info = _commit_text(
-                    committer,
-                    text,
-                    auto_hard_enter=auto_hard_enter,
                 )
-                if auto_hard_enter and "hard_enter_failed" in str(commit_info.get("detail", "")):
-                    on_state({"event": "log", "message": f"auto_hard_enter_failed: {commit_info.get('detail', '')}"})
-                if args.debug_diagnostics:
-                    on_state({"event": "log", "message": (
-                        "diag finalize source=oneshot"
-                        f" text_len={len(text)}"
-                        f" committed={bool(commit_info.get('committed', False))}"
-                        f" commit_backend={commit_info.get('backend', '')}"
-                        f" commit_detail={commit_info.get('detail', '')}"
-                        f" hotword_count={len(effective_hotwords)}"
-                        f" text={_preview_text(text)}"
-                    )})
-                if auto_lexicon is not None and bool(commit_info.get("committed")) and text.strip():
-                    try:
-                        learned_terms = auto_lexicon.observe_accepted(text)
-                        if args.debug_diagnostics:
-                            on_state({"event": "log", "message": f"diag auto_lexicon_learned_terms={learned_terms}"})
-                    except Exception as exc:  # noqa: BLE001
-                        if args.debug_diagnostics:
-                            on_state({"event": "log", "message": f"diag auto_lexicon_learn_failed: {exc}"})
-                on_result({"event": "result", "result": {
-                    "audio_path": str(audio_path),
-                    "record_backend": recorder_backend,
-                    "duration_s": record_latency_ms / 1000.0,
-                    "record_latency_ms": record_latency_ms,
-                    "transcribe_latency_ms": transcribe_latency_ms,
-                    "refine_latency_ms": refine_latency_ms,
-                    "text": text,
-                    "commit": commit_info,
-                }})
-            except Exception as exc:  # noqa: BLE001
-                on_error({"event": "error", "error": f"{type(exc).__name__}: {exc}"})
             finally:
                 temp_dir.cleanup()
                 _set_state("processing_thread", None)
@@ -2588,19 +2250,6 @@ def _owner_gate_level(level: float, *, owner_filter_enabled: bool, owner_active:
     if owner_active:
         return value
     return 0.0
-
-
-def _should_skip_owner_gated_asr(
-    *,
-    owner_filter_enabled: bool,
-    owner_seen: bool,
-    owner_last_score: float,
-) -> bool:
-    # Only skip ASR when owner verification produced an explicit non-owner signal.
-    # Negative score means verification never reached a usable decision window.
-    return bool(owner_filter_enabled) and not bool(owner_seen) and float(owner_last_score) >= 0.0
-
-
 def _semantic_text_signal_len(text: str) -> int:
     return sum(1 for ch in text if ch.isalnum() or ("\u4e00" <= ch <= "\u9fff"))
 
