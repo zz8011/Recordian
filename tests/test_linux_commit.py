@@ -148,6 +148,18 @@ def test_resolve_streaming_committer_prefers_xdotool_for_clipboard_backend(monke
     assert streaming_committer.target_window_id == 42
 
 
+def test_resolve_streaming_committer_keeps_clipboard_for_electron(monkeypatch):
+    from recordian.linux_commit import XdotoolClipboardCommitter, resolve_streaming_committer
+
+    monkeypatch.setattr("recordian.linux_commit.which", lambda x: "/usr/bin/" + x)
+    monkeypatch.setattr("recordian.linux_commit._is_electron_window", lambda wid: wid == 42)
+
+    committer = XdotoolClipboardCommitter(target_window_id=42)
+    streaming_committer = resolve_streaming_committer(committer)
+
+    assert streaming_committer is committer
+
+
 def test_xdotool_clipboard_multiple_commits_cancel_previous_timer(monkeypatch):
     """快速连续调用 commit 应取消之前的定时器"""
     import time

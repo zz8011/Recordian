@@ -325,7 +325,11 @@ def resolve_streaming_committer(committer: TextCommitter) -> TextCommitter:
     """
     backend = str(getattr(committer, "backend_name", "")).strip().lower()
     if backend == "xdotool-clipboard" and which("xdotool"):
-        return XDoToolCommitter(target_window_id=getattr(committer, "target_window_id", None))
+        target_window_id = getattr(committer, "target_window_id", None)
+        if isinstance(target_window_id, int):
+            if _is_electron_window(target_window_id):
+                return committer
+        return XDoToolCommitter(target_window_id=target_window_id if isinstance(target_window_id, int) else None)
     return committer
 
 

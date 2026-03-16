@@ -212,7 +212,7 @@ class _RealtimeCommitAccumulator:
     def _flush_policy(self) -> tuple[int, float]:
         backend = str(getattr(self.committer, "backend_name", "")).strip().lower()
         if backend == "xdotool-clipboard":
-            return 6, 0.18
+            return 12, 0.35
         return 1, 0.0
 
     def _flush_pending(self) -> None:
