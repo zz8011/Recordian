@@ -136,6 +136,18 @@ def test_clipboard_timeout_negative_value_uses_default(monkeypatch):
     assert committer.clipboard_timeout_ms == 0
 
 
+def test_resolve_streaming_committer_prefers_xdotool_for_clipboard_backend(monkeypatch):
+    from recordian.linux_commit import XDoToolCommitter, XdotoolClipboardCommitter, resolve_streaming_committer
+
+    monkeypatch.setattr("recordian.linux_commit.which", lambda x: "/usr/bin/" + x)
+
+    committer = XdotoolClipboardCommitter(target_window_id=42)
+    streaming_committer = resolve_streaming_committer(committer)
+
+    assert isinstance(streaming_committer, XDoToolCommitter)
+    assert streaming_committer.target_window_id == 42
+
+
 def test_xdotool_clipboard_multiple_commits_cancel_previous_timer(monkeypatch):
     """快速连续调用 commit 应取消之前的定时器"""
     import time

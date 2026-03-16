@@ -16,7 +16,13 @@ from recordian.runtime_config import apply_namespace_runtime_normalization, norm
 
 from .audio_feedback import default_sound_off_path, default_sound_on_path, play_sound
 from .auto_lexicon import AutoLexicon
-from .linux_commit import get_focused_window_id, paste_to_enter_delay_seconds, resolve_committer, send_hard_enter
+from .linux_commit import (
+    get_focused_window_id,
+    paste_to_enter_delay_seconds,
+    resolve_committer,
+    resolve_streaming_committer,
+    send_hard_enter,
+)
 from .linux_dictate import (
     add_dictate_args,
     choose_record_backend,
@@ -200,11 +206,20 @@ class _RealtimeCommitAccumulator:
     last_backend: str = ""
     last_result: Any | None = None
     error: str = ""
+    pending_text: str = ""
+    last_flush_started_at: float = 0.0
 
-    def append_text(self, text: str) -> None:
-        token = str(text)
-        if not token or self.error:
+    def _flush_policy(self) -> tuple[int, float]:
+        backend = str(getattr(self.committer, "backend_name", "")).strip().lower()
+        if backend == "xdotool-clipboard":
+            return 6, 0.18
+        return 1, 0.0
+
+    def _flush_pending(self) -> None:
+        if not self.pending_text or self.error:
             return
+        token = self.pending_text
+        self.pending_text = ""
         try:
             result = self.committer.commit(token)
         except Exception as exc:  # noqa: BLE001
@@ -217,11 +232,25 @@ class _RealtimeCommitAccumulator:
         if bool(getattr(result, "committed", False)):
             self.any_committed = True
 
+    def append_text(self, text: str) -> None:
+        token = str(text)
+        if not token or self.error:
+            return
+        self.pending_text += token
+        if self.last_flush_started_at <= 0.0:
+            self.last_flush_started_at = time.monotonic()
+        min_chars, max_delay_s = self._flush_policy()
+        now = time.monotonic()
+        if len(self.pending_text) >= min_chars or (max_delay_s > 0.0 and now - self.last_flush_started_at >= max_delay_s):
+            self._flush_pending()
+
     def finalize(self, *, final_text: str, auto_hard_enter: bool) -> dict[str, object]:
+        self._flush_pending()
         if final_text.startswith(self.committed_text):
             tail = final_text[len(self.committed_text):]
             if tail:
                 self.append_text(tail)
+                self._flush_pending()
         elif self.error and not self.any_committed and final_text.strip():
             return _commit_text(self.committer, final_text, auto_hard_enter=auto_hard_enter)
 
@@ -277,10 +306,26 @@ def _start_realtime_asr_worker(
 
     def _run() -> None:
         session = None
-        accumulator = _RealtimeCommitAccumulator(committer) if enable_local_commit else None
+        streaming_committer = resolve_streaming_committer(committer)
+        accumulator = _RealtimeCommitAccumulator(streaming_committer) if enable_local_commit else None
         preview_text = ""
         committed_preview = ""
         try:
+            if (
+                enable_local_commit
+                and bool(getattr(args, "debug_diagnostics", False))
+                and streaming_committer is not committer
+            ):
+                on_state(
+                    {
+                        "event": "log",
+                        "message": (
+                            "diag realtime_streaming_committer "
+                            f"from={getattr(committer, 'backend_name', 'unknown')} "
+                            f"to={getattr(streaming_committer, 'backend_name', 'unknown')}"
+                        ),
+                    }
+                )
             session = provider.start_realtime_session(hotwords=resolve_hotwords())
             while True:
                 raw = reader.read(chunk_bytes)

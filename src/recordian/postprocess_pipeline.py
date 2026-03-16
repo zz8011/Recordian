@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from .audio import read_wav_mono_f32
-from .linux_commit import paste_to_enter_delay_seconds, send_hard_enter
+from .linux_commit import paste_to_enter_delay_seconds, resolve_streaming_committer, send_hard_enter
 from .remote_paste.client import resolve_remote_paste_routing, send_remote_paste_from_args
 
 EventCallback = Callable[[dict[str, object]], None]
@@ -284,14 +284,20 @@ class _StreamingCommitAccumulator:
     last_backend: str = ""
     last_result: Any | None = None
     error: str = ""
+    pending_text: str = ""
+    last_flush_started_at: float = 0.0
 
-    def append_chunk(self, chunk: str) -> None:
-        token = str(chunk)
-        if token == "":
+    def _flush_policy(self) -> tuple[int, float]:
+        backend = str(getattr(self.committer, "backend_name", "")).strip().lower()
+        if backend == "xdotool-clipboard":
+            return 6, 0.18
+        return 1, 0.0
+
+    def _flush_pending(self) -> None:
+        if not self.pending_text or self.error:
             return
-        self.accumulated_text += token
-        if self.error:
-            return
+        token = self.pending_text
+        self.pending_text = ""
         try:
             result = self.committer.commit(token)
         except Exception as exc:  # noqa: BLE001
@@ -302,8 +308,25 @@ class _StreamingCommitAccumulator:
         self.last_backend = str(getattr(result, "backend", "") or getattr(self.committer, "backend_name", "unknown"))
         if bool(getattr(result, "committed", False)):
             self.any_committed = True
+        self.last_flush_started_at = time.monotonic()
+
+    def append_chunk(self, chunk: str) -> None:
+        token = str(chunk)
+        if token == "":
+            return
+        self.accumulated_text += token
+        if self.error:
+            return
+        self.pending_text += token
+        if self.last_flush_started_at <= 0.0:
+            self.last_flush_started_at = time.monotonic()
+        min_chars, max_delay_s = self._flush_policy()
+        now = time.monotonic()
+        if len(self.pending_text) >= min_chars or (max_delay_s > 0.0 and now - self.last_flush_started_at >= max_delay_s):
+            self._flush_pending()
 
     def finalize(self, *, final_text: str, auto_hard_enter: bool) -> dict[str, object]:
+        self._flush_pending()
         if self.error and not self.any_committed and final_text.strip():
             return _commit_text(self.committer, final_text, auto_hard_enter=auto_hard_enter)
 
@@ -462,7 +485,7 @@ def _run_asr_streaming_commit(
     if not hasattr(context.provider, "transcribe_file_stream"):
         raise NotImplementedError("asr_stream_unsupported")
 
-    accumulator = _StreamingCommitAccumulator(context.committer)
+    accumulator = _StreamingCommitAccumulator(resolve_streaming_committer(context.committer))
     raw_streamed_text = ""
     committed_text = ""
     t0 = time.perf_counter()
@@ -505,7 +528,7 @@ def _run_refinement_streaming_commit(
         context.on_state({"event": "log", "message": f"diag refine_protected_terms={protected_terms}"})
 
     context.on_state({"event": "log", "message": f"ASR 原始输出: {text}"})
-    accumulator = _StreamingCommitAccumulator(context.committer)
+    accumulator = _StreamingCommitAccumulator(resolve_streaming_committer(context.committer))
     refined_text = ""
     t1 = time.perf_counter()
     try:

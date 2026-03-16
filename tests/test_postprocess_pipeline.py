@@ -458,6 +458,87 @@ def test_run_postprocess_pipeline_streams_asr_commit_with_normalized_growth(tmp_
     assert result_events[0]["result"]["text"] == "Docker"
 
 
+def test_run_postprocess_pipeline_streams_asr_commit_uses_streaming_committer_override(tmp_path: Path, monkeypatch) -> None:
+    audio_path, state_events, result_events, error_events = _base_context(tmp_path)
+
+    class _Provider:
+        def transcribe_file_stream(self, audio_path: Path, hotwords: list[str]):  # noqa: ANN001
+            yield "你"
+            yield "好"
+
+    class _OriginalCommitter:
+        backend_name = "xdotool-clipboard"
+        target_window_id = None
+
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        def commit(self, text: str) -> SimpleNamespace:
+            self.calls.append(text)
+            raise AssertionError("original clipboard committer should not handle streaming chunks")
+
+    class _FastCommitter:
+        backend_name = "xdotool"
+        target_window_id = None
+
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        def commit(self, text: str) -> SimpleNamespace:
+            self.calls.append(text)
+            return SimpleNamespace(backend="xdotool", committed=True, detail=f"typed:{text}")
+
+    original_committer = _OriginalCommitter()
+    fast_committer = _FastCommitter()
+    monkeypatch.setattr(
+        "recordian.postprocess_pipeline.read_wav_mono_f32",
+        lambda path: np.array([0.3, -0.2, 0.1], dtype=np.float32),
+    )
+    monkeypatch.setattr(
+        "recordian.postprocess_pipeline.send_remote_paste_from_args",
+        lambda args, text, *, log=None: {"enabled": False},
+    )
+    monkeypatch.setattr(
+        "recordian.postprocess_pipeline.resolve_streaming_committer",
+        lambda committer: fast_committer,
+    )
+
+    context = PostprocessPipelineContext(
+        args=argparse.Namespace(
+            config_path="",
+            auto_hard_enter=False,
+            debug_diagnostics=False,
+            enable_streaming_refine=False,
+            enable_streaming_commit=True,
+            enable_remote_paste=False,
+        ),
+        audio_path=audio_path,
+        record_backend="ffmpeg-pulse",
+        record_latency_ms=111.0,
+        owner_filter_enabled=False,
+        owner_seen=False,
+        owner_last_score=-1.0,
+        state={"target_window_id": 88},
+        provider=_Provider(),
+        refiner=None,
+        committer=original_committer,
+        auto_lexicon=None,
+        refine_postprocess_rule="none",
+        normalize_final_text=lambda text: str(text).strip(),
+        resolve_hotwords=lambda: [],
+        on_state=state_events.append,
+        on_result=result_events.append,
+        on_error=error_events.append,
+    )
+
+    run_postprocess_pipeline(context)
+
+    assert not error_events
+    assert original_committer.calls == []
+    assert fast_committer.calls == ["你", "好"]
+    assert result_events[0]["result"]["text"] == "你好"
+
+
 def test_run_postprocess_pipeline_streams_refine_commit_when_enabled(tmp_path: Path, monkeypatch) -> None:
     audio_path, state_events, result_events, error_events = _base_context(tmp_path)
 

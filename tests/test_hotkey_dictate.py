@@ -188,6 +188,88 @@ def test_start_realtime_asr_worker_commits_append_only_partial_text() -> None:
     assert [event.get("text") for event in events if event.get("event") == "realtime_asr_partial"] == ["你", "你好"]
 
 
+def test_realtime_asr_worker_uses_streaming_committer_override(monkeypatch) -> None:
+    events: list[dict[str, object]] = []
+
+    class _FakeRealtimeSession:
+        elapsed_ms = 123.0
+
+        def __init__(self) -> None:
+            self.responses = iter([
+                {"text": "你"},
+                {"text": "你好"},
+            ])
+
+        def push_audio(self, raw: bytes) -> dict[str, object]:
+            try:
+                return next(self.responses)
+            except StopIteration:
+                return {"text": "你好"}
+
+        def finish(self):
+            return SimpleNamespace(text="你好")
+
+        def cancel(self) -> None:
+            return None
+
+    class _FakeProvider:
+        realtime_chunk_size_sec = 0.25
+
+        def supports_realtime_transcription(self) -> bool:
+            return True
+
+        def start_realtime_session(self, *, hotwords: list[str]):
+            return _FakeRealtimeSession()
+
+    class _OriginalCommitter:
+        backend_name = "xdotool-clipboard"
+
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        def commit(self, text: str) -> SimpleNamespace:
+            self.calls.append(text)
+            raise AssertionError("original committer should not be used for streaming")
+
+    class _FastCommitter:
+        backend_name = "xdotool"
+
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        def commit(self, text: str) -> SimpleNamespace:
+            self.calls.append(text)
+            return SimpleNamespace(backend="xdotool", committed=True, detail=f"typed:{text}")
+
+    record_handle = RecordProcessHandle(
+        process=SimpleNamespace(),
+        monitor_stream=io.BytesIO(b"\x00\x00\x00\x00" * 3),
+        monitor_sample_rate=4,
+        monitor_channels=1,
+    )
+    original_committer = _OriginalCommitter()
+    fast_committer = _FastCommitter()
+    monkeypatch.setattr("recordian.hotkey_dictate.resolve_streaming_committer", lambda committer: fast_committer)
+
+    worker = _start_realtime_asr_worker(
+        args=argparse.Namespace(enable_streaming_commit=True, sample_rate=4, channels=1, debug_diagnostics=False),
+        provider=_FakeProvider(),
+        record_handle=record_handle,
+        committer=original_committer,
+        enable_local_commit=True,
+        auto_hard_enter=False,
+        resolve_hotwords=lambda: [],
+        normalize_final_text=lambda text: str(text).strip(),
+        on_state=events.append,
+    )
+
+    assert worker is not None
+    worker.thread.join(timeout=1.0)
+
+    assert original_committer.calls == []
+    assert fast_committer.calls == ["你", "好"]
+
+
 def test_parse_hotkey_spec_aliases() -> None:
     keys = parse_hotkey_spec("<control>+<option>+V")
     assert keys == {"ctrl", "alt", "v"}

@@ -315,6 +315,20 @@ class CommitterWithFallback(TextCommitter):
         raise CommitError(error_msg) from last_error
 
 
+def resolve_streaming_committer(committer: TextCommitter) -> TextCommitter:
+    """Pick a lower-latency committer for incremental streaming when possible.
+
+    Clipboard paste is reliable for one-shot commit, but it is too slow for
+    token-by-token updates because each flush needs clipboard settle time and a
+    paste shortcut. When streaming is enabled, prefer direct typing if the
+    current backend is clipboard-based.
+    """
+    backend = str(getattr(committer, "backend_name", "")).strip().lower()
+    if backend == "xdotool-clipboard" and which("xdotool"):
+        return XDoToolCommitter(target_window_id=getattr(committer, "target_window_id", None))
+    return committer
+
+
 def resolve_committer(backend: str, *, target_window_id: int | None = None) -> TextCommitter:
     """Resolve text output backend for Linux desktop integration.
 
