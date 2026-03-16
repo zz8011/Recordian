@@ -157,7 +157,10 @@ def test_http_cloud_provider_realtime_session_roundtrip() -> None:
     )
 
     fake_session = _FakeRequestsSession()
-    with patch("requests.Session", return_value=fake_session):
+    with (
+        patch("requests.get", return_value=_FakeResponse({"data": [{"id": "qwen3-asr-1.7b"}]})),
+        patch("requests.Session", return_value=fake_session),
+    ):
         session = provider.start_realtime_session(hotwords=["露露"])
         update = session.push_audio(b"\x00\x00\x00\x00")
         result = session.finish()
@@ -168,3 +171,24 @@ def test_http_cloud_provider_realtime_session_roundtrip() -> None:
     assert fake_session.calls[0][1].endswith("/api/start")
     assert fake_session.calls[1][1].endswith("/api/chunk")
     assert fake_session.calls[2][1].endswith("/api/finish")
+
+
+def test_http_cloud_provider_resolves_realtime_model_name_case_insensitively() -> None:
+    provider = HttpCloudProvider(
+        "http://127.0.0.1:8000/v1/audio/transcriptions",
+        model_name="Qwen3-ASR-1.7B",
+        language="zh",
+        realtime_endpoint="http://127.0.0.1:40002",
+    )
+
+    fake_session = _FakeRequestsSession()
+    with (
+        patch("requests.get", return_value=_FakeResponse({"data": [{"id": "qwen3-asr-1.7b"}]})),
+        patch("requests.Session", return_value=fake_session),
+    ):
+        session = provider.start_realtime_session(hotwords=[])
+        session.cancel()
+
+    start_call = fake_session.calls[0]
+    payload = start_call[2]["json"]
+    assert payload["model"] == "qwen3-asr-1.7b"

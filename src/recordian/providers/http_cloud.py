@@ -155,6 +155,7 @@ class HttpCloudProvider(ASRProvider):
         self.realtime_unfixed_chunk_num = max(0, int(realtime_unfixed_chunk_num))
         self.realtime_unfixed_token_num = max(0, int(realtime_unfixed_token_num))
         self._resolved_openai_model_name: str | None = None
+        self._resolved_realtime_model_name: str | None = None
 
     def _is_openai_transcription_endpoint(self) -> bool:
         path = urlparse(self.endpoint).path.lower()
@@ -185,10 +186,79 @@ class HttpCloudProvider(ASRProvider):
     def _resolve_realtime_base_url(self) -> str:
         return self.realtime_endpoint.strip().rstrip("/")
 
+    def _resolve_realtime_model_name(self, requests_module) -> str:  # noqa: ANN001
+        if self._resolved_realtime_model_name:
+            return self._resolved_realtime_model_name
+
+        candidates = self._candidate_model_names()
+        headers = self._build_headers(accept="application/json")
+        base_url = self._resolve_realtime_base_url()
+        if not base_url:
+            return candidates[0]
+
+        available_ids: list[str] = []
+        try:
+            response = requests_module.get(
+                f"{base_url}/v1/models",
+                headers=headers,
+                timeout=self.timeout_s,
+            )
+            response.raise_for_status()
+            body = response.json()
+            data = body.get("data")
+            if isinstance(data, list):
+                for item in data:
+                    if not isinstance(item, dict):
+                        continue
+                    model_id = item.get("id")
+                    if isinstance(model_id, str):
+                        normalized = model_id.strip()
+                        if normalized:
+                            available_ids.append(normalized)
+        except Exception:
+            pass
+
+        if not available_ids:
+            try:
+                response = requests_module.get(
+                    f"{base_url}/healthz",
+                    headers=headers,
+                    timeout=self.timeout_s,
+                )
+                response.raise_for_status()
+                body = response.json()
+                model_id = body.get("model_name")
+                if isinstance(model_id, str) and model_id.strip():
+                    available_ids.append(model_id.strip())
+            except Exception:
+                return candidates[0]
+
+        lowered_available = {model_id.lower(): model_id for model_id in available_ids}
+        for candidate in candidates:
+            if candidate in available_ids:
+                self._resolved_realtime_model_name = candidate
+                return candidate
+            lowered = lowered_available.get(candidate.lower())
+            if lowered:
+                self._resolved_realtime_model_name = lowered
+                return lowered
+
+        if len(available_ids) == 1:
+            self._resolved_realtime_model_name = available_ids[0]
+            return available_ids[0]
+
+        return candidates[0]
+
     def supports_realtime_transcription(self) -> bool:
         return bool(self.realtime_endpoint.strip())
 
     def start_realtime_session(self, *, hotwords: list[str]):
+        try:
+            import requests
+        except ImportError as exc:
+            raise ImportError(
+                "requests library is required for HttpCloudProvider. Install with: pip install requests"
+            ) from exc
         context = ""
         if hotwords:
             context = "热词: " + ", ".join(hotwords)
@@ -196,7 +266,7 @@ class HttpCloudProvider(ASRProvider):
             base_url=self._resolve_realtime_base_url(),
             api_key=self.api_key,
             timeout_s=self.timeout_s,
-            model_name=self.model_name,
+            model_name=self._resolve_realtime_model_name(requests),
             language=self.language,
             context=context,
             chunk_size_sec=self.realtime_chunk_size_sec,
