@@ -395,7 +395,7 @@ def test_run_postprocess_pipeline_streams_refine_commit_when_enabled(tmp_path: P
     assert any(event.get("event") == "refine_stream_chunk" for event in state_events)
 
 
-def test_run_postprocess_pipeline_falls_back_to_oneshot_refine_when_postprocess_rule_enabled(tmp_path: Path, monkeypatch) -> None:
+def test_run_postprocess_pipeline_streams_refine_commit_even_when_postprocess_rule_enabled(tmp_path: Path, monkeypatch) -> None:
     audio_path, state_events, result_events, error_events = _base_context(tmp_path)
 
     class _Provider:
@@ -404,9 +404,6 @@ def test_run_postprocess_pipeline_falls_back_to_oneshot_refine_when_postprocess_
 
     class _Refiner:
         prompt_template = "请整理文本：{text}"
-
-        def refine(self, text: str) -> str:
-            return "我我想"
 
         def refine_stream(self, text: str):
             yield "我"
@@ -465,10 +462,9 @@ def test_run_postprocess_pipeline_falls_back_to_oneshot_refine_when_postprocess_
     run_postprocess_pipeline(context)
 
     assert not error_events
-    assert committer.calls == ["我想"]
-    assert result_events[0]["result"]["text"] == "我想"
-    assert not any(event.get("event") == "refine_stream_chunk" for event in state_events)
-    assert any("refine_stream_commit_skipped" in str(event.get("message")) for event in state_events)
+    assert committer.calls == ["我", "我", "想"]
+    assert result_events[0]["result"]["text"] == "我我想"
+    assert any(event.get("event") == "refine_stream_chunk" for event in state_events)
 
 
 def test_run_postprocess_pipeline_records_remote_paste_result(tmp_path: Path, monkeypatch) -> None:

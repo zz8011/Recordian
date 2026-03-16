@@ -507,7 +507,6 @@ def _run_refinement_streaming_commit(
     context.on_state({"event": "log", "message": f"ASR 原始输出: {text}"})
     accumulator = _StreamingCommitAccumulator(context.committer)
     refined_text = ""
-    committed_text = ""
     t1 = time.perf_counter()
     try:
         for chunk in refiner.refine_stream(text):
@@ -515,15 +514,12 @@ def _run_refinement_streaming_commit(
             if not token:
                 continue
             refined_text += token
-            current_text = _apply_refine_postprocess(refined_text, rule=context.refine_postprocess_rule)
-            committed_text, delta = _stream_display_delta(committed_text, current_text)
-            if delta:
-                accumulator.append_chunk(delta)
+            accumulator.append_chunk(token)
             context.on_state(
                 {
                     "event": "refine_stream_chunk",
-                    "chunk": delta,
-                    "accumulated": committed_text,
+                    "chunk": token,
+                    "accumulated": refined_text,
                 }
             )
     finally:
@@ -531,7 +527,7 @@ def _run_refinement_streaming_commit(
             refiner.prompt_template = base_prompt_template
 
     refine_latency_ms = (time.perf_counter() - t1) * 1000
-    final_text = committed_text.strip()
+    final_text = refined_text.strip()
     if final_text:
         context.on_state({"event": "log", "message": f"精炼后输出: {final_text}"})
     commit_info = accumulator.finalize(final_text=final_text, auto_hard_enter=auto_hard_enter)
@@ -657,7 +653,6 @@ def run_postprocess_pipeline(context: PostprocessPipelineContext) -> None:
                 and _streaming_commit_enabled(context.args)
                 and context.refiner is not None
                 and text.strip()
-                and context.refine_postprocess_rule == "none"
                 and hasattr(context.refiner, "refine_stream")
             ):
                 try:
@@ -670,19 +665,6 @@ def run_postprocess_pipeline(context: PostprocessPipelineContext) -> None:
                     streamed_commit = True
                 except Exception as exc:  # noqa: BLE001
                     context.on_state({"event": "log", "message": f"refine_stream_commit_fallback: {type(exc).__name__}: {exc}"})
-            elif (
-                routing.commit_local
-                and _streaming_commit_enabled(context.args)
-                and context.refiner is not None
-                and text.strip()
-                and context.refine_postprocess_rule != "none"
-            ):
-                context.on_state(
-                    {
-                        "event": "log",
-                        "message": f"refine_stream_commit_skipped: refine_postprocess_rule={context.refine_postprocess_rule}",
-                    }
-                )
 
             if not streamed_commit:
                 if context.refiner and text.strip():
