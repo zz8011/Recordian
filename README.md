@@ -151,7 +151,12 @@ recordian-hotkey-dictate
 
 # 检查语音唤醒配置与模型状态
 recordian-wake-diagnose
+
+# 用 WAV 探测本机 vLLM /v1/realtime 是否真的支持边发边出字
+recordian-vllm-realtime-probe --wav /path/to/sample.wav --model Qwen3-ASR-1.7B --url http://127.0.0.1:8000
 ```
+
+如果你的 vLLM 实例支持 realtime，这个命令会把增量转写直接打印到标准输出；如果握手阶段就返回 `HTTP 403`，通常表示当前实例没有真正启用 `/v1/realtime`，或者所加载模型不支持 realtime。
 
 ## 说明
 

@@ -27,6 +27,7 @@ recordian-hotkey-dictate = "recordian.hotkey_dictate:main"
 recordian-tray = "recordian.tray_gui:main"
 recordian-wake-diagnose = "recordian.wake_diagnose:main"
 recordian-remote-paste-agent = "recordian.remote_paste.agent:main"
+recordian-vllm-realtime-probe = "recordian.vllm_realtime_probe:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}

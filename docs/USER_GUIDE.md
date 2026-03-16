@@ -112,6 +112,17 @@ recordian-hotkey-dictate --save-config
 - 主人声纹画像：`~/.config/recordian/owner_voice_profile.json`
 - 参考示例：`examples/hotkey.http-cloud.local-vllm.json`
 
+如果你想单独验证本机 vLLM 的 realtime WebSocket 能力，可以先准备一个 16kHz PCM16 WAV，然后执行：
+
+```bash
+recordian-vllm-realtime-probe \
+  --wav /path/to/sample.wav \
+  --model Qwen3-ASR-1.7B \
+  --url http://127.0.0.1:8000
+```
+
+这个探针会按 chunk 发送音频到 `/v1/realtime`，并把 `transcription.delta` 增量文本直接打印到终端。若直接报 `HTTP 403`，通常说明当前 vLLM 实例没有启用 realtime，或所加载模型只支持 `/v1/audio/transcriptions`。
+
 ## 5. 关键配置
 
 一个常见的 `hotkey.json` 可以像这样：
