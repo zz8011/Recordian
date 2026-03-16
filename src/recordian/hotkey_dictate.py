@@ -197,6 +197,31 @@ def _append_only_delta(previous: str, current: str) -> tuple[str, str]:
     return previous, ""
 
 
+def _stable_prefix_delta(
+    *,
+    previous_hypothesis: str,
+    committed_text: str,
+    current_hypothesis: str,
+) -> tuple[str, str]:
+    previous = str(previous_hypothesis)
+    committed = str(committed_text)
+    current = str(current_hypothesis)
+    if not current:
+        return committed, ""
+    if not previous:
+        return committed, ""
+    prefix_len = 0
+    limit = min(len(previous), len(current))
+    while prefix_len < limit and previous[prefix_len] == current[prefix_len]:
+        prefix_len += 1
+    if prefix_len <= len(committed):
+        return committed, ""
+    stable = current[:prefix_len]
+    if stable.startswith(committed):
+        return stable, stable[len(committed):]
+    return committed, ""
+
+
 @dataclass(slots=True)
 class _RealtimeCommitAccumulator:
     committer: Any
@@ -309,6 +334,7 @@ def _start_realtime_asr_worker(
         streaming_committer = resolve_streaming_committer(committer)
         accumulator = _RealtimeCommitAccumulator(streaming_committer) if enable_local_commit else None
         preview_text = ""
+        last_hypothesis = ""
         committed_preview = ""
         try:
             if (
@@ -343,9 +369,14 @@ def _start_realtime_asr_worker(
                         }
                     )
                     if accumulator is not None:
-                        committed_preview, delta = _append_only_delta(committed_preview, current_text)
+                        committed_preview, delta = _stable_prefix_delta(
+                            previous_hypothesis=last_hypothesis,
+                            committed_text=committed_preview,
+                            current_hypothesis=current_text,
+                        )
                         if delta:
                             accumulator.append_text(delta)
+                    last_hypothesis = current_text
             final_result = session.finish()
             worker.final_text = normalize_final_text(final_result.text)
             worker.transcribe_latency_ms = session.elapsed_ms

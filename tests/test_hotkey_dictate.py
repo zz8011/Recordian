@@ -34,6 +34,7 @@ from recordian.hotkey_dictate import (
     _semantic_text_has_content,
     _semantic_text_signal_len,
     _start_realtime_asr_worker,
+    _stable_prefix_delta,
     _should_auto_stop_semantic_session,
     _should_skip_owner_gated_asr,
     _text_contains_term,
@@ -184,7 +185,7 @@ def test_start_realtime_asr_worker_commits_append_only_partial_text() -> None:
     assert worker.final_text == "你好啊"
     assert worker.transcribe_latency_ms == 321.0
     assert worker.commit_info is not None
-    assert committer.calls == ["你", "好", "啊"]
+    assert committer.calls == ["你", "好啊"]
     assert [event.get("text") for event in events if event.get("event") == "realtime_asr_partial"] == ["你", "你好"]
 
 
@@ -270,6 +271,71 @@ def test_realtime_asr_worker_uses_streaming_committer_override(monkeypatch) -> N
     assert fast_committer.calls == ["你", "好"]
 
 
+def test_start_realtime_asr_worker_commits_stable_prefix_when_partial_revises_tail() -> None:
+    events: list[dict[str, object]] = []
+
+    class _FakeRealtimeSession:
+        def __init__(self) -> None:
+            self._texts = iter(["你好。", "你好，主人。", "你好，主人，我是。"])
+
+        def push_audio(self, payload: bytes) -> dict[str, object]:
+            return {"text": next(self._texts)}
+
+        def finish(self):
+            return SimpleNamespace(text="你好，主人，我是露露。")
+
+        @property
+        def elapsed_ms(self) -> float:
+            return 222.0
+
+        def cancel(self) -> None:
+            return None
+
+    class _FakeProvider:
+        realtime_chunk_size_sec = 0.25
+
+        def supports_realtime_transcription(self) -> bool:
+            return True
+
+        def start_realtime_session(self, *, hotwords: list[str]):
+            return _FakeRealtimeSession()
+
+    class _FakeCommitter:
+        backend_name = "stdout"
+
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        def commit(self, text: str) -> SimpleNamespace:
+            self.calls.append(text)
+            return SimpleNamespace(backend="stdout", committed=True, detail=f"typed:{text}")
+
+    record_handle = RecordProcessHandle(
+        process=SimpleNamespace(),
+        monitor_stream=io.BytesIO(b"\x00\x00\x00\x00" * 3),
+        monitor_sample_rate=4,
+        monitor_channels=1,
+    )
+    committer = _FakeCommitter()
+    worker = _start_realtime_asr_worker(
+        args=argparse.Namespace(enable_streaming_commit=True, sample_rate=4, channels=1, debug_diagnostics=False),
+        provider=_FakeProvider(),
+        record_handle=record_handle,
+        committer=committer,
+        enable_local_commit=True,
+        auto_hard_enter=False,
+        resolve_hotwords=lambda: [],
+        normalize_final_text=lambda text: str(text).strip(),
+        on_state=events.append,
+    )
+
+    assert worker is not None
+    worker.thread.join(timeout=1.0)
+
+    assert worker.final_text == "你好，主人，我是露露。"
+    assert committer.calls == ["你好", "，主人", "，我是露露。"]
+
+
 def test_parse_hotkey_spec_aliases() -> None:
     keys = parse_hotkey_spec("<control>+<option>+V")
     assert keys == {"ctrl", "alt", "v"}
@@ -292,6 +358,24 @@ def test_merge_stream_text() -> None:
     assert _merge_stream_text("你", "你好") == "你好"
     assert _merge_stream_text("你好", "好") == "你好"
     assert _merge_stream_text("你好", "世界") == "你好世界"
+
+
+def test_stable_prefix_delta_handles_partial_tail_revision() -> None:
+    committed, delta = _stable_prefix_delta(
+        previous_hypothesis="你好。",
+        committed_text="",
+        current_hypothesis="你好，主人。",
+    )
+    assert committed == "你好"
+    assert delta == "你好"
+
+    committed, delta = _stable_prefix_delta(
+        previous_hypothesis="你好，主人。",
+        committed_text="你好",
+        current_hypothesis="你好，主人，我是。",
+    )
+    assert committed == "你好，主人"
+    assert delta == "，主人"
 
 
 def test_normalize_final_text_reduces_simple_repeats() -> None:
