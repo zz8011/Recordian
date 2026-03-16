@@ -1186,6 +1186,61 @@ def test_ptt_start_recording_returns_false_when_busy(monkeypatch) -> None:
     assert start_kwargs[0]["enable_monitor"] is True
 
 
+def test_ptt_start_recording_applies_target_window_before_realtime_worker(monkeypatch) -> None:
+    events: list[dict[str, object]] = []
+    captured_window_ids: list[object] = []
+
+    class _FakeProvider:
+        provider_name = "http-cloud"
+
+        def transcribe_file(self, audio_path: Path, hotwords: list[str]) -> SimpleNamespace:  # noqa: ANN001
+            return SimpleNamespace(text="目标窗口测试")
+
+    class _FakeCommitter:
+        backend_name = "xdotool"
+        target_window_id = None
+
+        def commit(self, text: str) -> SimpleNamespace:
+            return SimpleNamespace(backend="xdotool", committed=True, detail="typed")
+
+    class _FakeProcess:
+        def poll(self) -> int:
+            return 0
+
+    def _fake_start_record_process(**kwargs) -> RecordProcessHandle:  # noqa: ANN003
+        output_path = kwargs["output_path"]
+        output_path.write_bytes(b"")
+        return RecordProcessHandle(process=_FakeProcess(), monitor_stream=io.BytesIO(b""))
+
+    def _fake_start_realtime_asr_worker(**kwargs):  # noqa: ANN003
+        captured_window_ids.append(getattr(kwargs["committer"], "target_window_id", None))
+        return None
+
+    committer = _FakeCommitter()
+    monkeypatch.setattr("recordian.hotkey_dictate.ensure_ffmpeg_available", lambda: "/usr/bin/ffmpeg")
+    monkeypatch.setattr("recordian.hotkey_dictate.choose_record_backend", lambda requested, ffmpeg_bin: "ffmpeg-pulse")
+    monkeypatch.setattr("recordian.hotkey_dictate.resolve_committer", lambda backend: committer)
+    monkeypatch.setattr("recordian.hotkey_dictate.create_provider", lambda args: _FakeProvider())
+    monkeypatch.setattr("recordian.hotkey_dictate.get_focused_window_id", lambda: 456)
+    monkeypatch.setattr("recordian.hotkey_dictate.start_record_process", _fake_start_record_process)
+    monkeypatch.setattr("recordian.hotkey_dictate.stop_record_process", lambda *args, **kwargs: None)
+    monkeypatch.setattr("recordian.hotkey_dictate._start_realtime_asr_worker", _fake_start_realtime_asr_worker)
+
+    start_recording, stop_recording, _, _ = build_ptt_hotkey_handlers(
+        args=_fake_ptt_args(),
+        on_result=events.append,
+        on_error=events.append,
+        on_busy=events.append,
+        on_state=events.append,
+    )
+
+    assert start_recording() is True
+    stop_recording()
+    time.sleep(0.1)
+
+    assert captured_window_ids == [456]
+
+
 def test_ptt_start_failure_releases_lock_and_recovers(monkeypatch) -> None:
     events: list[dict[str, object]] = []
     start_attempts = {"count": 0}

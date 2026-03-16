@@ -1066,8 +1066,17 @@ def build_ptt_hotkey_handlers(
 
         target_wid = get_focused_window_id()
         _set_state("target_window_id", target_wid)
+        _apply_target_window(committer, {"target_window_id": target_wid})
         if args.debug_diagnostics:
-            on_state({"event": "log", "message": f"diag capture target_window_id={target_wid}"})
+            on_state(
+                {
+                    "event": "log",
+                    "message": (
+                        f"diag capture target_window_id={target_wid}"
+                        f" commit_backend={getattr(committer, 'backend_name', 'unknown')}"
+                    ),
+                }
+            )
 
         if not lock.acquire(blocking=False):
             on_busy({"event": "busy", "reason": "dictation_in_progress"})
