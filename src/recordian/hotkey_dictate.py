@@ -222,6 +222,13 @@ def _stable_prefix_delta(
     return committed, ""
 
 
+def _optimistic_first_partial(text: str) -> str:
+    candidate = str(text).strip()
+    if len(candidate) > 1 and candidate[-1] in "，。！？；：、,.!?;:":
+        candidate = candidate[:-1]
+    return candidate.strip()
+
+
 @dataclass(slots=True)
 class _RealtimeCommitAccumulator:
     committer: Any
@@ -332,7 +339,11 @@ def _start_realtime_asr_worker(
     def _run() -> None:
         session = None
         streaming_committer = resolve_streaming_committer(committer)
-        accumulator = _RealtimeCommitAccumulator(streaming_committer) if enable_local_commit else None
+        supports_realtime_local_commit = (
+            enable_local_commit
+            and str(getattr(streaming_committer, "backend_name", "")).strip().lower() != "xdotool-clipboard"
+        )
+        accumulator = _RealtimeCommitAccumulator(streaming_committer) if supports_realtime_local_commit else None
         preview_text = ""
         last_hypothesis = ""
         committed_preview = ""
@@ -369,11 +380,16 @@ def _start_realtime_asr_worker(
                         }
                     )
                     if accumulator is not None:
-                        committed_preview, delta = _stable_prefix_delta(
-                            previous_hypothesis=last_hypothesis,
-                            committed_text=committed_preview,
-                            current_hypothesis=current_text,
-                        )
+                        if not committed_preview and not last_hypothesis:
+                            optimistic = _optimistic_first_partial(current_text)
+                            committed_preview = optimistic
+                            delta = optimistic
+                        else:
+                            committed_preview, delta = _stable_prefix_delta(
+                                previous_hypothesis=last_hypothesis,
+                                committed_text=committed_preview,
+                                current_hypothesis=current_text,
+                            )
                         if delta:
                             accumulator.append_text(delta)
                     last_hypothesis = current_text

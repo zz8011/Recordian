@@ -25,6 +25,7 @@ from recordian.hotkey_dictate import (
     _is_soft_keepalive_speech_frame,
     _merge_stream_text,
     _normalize_final_text,
+    _optimistic_first_partial,
     _owner_gate_level,
     _pcm16le_to_f32,
     _pick_vad_sample_rate,
@@ -336,6 +337,72 @@ def test_start_realtime_asr_worker_commits_stable_prefix_when_partial_revises_ta
     assert committer.calls == ["你好", "，主人", "，我是露露。"]
 
 
+def test_start_realtime_asr_worker_skips_realtime_local_commit_for_clipboard_backend(monkeypatch) -> None:
+    events: list[dict[str, object]] = []
+
+    class _FakeRealtimeSession:
+        def __init__(self) -> None:
+            self._texts = iter(["你", "你好"])
+
+        def push_audio(self, payload: bytes) -> dict[str, object]:
+            return {"text": next(self._texts)}
+
+        def finish(self):
+            return SimpleNamespace(text="你好")
+
+        @property
+        def elapsed_ms(self) -> float:
+            return 123.0
+
+        def cancel(self) -> None:
+            return None
+
+    class _FakeProvider:
+        realtime_chunk_size_sec = 0.25
+
+        def supports_realtime_transcription(self) -> bool:
+            return True
+
+        def start_realtime_session(self, *, hotwords: list[str]):
+            return _FakeRealtimeSession()
+
+    class _ClipboardCommitter:
+        backend_name = "xdotool-clipboard"
+
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        def commit(self, text: str) -> SimpleNamespace:
+            self.calls.append(text)
+            return SimpleNamespace(backend="xdotool-clipboard", committed=True, detail=f"paste:{text}")
+
+    record_handle = RecordProcessHandle(
+        process=SimpleNamespace(),
+        monitor_stream=io.BytesIO(b"\x00\x00\x00\x00" * 2),
+        monitor_sample_rate=4,
+        monitor_channels=1,
+    )
+    committer = _ClipboardCommitter()
+    monkeypatch.setattr("recordian.hotkey_dictate.resolve_streaming_committer", lambda committer: committer)
+    worker = _start_realtime_asr_worker(
+        args=argparse.Namespace(enable_streaming_commit=True, sample_rate=4, channels=1, debug_diagnostics=False),
+        provider=_FakeProvider(),
+        record_handle=record_handle,
+        committer=committer,
+        enable_local_commit=True,
+        auto_hard_enter=False,
+        resolve_hotwords=lambda: [],
+        normalize_final_text=lambda text: str(text).strip(),
+        on_state=events.append,
+    )
+
+    assert worker is not None
+    worker.thread.join(timeout=1.0)
+
+    assert committer.calls == []
+    assert worker.commit_info is None
+
+
 def test_parse_hotkey_spec_aliases() -> None:
     keys = parse_hotkey_spec("<control>+<option>+V")
     assert keys == {"ctrl", "alt", "v"}
@@ -376,6 +443,12 @@ def test_stable_prefix_delta_handles_partial_tail_revision() -> None:
     )
     assert committed == "你好，主人"
     assert delta == "，主人"
+
+
+def test_optimistic_first_partial_strips_unstable_trailing_punctuation() -> None:
+    assert _optimistic_first_partial("你好。") == "你好"
+    assert _optimistic_first_partial("测试，") == "测试"
+    assert _optimistic_first_partial("Hello") == "Hello"
 
 
 def test_normalize_final_text_reduces_simple_repeats() -> None:
