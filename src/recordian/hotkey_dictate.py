@@ -1094,7 +1094,7 @@ def build_ptt_hotkey_handlers(
                 provider=provider,
                 record_handle=record_handle,
                 committer=committer,
-                enable_local_commit=bool(routing.commit_local and refiner is None),
+                enable_local_commit=bool(routing.commit_local),
                 auto_hard_enter=_resolve_auto_hard_enter(args),
                 resolve_hotwords=_resolve_hotwords,
                 normalize_final_text=_normalize_final_text,

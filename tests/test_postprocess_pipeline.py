@@ -198,6 +198,77 @@ def test_run_postprocess_pipeline_reuses_prefetched_asr_text_and_commit(tmp_path
     assert payload["commit"]["detail"] == "realtime_chunks:3"
 
 
+def test_run_postprocess_pipeline_skips_local_refine_recommit_when_realtime_commit_exists(tmp_path: Path, monkeypatch) -> None:
+    audio_path, state_events, result_events, error_events = _base_context(tmp_path)
+
+    class _Provider:
+        def transcribe_file(self, audio_path: Path, hotwords: list[str]):  # noqa: ANN001
+            raise AssertionError("prefetched ASR text should skip re-transcription")
+
+    class _Refiner:
+        prompt_template = "请整理文本：{text}"
+
+        def refine_stream(self, text: str):
+            raise AssertionError("prefetched realtime commit should suppress refine local recommit")
+
+        def refine(self, text: str) -> str:
+            return "整理后的文本"
+
+    class _Committer:
+        backend_name = "stdout"
+        target_window_id = None
+
+        def commit(self, text: str) -> SimpleNamespace:
+            raise AssertionError("local recommit should be skipped")
+
+    monkeypatch.setattr(
+        "recordian.postprocess_pipeline.read_wav_mono_f32",
+        lambda path: np.array([0.2, -0.2, 0.2, -0.2], dtype=np.float32),
+    )
+    monkeypatch.setattr(
+        "recordian.postprocess_pipeline.send_remote_paste_from_args",
+        lambda args, text, *, log=None: {"enabled": False},
+    )
+
+    context = PostprocessPipelineContext(
+        args=argparse.Namespace(
+            config_path="",
+            auto_hard_enter=False,
+            debug_diagnostics=False,
+            enable_streaming_refine=False,
+            enable_streaming_commit=True,
+            enable_remote_paste=False,
+        ),
+        audio_path=audio_path,
+        record_backend="ffmpeg-pulse",
+        record_latency_ms=456.0,
+        owner_filter_enabled=False,
+        owner_seen=False,
+        owner_last_score=-1.0,
+        state={"target_window_id": 77},
+        provider=_Provider(),
+        refiner=_Refiner(),
+        committer=_Committer(),
+        auto_lexicon=None,
+        refine_postprocess_rule="none",
+        normalize_final_text=lambda text: str(text).strip(),
+        resolve_hotwords=lambda: [],
+        on_state=state_events.append,
+        on_result=result_events.append,
+        on_error=error_events.append,
+        prefetched_asr_text="实时预稿",
+        prefetched_transcribe_latency_ms=123.0,
+        prefetched_commit_info={"backend": "xdotool", "committed": True, "detail": "realtime_chunks:4"},
+    )
+
+    run_postprocess_pipeline(context)
+
+    assert not error_events
+    payload = result_events[0]["result"]
+    assert payload["text"] == "整理后的文本"
+    assert payload["commit"]["detail"] == "realtime_chunks:4"
+
+
 def test_run_postprocess_pipeline_waits_before_hard_enter_for_clipboard_paste(tmp_path: Path, monkeypatch) -> None:
     audio_path, state_events, result_events, error_events = _base_context(tmp_path)
 

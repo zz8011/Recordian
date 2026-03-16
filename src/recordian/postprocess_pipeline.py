@@ -662,6 +662,7 @@ def run_postprocess_pipeline(context: PostprocessPipelineContext) -> None:
                 and _streaming_commit_enabled(context.args)
                 and context.refiner is not None
                 and text.strip()
+                and context.prefetched_commit_info is None
                 and hasattr(context.refiner, "refine_stream")
             ):
                 try:
@@ -698,7 +699,7 @@ def run_postprocess_pipeline(context: PostprocessPipelineContext) -> None:
                             }
                         )
 
-                if routing.commit_local and context.prefetched_commit_info is not None and context.refiner is None:
+                if routing.commit_local and context.prefetched_commit_info is not None:
                     commit_info = dict(context.prefetched_commit_info)
                     streamed_commit = bool(commit_info.get("committed", False))
                 elif routing.commit_local:
