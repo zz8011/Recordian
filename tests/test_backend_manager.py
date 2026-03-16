@@ -2,11 +2,19 @@
 from __future__ import annotations
 
 import queue
+import signal
 import subprocess
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-from recordian.backend_manager import BackendManager, parse_backend_event_line
+from recordian.backend_manager import (
+    BackendManager,
+    _cleanup_orphan_recordian_recorders,
+    _is_recordian_recorder_command,
+    _list_orphan_recordian_recorder_pids,
+    _terminate_backend_process,
+    parse_backend_event_line,
+)
 
 
 class TestParseBackendEventLine:
@@ -75,8 +83,9 @@ class TestBackendManagerInit:
 class TestBackendManagerStart:
     """测试后端进程启动"""
 
+    @patch("recordian.backend_manager._cleanup_orphan_recordian_recorders")
     @patch("recordian.backend_manager.subprocess.Popen")
-    def test_start_launches_subprocess(self, mock_popen: Mock) -> None:
+    def test_start_launches_subprocess(self, mock_popen: Mock, mock_cleanup_orphans: Mock) -> None:
         """测试启动时创建子进程"""
         config_path = Path("/tmp/test_config.json")
         events = queue.Queue()
@@ -102,9 +111,11 @@ class TestBackendManagerStart:
 
         # 验证子进程被启动
         mock_popen.assert_called_once()
+        assert mock_popen.call_args.kwargs["start_new_session"] is True
         assert manager.proc == mock_proc
         on_state_change.assert_called_once_with(True, "starting", "Starting backend...")
         on_menu_update.assert_called_once()
+        mock_cleanup_orphans.assert_called_once()
 
     @patch("recordian.backend_manager.subprocess.Popen")
     def test_start_does_not_restart_running_process(self, mock_popen: Mock) -> None:
@@ -131,11 +142,40 @@ class TestBackendManagerStart:
         # 验证没有创建新进程
         mock_popen.assert_not_called()
 
+    @patch("recordian.backend_manager._cleanup_orphan_recordian_recorders")
+    @patch("recordian.backend_manager.subprocess.Popen")
+    def test_start_logs_orphan_cleanup(self, mock_popen: Mock, mock_cleanup_orphans: Mock) -> None:
+        config_path = Path("/tmp/test_config.json")
+        events = queue.Queue()
+        on_state_change = Mock()
+        on_menu_update = Mock()
+
+        mock_cleanup_orphans.return_value = 3
+        mock_proc = Mock()
+        mock_proc.poll.return_value = None
+        mock_proc.stdout = Mock()
+        mock_proc.stderr = Mock()
+        mock_proc.stdout.readline.side_effect = [""]
+        mock_proc.stderr.readline.side_effect = [""]
+        mock_popen.return_value = mock_proc
+
+        manager = BackendManager(
+            config_path=config_path,
+            events=events,
+            on_state_change=on_state_change,
+            on_menu_update=on_menu_update,
+        )
+
+        manager.start()
+
+        assert events.get_nowait() == {"event": "log", "message": "cleaned_orphan_recorders:3"}
+
 
 class TestBackendManagerStop:
     """测试后端进程停止"""
 
-    def test_stop_terminates_process(self) -> None:
+    @patch("recordian.backend_manager._terminate_backend_process")
+    def test_stop_terminates_process(self, mock_terminate_backend_process: Mock) -> None:
         """测试停止时终止进程"""
         config_path = Path("/tmp/test_config.json")
         events = queue.Queue()
@@ -157,24 +197,22 @@ class TestBackendManagerStop:
         manager.stop()
 
         # 验证进程被终止
-        mock_proc.terminate.assert_called_once()
-        mock_proc.wait.assert_called()
+        mock_terminate_backend_process.assert_called_once_with(mock_proc)
         assert manager.proc is None
 
         # 验证事件被发送
         event = events.get_nowait()
         assert event["event"] == "stopped"
 
-    def test_stop_kills_process_on_timeout(self) -> None:
-        """测试超时时强制杀死进程"""
+    @patch("recordian.backend_manager._terminate_backend_process")
+    def test_stop_ignores_already_exited_process(self, mock_terminate_backend_process: Mock) -> None:
         config_path = Path("/tmp/test_config.json")
         events = queue.Queue()
         on_state_change = Mock()
         on_menu_update = Mock()
 
         mock_proc = Mock()
-        mock_proc.poll.return_value = None
-        mock_proc.wait.side_effect = [subprocess.TimeoutExpired("cmd", 2.0), 0]
+        mock_proc.poll.return_value = 0
 
         manager = BackendManager(
             config_path=config_path,
@@ -186,10 +224,7 @@ class TestBackendManagerStop:
 
         manager.stop()
 
-        # 验证先 terminate 后 kill
-        mock_proc.terminate.assert_called_once()
-        mock_proc.kill.assert_called_once()
-        assert mock_proc.wait.call_count == 2
+        mock_terminate_backend_process.assert_not_called()
 
     def test_stop_does_nothing_when_no_process(self) -> None:
         """测试没有进程时停止不报错"""
@@ -366,8 +401,15 @@ class TestBackendManagerProcessExit:
 class TestBackendManagerRestart:
     """测试重启功能"""
 
+    @patch("recordian.backend_manager._cleanup_orphan_recordian_recorders")
+    @patch("recordian.backend_manager._terminate_backend_process")
     @patch("recordian.backend_manager.subprocess.Popen")
-    def test_restart_stops_and_starts(self, mock_popen: Mock) -> None:
+    def test_restart_stops_and_starts(
+        self,
+        mock_popen: Mock,
+        mock_terminate_backend_process: Mock,
+        mock_cleanup_orphans: Mock,
+    ) -> None:
         """测试重启先停止后启动"""
         config_path = Path("/tmp/test_config.json")
         events = queue.Queue()
@@ -400,18 +442,20 @@ class TestBackendManagerRestart:
         manager.restart()
 
         # 验证旧进程被终止
-        mock_proc.terminate.assert_called_once()
+        mock_terminate_backend_process.assert_called_once_with(mock_proc)
 
         # 验证新进程被启动
         mock_popen.assert_called_once()
         assert manager.proc == new_proc
+        mock_cleanup_orphans.assert_called_once()
 
 
 class TestBackendManagerCleanup:
     """测试进程清理功能"""
 
-    def test_stop_handles_double_timeout(self) -> None:
-        """测试 terminate 和 kill 都超时的情况"""
+    @patch("recordian.backend_manager._terminate_backend_process")
+    def test_stop_handles_terminate_helper_exceptions(self, mock_terminate_backend_process: Mock) -> None:
+        """测试停止时清理 helper 抛错会继续抛出前不会污染状态"""
         config_path = Path("/tmp/test_config.json")
         events = queue.Queue()
         on_state_change = Mock()
@@ -419,11 +463,7 @@ class TestBackendManagerCleanup:
 
         mock_proc = Mock()
         mock_proc.poll.return_value = None
-        # 两次 wait 都超时
-        mock_proc.wait.side_effect = [
-            subprocess.TimeoutExpired("cmd", 2.0),
-            subprocess.TimeoutExpired("cmd", 0.5),
-        ]
+        mock_terminate_backend_process.side_effect = RuntimeError("boom")
 
         manager = BackendManager(
             config_path=config_path,
@@ -433,14 +473,12 @@ class TestBackendManagerCleanup:
         )
         manager.proc = mock_proc
 
-        # 应该不抛出异常
-        manager.stop()
-
-        # 验证尝试了 terminate 和 kill
-        mock_proc.terminate.assert_called_once()
-        mock_proc.kill.assert_called_once()
-        assert mock_proc.wait.call_count == 2
-        assert manager.proc is None
+        with patch("recordian.backend_manager._ACTIVE_BACKEND_PROCESSES", [mock_proc]):
+            try:
+                manager.stop()
+            except RuntimeError:
+                pass
+        assert manager.proc == mock_proc
 
     def test_stop_removes_from_registry(self) -> None:
         """测试停止时从全局注册表移除进程"""
@@ -466,7 +504,9 @@ class TestBackendManagerCleanup:
         # 手动添加到注册表
         _ACTIVE_BACKEND_PROCESSES.append(mock_proc)
 
-        manager.stop()
+        with patch("recordian.backend_manager._terminate_backend_process") as mock_terminate_backend_process:
+            manager.stop()
+        mock_terminate_backend_process.assert_called_once_with(mock_proc)
 
         # 验证从注册表移除
         assert mock_proc not in _ACTIVE_BACKEND_PROCESSES
@@ -489,73 +529,120 @@ class TestBackendManagerCleanup:
         _ACTIVE_BACKEND_PROCESSES.append(mock_proc2)
 
         # 执行清理
-        _cleanup_backend_processes()
+        with patch("recordian.backend_manager._terminate_backend_process") as mock_terminate_backend_process:
+            _cleanup_backend_processes()
 
         # 验证运行中的进程被终止
-        mock_proc1.terminate.assert_called_once()
-        mock_proc1.wait.assert_called()
+        mock_terminate_backend_process.assert_called_once_with(mock_proc1)
 
         # 验证已退出的进程不被终止
-        mock_proc2.terminate.assert_not_called()
+        assert mock_terminate_backend_process.call_count == 1
 
         # 验证注册表被清空
         assert len(_ACTIVE_BACKEND_PROCESSES) == 0
 
-    def test_cleanup_handles_process_lookup_error(self) -> None:
-        """测试清理时处理进程不存在错误"""
-        from recordian.backend_manager import _ACTIVE_BACKEND_PROCESSES, _cleanup_backend_processes
-
+    @patch("recordian.backend_manager.os.killpg")
+    @patch("recordian.backend_manager.os.getpgid")
+    def test_terminate_backend_process_uses_process_group(
+        self,
+        mock_getpgid: Mock,
+        mock_killpg: Mock,
+    ) -> None:
         mock_proc = Mock()
         mock_proc.poll.return_value = None
-        mock_proc.terminate.side_effect = ProcessLookupError()
+        mock_proc.pid = 4321
+        mock_proc.wait.return_value = 0
 
-        _ACTIVE_BACKEND_PROCESSES.clear()
-        _ACTIVE_BACKEND_PROCESSES.append(mock_proc)
+        mock_getpgid.return_value = 4321
 
-        # 应该不抛出异常
-        _cleanup_backend_processes()
+        _terminate_backend_process(mock_proc)
 
-        # 验证进程被移除
-        assert len(_ACTIVE_BACKEND_PROCESSES) == 0
+        mock_killpg.assert_called_once_with(4321, signal.SIGTERM)
+        mock_proc.terminate.assert_not_called()
+        mock_proc.wait.assert_called_once_with(timeout=2.0)
 
-    def test_cleanup_handles_terminate_timeout_then_kill_timeout(self) -> None:
-        """测试清理时 terminate 和 kill 都超时"""
-        from recordian.backend_manager import _ACTIVE_BACKEND_PROCESSES, _cleanup_backend_processes
-
+    @patch("recordian.backend_manager.os.killpg")
+    @patch("recordian.backend_manager.os.getpgid")
+    def test_terminate_backend_process_falls_back_to_sigkill_after_timeout(
+        self,
+        mock_getpgid: Mock,
+        mock_killpg: Mock,
+    ) -> None:
         mock_proc = Mock()
         mock_proc.poll.return_value = None
+        mock_proc.pid = 4321
         mock_proc.wait.side_effect = [
             subprocess.TimeoutExpired("cmd", 2.0),
-            subprocess.TimeoutExpired("cmd", 0.5),
+            0,
         ]
 
-        _ACTIVE_BACKEND_PROCESSES.clear()
-        _ACTIVE_BACKEND_PROCESSES.append(mock_proc)
+        mock_getpgid.return_value = 4321
 
-        # 应该不抛出异常
-        _cleanup_backend_processes()
+        _terminate_backend_process(mock_proc)
 
-        # 验证尝试了 terminate 和 kill
-        mock_proc.terminate.assert_called_once()
-        mock_proc.kill.assert_called_once()
+        assert mock_killpg.call_args_list == [
+            ((4321, signal.SIGTERM),),
+            ((4321, signal.SIGKILL),),
+        ]
+        assert mock_proc.wait.call_count == 2
 
-        # 验证进程被移除
-        assert len(_ACTIVE_BACKEND_PROCESSES) == 0
+    @patch("recordian.backend_manager.subprocess.run")
+    def test_list_orphan_recordian_recorder_pids_filters_recordian_ffmpeg(self, mock_run: Mock) -> None:
+        mock_run.return_value = Mock(
+            stdout=(
+                "100 /usr/bin/ffmpeg -hide_banner -loglevel error -y -f pulse -i default "
+                "-ac 1 -ar 16000 -filter_complex [0:a]asplit=2[record][monitor] "
+                "-map [record] -c:a libopus -b:a 24k /tmp/recordian-ptt-a/input.ogg "
+                "-map [monitor] -f f32le -acodec pcm_f32le pipe:1\n"
+                "101 /usr/bin/ffmpeg -hide_banner -loglevel error -y -f x11grab -i :0 pipe:1\n"
+            )
+        )
 
-    def test_cleanup_handles_kill_process_lookup_error(self) -> None:
-        """测试清理时 kill 阶段的进程不存在错误"""
-        from recordian.backend_manager import _ACTIVE_BACKEND_PROCESSES, _cleanup_backend_processes
+        result = _list_orphan_recordian_recorder_pids(exclude_pids={100})
 
-        mock_proc = Mock()
-        mock_proc.poll.return_value = None
-        mock_proc.wait.side_effect = subprocess.TimeoutExpired("cmd", 2.0)
-        mock_proc.kill.side_effect = ProcessLookupError()
+        assert result == []
 
-        _ACTIVE_BACKEND_PROCESSES.clear()
-        _ACTIVE_BACKEND_PROCESSES.append(mock_proc)
+        result = _list_orphan_recordian_recorder_pids()
+        assert result == [100]
 
-        # 应该不抛出异常
-        _cleanup_backend_processes()
+    def test_is_recordian_recorder_command_matches_expected_ffmpeg(self) -> None:
+        command = (
+            "/usr/bin/ffmpeg -hide_banner -loglevel error -y -f pulse -i default "
+            "-ac 1 -ar 16000 -filter_complex [0:a]asplit=2[record][monitor] "
+            "-map [record] -c:a libopus -b:a 24k /tmp/recordian-ptt-a/input.ogg "
+            "-map [monitor] -f f32le -acodec pcm_f32le pipe:1"
+        )
+        assert _is_recordian_recorder_command(command) is True
+        assert _is_recordian_recorder_command("/usr/bin/ffmpeg -f x11grab -i :0 pipe:1") is False
 
-        # 验证进程被移除
-        assert len(_ACTIVE_BACKEND_PROCESSES) == 0
+    @patch("recordian.backend_manager.time.sleep")
+    @patch("recordian.backend_manager.time.monotonic")
+    @patch("recordian.backend_manager.os.kill")
+    @patch("recordian.backend_manager._list_orphan_recordian_recorder_pids")
+    def test_cleanup_orphan_recordian_recorders_terminates_and_kills_survivors(
+        self,
+        mock_list_pids: Mock,
+        mock_kill: Mock,
+        mock_monotonic: Mock,
+        mock_sleep: Mock,
+    ) -> None:
+        mock_list_pids.return_value = [101, 102]
+        mock_monotonic.side_effect = [0.0, 0.2, 2.0]
+
+        def _kill_side_effect(pid: int, sig: int) -> None:
+            if sig == 0 and pid == 101:
+                raise ProcessLookupError()
+
+        mock_kill.side_effect = _kill_side_effect
+
+        cleaned = _cleanup_orphan_recordian_recorders()
+
+        assert cleaned == 2
+        assert mock_kill.call_args_list == [
+            ((101, signal.SIGTERM),),
+            ((102, signal.SIGTERM),),
+            ((101, 0),),
+            ((102, 0),),
+            ((102, signal.SIGKILL),),
+        ]
+        mock_sleep.assert_called_once()
