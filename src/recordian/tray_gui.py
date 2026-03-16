@@ -399,6 +399,16 @@ class TrayApp:
                     detail = _truncate(text, 48)
                     self.state.detail = detail
                     self.overlay.set_state("processing", detail)
+        elif et == "realtime_asr_partial":
+            text = str(event.get("text", "")).strip()
+            if text:
+                self.state.last_text = text
+                detail = _truncate(text, 48)
+                self.state.detail = detail
+                if self.state.status == "recording":
+                    self.overlay.set_state("recording", detail)
+                elif self.state.status == "processing":
+                    self.overlay.set_state("processing", detail)
         elif et == "refine_stream_chunk":
             text = str(event.get("accumulated", "")).strip()
             if text:
@@ -1896,6 +1906,14 @@ class TrayApp:
             row = _add_field(
                 sec_asr,
                 row,
+                key="asr_realtime_endpoint",
+                label="HTTP ASR Realtime",
+                value=current.get("asr_realtime_endpoint", ""),
+                hint="仅 asr_provider=http-cloud 时生效。实时增量 ASR 示例：http://192.168.5.111:40002",
+            )
+            row = _add_field(
+                sec_asr,
+                row,
                 key="asr_api_key",
                 label="HTTP ASR API Key",
                 value=current.get("asr_api_key", ""),
@@ -2862,6 +2880,7 @@ class TrayApp:
                         "asr_endpoint": str(_get_value("asr_endpoint")).strip() or str(
                             current.get("asr_endpoint", "http://127.0.0.1:8000/v1/audio/transcriptions")
                         ),
+                        "asr_realtime_endpoint": str(_get_value("asr_realtime_endpoint")).strip(),
                         "asr_api_key": str(_get_value("asr_api_key")).strip(),
                         "asr_timeout_s": _parse_float_field("asr_timeout_s", float(current.get("asr_timeout_s", 30.0))),
                         "device": str(_get_value("device")).strip() or str(current.get("device", "cuda")),

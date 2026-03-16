@@ -33,6 +33,7 @@ from recordian.hotkey_dictate import (
     _select_refine_protected_terms,
     _semantic_text_has_content,
     _semantic_text_signal_len,
+    _start_realtime_asr_worker,
     _should_auto_stop_semantic_session,
     _should_skip_owner_gated_asr,
     _text_contains_term,
@@ -116,6 +117,75 @@ def test_hotkey_exit_sets_stop_event() -> None:
     assert not stop_event.is_set()
     exit_daemon()
     assert stop_event.is_set()
+
+
+def test_start_realtime_asr_worker_commits_append_only_partial_text() -> None:
+    events: list[dict[str, object]] = []
+
+    class _FakeRealtimeSession:
+        def __init__(self) -> None:
+            self._texts = iter(["你", "你好", "你好"])
+
+        def push_audio(self, payload: bytes) -> dict[str, object]:
+            return {"text": next(self._texts)}
+
+        def finish(self):
+            return SimpleNamespace(text="你好啊")
+
+        @property
+        def elapsed_ms(self) -> float:
+            return 321.0
+
+        def cancel(self) -> None:
+            return None
+
+    class _FakeProvider:
+        realtime_chunk_size_sec = 0.25
+
+        def supports_realtime_transcription(self) -> bool:
+            return True
+
+        def start_realtime_session(self, *, hotwords: list[str]):
+            assert hotwords == ["Recordian"]
+            return _FakeRealtimeSession()
+
+    class _FakeCommitter:
+        backend_name = "stdout"
+
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        def commit(self, text: str) -> SimpleNamespace:
+            self.calls.append(text)
+            return SimpleNamespace(backend="stdout", committed=True, detail=f"typed:{text}")
+
+    record_handle = RecordProcessHandle(
+        process=SimpleNamespace(),
+        monitor_stream=io.BytesIO(b"\x00\x00\x00\x00" * 3),
+        monitor_sample_rate=4,
+        monitor_channels=1,
+    )
+    committer = _FakeCommitter()
+    worker = _start_realtime_asr_worker(
+        args=argparse.Namespace(enable_streaming_commit=True, sample_rate=4, channels=1),
+        provider=_FakeProvider(),
+        record_handle=record_handle,
+        committer=committer,
+        enable_local_commit=True,
+        auto_hard_enter=False,
+        resolve_hotwords=lambda: ["Recordian"],
+        normalize_final_text=lambda text: str(text).strip(),
+        on_state=events.append,
+    )
+
+    assert worker is not None
+    worker.thread.join(timeout=1.0)
+
+    assert worker.final_text == "你好啊"
+    assert worker.transcribe_latency_ms == 321.0
+    assert worker.commit_info is not None
+    assert committer.calls == ["你", "好", "啊"]
+    assert [event.get("text") for event in events if event.get("event") == "realtime_asr_partial"] == ["你", "你好"]
 
 
 def test_parse_hotkey_spec_aliases() -> None:

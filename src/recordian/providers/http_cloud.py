@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import json
 import subprocess
+import time
 from pathlib import Path
 from shutil import which
 from urllib.parse import urlparse, urlunparse
@@ -11,22 +12,125 @@ from ..models import ASRResult
 from .base import ASRProvider, _estimate_english_ratio
 
 
+class _HttpCloudRealtimeSession:
+    def __init__(
+        self,
+        *,
+        base_url: str,
+        api_key: str | None,
+        timeout_s: float,
+        model_name: str,
+        language: str,
+        context: str,
+        chunk_size_sec: float,
+        unfixed_chunk_num: int,
+        unfixed_token_num: int,
+    ) -> None:
+        try:
+            import requests
+        except ImportError as exc:
+            raise ImportError(
+                "requests library is required for HttpCloudProvider. Install with: pip install requests"
+            ) from exc
+
+        self._session = requests.Session()
+        self._base_url = base_url.rstrip("/")
+        self._api_key = api_key
+        self._timeout_s = timeout_s
+        self._model_name = model_name
+        self._language = language
+        self._context = context
+        self._chunk_size_sec = chunk_size_sec
+        self._unfixed_chunk_num = unfixed_chunk_num
+        self._unfixed_token_num = unfixed_token_num
+        self._session_id = ""
+        self._started_at = 0.0
+
+    def _headers(self, *, content_type: str) -> dict[str, str]:
+        headers = {"Content-Type": content_type}
+        if self._api_key:
+            headers["Authorization"] = f"Bearer {self._api_key}"
+        return headers
+
+    def start(self) -> dict[str, object]:
+        payload = {
+            "model": self._model_name,
+            "language": self._language or None,
+            "context": self._context,
+            "chunk_size_sec": self._chunk_size_sec,
+            "unfixed_chunk_num": self._unfixed_chunk_num,
+            "unfixed_token_num": self._unfixed_token_num,
+        }
+        response = self._session.post(
+            f"{self._base_url}/api/start",
+            headers=self._headers(content_type="application/json"),
+            json=payload,
+            timeout=self._timeout_s,
+        )
+        response.raise_for_status()
+        body = response.json()
+        self._session_id = str(body.get("session_id", "")).strip()
+        if not self._session_id:
+            raise RuntimeError("realtime_asr_missing_session_id")
+        self._started_at = time.perf_counter()
+        return body
+
+    def push_audio(self, payload: bytes) -> dict[str, object]:
+        if not self._session_id:
+            raise RuntimeError("realtime_asr_session_not_started")
+        response = self._session.post(
+            f"{self._base_url}/api/chunk",
+            params={"session_id": self._session_id},
+            headers=self._headers(content_type="application/octet-stream"),
+            data=payload,
+            timeout=self._timeout_s,
+        )
+        response.raise_for_status()
+        return response.json()
+
+    def finish(self) -> ASRResult:
+        if not self._session_id:
+            raise RuntimeError("realtime_asr_session_not_started")
+        response = self._session.post(
+            f"{self._base_url}/api/finish",
+            params={"session_id": self._session_id},
+            timeout=self._timeout_s,
+        )
+        response.raise_for_status()
+        body = response.json()
+        text = str(body.get("text", ""))
+        return ASRResult(
+            text=text,
+            english_ratio=_estimate_english_ratio(text),
+            model_name=str(body.get("model", self._model_name)),
+            metadata={
+                "language": body.get("language"),
+                "latency_seconds": body.get("latency_seconds"),
+                "realtime": True,
+            },
+        )
+
+    def cancel(self) -> None:
+        if not self._session_id:
+            return
+        try:
+            self._session.delete(
+                f"{self._base_url}/api/session",
+                params={"session_id": self._session_id},
+                timeout=min(10.0, self._timeout_s),
+            )
+        except Exception:
+            pass
+
+    @property
+    def elapsed_ms(self) -> float:
+        if self._started_at <= 0.0:
+            return 0.0
+        return (time.perf_counter() - self._started_at) * 1000
+
+
 class HttpCloudProvider(ASRProvider):
-    """Generic HTTP provider.
-
-    Request JSON:
-    {
-      "audio_base64": "...",
-      "hotwords": [...]
-    }
-
-    Response JSON example:
-    {
-      "text": "...",
-      "confidence": 0.92,
-      "model": "cloud-asr-v1"
-    }
-    """
+    """Generic HTTP provider."""
 
     def __init__(
         self,
@@ -36,12 +140,20 @@ class HttpCloudProvider(ASRProvider):
         timeout_s: float = 10.0,
         model_name: str = "",
         language: str = "",
+        realtime_endpoint: str = "",
+        realtime_chunk_size_sec: float = 0.5,
+        realtime_unfixed_chunk_num: int = 4,
+        realtime_unfixed_token_num: int = 5,
     ) -> None:
         self.endpoint = endpoint
         self.api_key = api_key
         self.timeout_s = timeout_s
         self.model_name = model_name.strip() or "Qwen/Qwen3-ASR-1.7B"
         self.language = language.strip()
+        self.realtime_endpoint = realtime_endpoint.strip()
+        self.realtime_chunk_size_sec = max(0.1, float(realtime_chunk_size_sec))
+        self.realtime_unfixed_chunk_num = max(0, int(realtime_unfixed_chunk_num))
+        self.realtime_unfixed_token_num = max(0, int(realtime_unfixed_token_num))
         self._resolved_openai_model_name: str | None = None
 
     def _is_openai_transcription_endpoint(self) -> bool:
@@ -69,6 +181,30 @@ class HttpCloudProvider(ASRProvider):
                 if short_name and short_name not in candidates:
                     candidates.append(short_name)
         return candidates or ["cloud-asr"]
+
+    def _resolve_realtime_base_url(self) -> str:
+        return self.realtime_endpoint.strip().rstrip("/")
+
+    def supports_realtime_transcription(self) -> bool:
+        return bool(self.realtime_endpoint.strip())
+
+    def start_realtime_session(self, *, hotwords: list[str]):
+        context = ""
+        if hotwords:
+            context = "热词: " + ", ".join(hotwords)
+        session = _HttpCloudRealtimeSession(
+            base_url=self._resolve_realtime_base_url(),
+            api_key=self.api_key,
+            timeout_s=self.timeout_s,
+            model_name=self.model_name,
+            language=self.language,
+            context=context,
+            chunk_size_sec=self.realtime_chunk_size_sec,
+            unfixed_chunk_num=self.realtime_unfixed_chunk_num,
+            unfixed_token_num=self.realtime_unfixed_token_num,
+        )
+        session.start()
+        return session
 
     def _resolve_openai_model_name(self, requests_module, headers: dict[str, str]) -> str:  # noqa: ANN001
         if self._resolved_openai_model_name:
@@ -114,12 +250,6 @@ class HttpCloudProvider(ASRProvider):
         return candidates[0]
 
     def _prepare_openai_audio_file(self, audio_path: Path) -> tuple[bytes, str, str]:
-        """Prepare audio payload for OpenAI-compatible transcription endpoint.
-
-        vLLM may reject some OGG/Opus recordings as malformed. To improve
-        compatibility, we transcode non-WAV input to 16k mono WAV when ffmpeg
-        is available.
-        """
         suffix = audio_path.suffix.lower()
         raw = audio_path.read_bytes()
         if suffix == ".wav":
@@ -272,14 +402,11 @@ class HttpCloudProvider(ASRProvider):
             ) from exc
 
         audio_data = wav_path.read_bytes()
-
         headers = self._build_headers(accept="application/json")
 
         if self._is_openai_transcription_endpoint():
-            # OpenAI-compatible transcription API (e.g. vLLM /v1/audio/transcriptions)
             upload_data, upload_name, upload_mime = self._prepare_openai_audio_file(wav_path)
             form_data = self._build_openai_form_data(requests, headers, hotwords=hotwords)
-
             files = {
                 "file": (upload_name, upload_data, upload_mime),
             }
@@ -291,12 +418,10 @@ class HttpCloudProvider(ASRProvider):
                 timeout=self.timeout_s,
             )
         else:
-            # Legacy Recordian JSON protocol.
             payload = {
-                "audio_base64": base64.b64encode(audio_data).decode("ascii"),
+                "audio_base64": base64.b64encode(audio_data).decode("utf-8"),
                 "hotwords": hotwords,
             }
-            headers["Content-Type"] = "application/json"
             response = requests.post(
                 self.endpoint,
                 json=payload,
@@ -305,16 +430,12 @@ class HttpCloudProvider(ASRProvider):
             )
 
         response.raise_for_status()
-        body = response.json()
-
-        text = str(body.get("text", body.get("result", ""))).strip()
-        confidence = body.get("confidence")
-        model_name = str(body.get("model", self.model_name or "cloud"))
-
+        data = response.json()
+        text = str(data.get("text", ""))
         return ASRResult(
             text=text,
-            confidence=confidence if isinstance(confidence, (int, float)) else None,
+            confidence=data.get("confidence"),
             english_ratio=_estimate_english_ratio(text),
-            model_name=model_name,
-            metadata={"raw": body, "source": "cloud_http"},
+            model_name=str(data.get("model", self.model_name)),
+            metadata={k: v for k, v in data.items() if k not in {"text", "confidence", "model"}},
         )

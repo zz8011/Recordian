@@ -5,8 +5,10 @@ import atexit
 import json
 import logging
 import math
+import queue
 import signal
 import subprocess
+import threading
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -62,6 +64,104 @@ class RecordProcessHandle:
     monitor_stream: BinaryIO | None = None
     monitor_sample_rate: int = 16000
     monitor_channels: int = 1
+    monitor_hub: Any | None = None
+
+
+_MONITOR_EOF = object()
+
+
+class _MonitorReader:
+    def __init__(self, owner: "_MonitorFanout", q: "queue.Queue[object]") -> None:
+        self._owner = owner
+        self._queue = q
+        self._buffer = bytearray()
+        self._eof = False
+        self._closed = False
+
+    def read(self, size: int = -1) -> bytes:
+        if self._closed:
+            return b""
+        if size == 0:
+            return b""
+        want = -1 if size is None else int(size)
+        while not self._eof and (want < 0 or len(self._buffer) < want):
+            item = self._queue.get()
+            if item is _MONITOR_EOF:
+                self._eof = True
+                break
+            if isinstance(item, bytes) and item:
+                self._buffer.extend(item)
+        if want < 0:
+            out = bytes(self._buffer)
+            self._buffer.clear()
+            return out
+        if want <= 0:
+            return b""
+        out = bytes(self._buffer[:want])
+        del self._buffer[:want]
+        return out
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        self._owner.remove_reader(self._queue)
+        self._buffer.clear()
+
+
+class _MonitorFanout:
+    def __init__(self, source: BinaryIO, *, chunk_size: int = 4096) -> None:
+        self._source = source
+        self._chunk_size = max(1, int(chunk_size))
+        self._lock = threading.Lock()
+        self._queues: list["queue.Queue[object]"] = []
+        self._closed = False
+        self._thread = threading.Thread(target=self._run, name="recordian-monitor-fanout", daemon=True)
+        self._thread.start()
+
+    def open_reader(self) -> _MonitorReader:
+        q: "queue.Queue[object]" = queue.Queue()
+        with self._lock:
+            if self._closed:
+                q.put(_MONITOR_EOF)
+            else:
+                self._queues.append(q)
+        return _MonitorReader(self, q)
+
+    def remove_reader(self, q: "queue.Queue[object]") -> None:
+        with self._lock:
+            if q in self._queues:
+                self._queues.remove(q)
+
+    def close(self) -> None:
+        with self._lock:
+            if self._closed:
+                return
+            self._closed = True
+            queues = list(self._queues)
+            self._queues.clear()
+        try:
+            self._source.close()
+        except Exception:
+            pass
+        for q in queues:
+            q.put(_MONITOR_EOF)
+
+    def _broadcast(self, payload: object) -> None:
+        with self._lock:
+            queues = list(self._queues)
+        for q in queues:
+            q.put(payload)
+
+    def _run(self) -> None:
+        try:
+            while True:
+                chunk = self._source.read(self._chunk_size)
+                if not chunk:
+                    break
+                self._broadcast(chunk)
+        finally:
+            self.close()
 
 
 def add_dictate_args(parser: argparse.ArgumentParser) -> None:
@@ -148,6 +248,11 @@ def add_dictate_args(parser: argparse.ArgumentParser) -> None:
         type=float,
         default=30.0,
         help="Timeout in seconds for http-cloud ASR requests",
+    )
+    parser.add_argument(
+        "--asr-realtime-endpoint",
+        default="",
+        help="Optional realtime ASR base URL for http-cloud provider (example: http://192.168.5.111:40002)",
     )
     add_remote_paste_args(parser)
 
@@ -281,6 +386,7 @@ def create_provider(args: argparse.Namespace) -> ASRProvider:
             timeout_s=timeout_s,
             model_name=model_name,
             language=language,
+            realtime_endpoint=str(getattr(args, "asr_realtime_endpoint", "")).strip(),
         )
 
     # Default to Qwen ASR provider
@@ -362,20 +468,31 @@ def start_record_process(
         bufsize=0 if monitor_enabled else -1,
     )
     _ACTIVE_PROCESSES.append(proc)
+    monitor_hub = _MonitorFanout(proc.stdout) if monitor_enabled and proc.stdout is not None else None
     return RecordProcessHandle(
         process=proc,
-        monitor_stream=proc.stdout if monitor_enabled else None,
+        monitor_stream=monitor_hub.open_reader() if monitor_hub is not None else None,
         monitor_sample_rate=int(args.sample_rate),
         monitor_channels=int(args.channels),
+        monitor_hub=monitor_hub,
     )
 
 
 def _unwrap_record_process_handle(
     process: RecordProcessHandle | subprocess.Popen[Any],
-) -> tuple[subprocess.Popen[Any], BinaryIO | None]:
+) -> tuple[subprocess.Popen[Any], BinaryIO | None, Any | None]:
     if isinstance(process, RecordProcessHandle):
-        return process.process, process.monitor_stream
-    return process, None
+        return process.process, process.monitor_stream, process.monitor_hub
+    return process, None, None
+
+
+def open_monitor_stream_reader(process: RecordProcessHandle | subprocess.Popen[Any]) -> BinaryIO | None:
+    if isinstance(process, RecordProcessHandle):
+        monitor_hub = getattr(process, "monitor_hub", None)
+        if monitor_hub is not None:
+            return monitor_hub.open_reader()
+        return process.monitor_stream
+    return None
 
 
 def stop_record_process(
@@ -384,11 +501,16 @@ def stop_record_process(
     recorder_backend: str,
     timeout_s: float = 2.0,
 ) -> None:
-    proc, monitor_stream = _unwrap_record_process_handle(process)
+    proc, monitor_stream, monitor_hub = _unwrap_record_process_handle(process)
     if proc.poll() is not None:
         if monitor_stream is not None:
             try:
                 monitor_stream.close()
+            except Exception:
+                pass
+        if monitor_hub is not None:
+            try:
+                monitor_hub.close()
             except Exception:
                 pass
         # 进程已退出，从注册表移除
@@ -413,6 +535,11 @@ def stop_record_process(
                     monitor_stream.close()
                 except Exception:
                     pass
+            if monitor_hub is not None:
+                try:
+                    monitor_hub.close()
+                except Exception:
+                    pass
             # 进程已退出，从注册表移除
             if proc in _ACTIVE_PROCESSES:
                 _ACTIVE_PROCESSES.remove(proc)
@@ -430,6 +557,11 @@ def stop_record_process(
         if monitor_stream is not None:
             try:
                 monitor_stream.close()
+            except Exception:
+                pass
+        if monitor_hub is not None:
+            try:
+                monitor_hub.close()
             except Exception:
                 pass
         # 从注册表移除

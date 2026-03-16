@@ -47,6 +47,7 @@ _SETTING_EFFECTS: dict[str, SettingEffect] = {
     "asr_context_preset": SettingEffect.RESTART_REQUIRED,
     "asr_context": SettingEffect.RESTART_REQUIRED,
     "asr_endpoint": SettingEffect.RESTART_REQUIRED,
+    "asr_realtime_endpoint": SettingEffect.RESTART_REQUIRED,
     "asr_api_key": SettingEffect.RESTART_REQUIRED,
     "asr_timeout_s": SettingEffect.RESTART_REQUIRED,
     "device": SettingEffect.RESTART_REQUIRED,

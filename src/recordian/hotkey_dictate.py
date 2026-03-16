@@ -6,7 +6,7 @@ import json
 import threading
 import time
 from collections.abc import Callable
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
@@ -21,11 +21,13 @@ from .linux_dictate import (
     add_dictate_args,
     choose_record_backend,
     create_provider,
+    open_monitor_stream_reader,
     run_dictate_once,
     start_record_process,
     stop_record_process,
 )
 from .linux_notify import Notification, resolve_notifier
+from .remote_paste.client import resolve_remote_paste_routing
 from .postprocess_pipeline import (
     PostprocessPipelineContext,
     run_postprocess_pipeline,
@@ -168,6 +170,155 @@ class RecordingState(enum.Enum):
     IDLE = "idle"
     RECORDING = "recording"
     PROCESSING = "processing"
+
+
+@dataclass(slots=True)
+class _RealtimeASRWorkerHandle:
+    thread: threading.Thread
+    final_text: str = ""
+    transcribe_latency_ms: float = 0.0
+    commit_info: dict[str, object] | None = None
+    error: str = ""
+
+
+def _append_only_delta(previous: str, current: str) -> tuple[str, str]:
+    if current == previous:
+        return previous, ""
+    if current.startswith(previous):
+        return current, current[len(previous):]
+    if previous.startswith(current):
+        return previous, ""
+    return previous, ""
+
+
+@dataclass(slots=True)
+class _RealtimeCommitAccumulator:
+    committer: Any
+    committed_text: str = ""
+    chunk_count: int = 0
+    any_committed: bool = False
+    last_backend: str = ""
+    last_result: Any | None = None
+    error: str = ""
+
+    def append_text(self, text: str) -> None:
+        token = str(text)
+        if not token or self.error:
+            return
+        try:
+            result = self.committer.commit(token)
+        except Exception as exc:  # noqa: BLE001
+            self.error = str(exc)
+            return
+        self.committed_text += token
+        self.chunk_count += 1
+        self.last_result = result
+        self.last_backend = str(getattr(result, "backend", "") or getattr(self.committer, "backend_name", "unknown"))
+        if bool(getattr(result, "committed", False)):
+            self.any_committed = True
+
+    def finalize(self, *, final_text: str, auto_hard_enter: bool) -> dict[str, object]:
+        if final_text.startswith(self.committed_text):
+            tail = final_text[len(self.committed_text):]
+            if tail:
+                self.append_text(tail)
+        elif self.error and not self.any_committed and final_text.strip():
+            return _commit_text(self.committer, final_text, auto_hard_enter=auto_hard_enter)
+
+        backend = self.last_backend or getattr(self.committer, "backend_name", "unknown")
+        details: list[str] = []
+        if self.chunk_count:
+            details.append(f"realtime_chunks:{self.chunk_count}")
+        if self.error:
+            details.append(f"realtime_error:{self.error}")
+        if auto_hard_enter and self.any_committed and self.last_result is not None:
+            enter_delay_s = paste_to_enter_delay_seconds(self.last_result)
+            if enter_delay_s > 0.0:
+                time.sleep(enter_delay_s)
+            enter_result = send_hard_enter(self.committer)
+            enter_detail = str(getattr(enter_result, "detail", "")).strip()
+            if enter_detail:
+                details.append(enter_detail)
+        detail = ";".join(part for part in details if part) or "realtime_complete"
+        return {
+            "backend": backend,
+            "committed": self.any_committed,
+            "detail": detail,
+        }
+
+
+def _start_realtime_asr_worker(
+    *,
+    args: argparse.Namespace,
+    provider: Any,
+    record_handle: Any,
+    committer: Any,
+    enable_local_commit: bool,
+    auto_hard_enter: bool,
+    resolve_hotwords: Callable[[], list[str]],
+    normalize_final_text: Callable[[str], str],
+    on_state: Callable[[dict[str, object]], None],
+) -> _RealtimeASRWorkerHandle | None:
+    if not bool(getattr(args, "enable_streaming_commit", False)):
+        return None
+    if not hasattr(provider, "supports_realtime_transcription") or not bool(provider.supports_realtime_transcription()):
+        return None
+
+    reader = open_monitor_stream_reader(record_handle)
+    if reader is None:
+        return None
+
+    chunk_size_sec = float(getattr(provider, "realtime_chunk_size_sec", 0.5) or 0.5)
+    sample_rate = int(getattr(record_handle, "monitor_sample_rate", getattr(args, "sample_rate", 16000)) or 16000)
+    channels = max(1, int(getattr(record_handle, "monitor_channels", getattr(args, "channels", 1)) or 1))
+    chunk_bytes = max(4, int(sample_rate * chunk_size_sec) * channels * 4)
+
+    worker = _RealtimeASRWorkerHandle(thread=threading.Thread(target=lambda: None))
+
+    def _run() -> None:
+        session = None
+        accumulator = _RealtimeCommitAccumulator(committer) if enable_local_commit else None
+        preview_text = ""
+        committed_preview = ""
+        try:
+            session = provider.start_realtime_session(hotwords=resolve_hotwords())
+            while True:
+                raw = reader.read(chunk_bytes)
+                if not raw:
+                    break
+                response = session.push_audio(raw)
+                current_text = normalize_final_text(str(response.get("text", "")))
+                if current_text and current_text != preview_text:
+                    preview_text = current_text
+                    on_state(
+                        {
+                            "event": "realtime_asr_partial",
+                            "text": current_text,
+                            "metadata": response,
+                        }
+                    )
+                    if accumulator is not None:
+                        committed_preview, delta = _append_only_delta(committed_preview, current_text)
+                        if delta:
+                            accumulator.append_text(delta)
+            final_result = session.finish()
+            worker.final_text = normalize_final_text(final_result.text)
+            worker.transcribe_latency_ms = session.elapsed_ms
+            if accumulator is not None:
+                worker.commit_info = accumulator.finalize(final_text=worker.final_text, auto_hard_enter=auto_hard_enter)
+        except Exception as exc:  # noqa: BLE001
+            worker.error = f"{type(exc).__name__}: {exc}"
+            if session is not None:
+                session.cancel()
+        finally:
+            try:
+                reader.close()
+            except Exception:
+                pass
+
+    worker.thread = threading.Thread(target=_run, name="recordian-realtime-asr", daemon=True)
+    worker.thread.start()
+    return worker
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -915,6 +1066,7 @@ def build_ptt_hotkey_handlers(
                 "voice_owner_active": True,
                 "voice_owner_seen": False,
                 "voice_owner_last_score": -1.0,
+                "realtime_asr_worker": None,
             })
             on_state({"event": "recording_started", "record_backend": recorder_backend, "audio_path": str(audio_path)})
 
@@ -936,6 +1088,20 @@ def build_ptt_hotkey_handlers(
                     on_state=on_state,
                 )
             )
+            routing = resolve_remote_paste_routing(args)
+            realtime_worker = _start_realtime_asr_worker(
+                args=args,
+                provider=provider,
+                record_handle=record_handle,
+                committer=committer,
+                enable_local_commit=bool(routing.commit_local and refiner is None),
+                auto_hard_enter=_resolve_auto_hard_enter(args),
+                resolve_hotwords=_resolve_hotwords,
+                normalize_final_text=_normalize_final_text,
+                on_state=on_state,
+            )
+            if realtime_worker is not None:
+                _set_state("realtime_asr_worker", realtime_worker)
             return True
         except Exception:  # noqa: BLE001
             # 确保在异常路径停止音频采样线程
@@ -961,6 +1127,7 @@ def build_ptt_hotkey_handlers(
                 owner_last_score = float(state.get("voice_owner_last_score"))
             except Exception:
                 owner_last_score = -1.0
+            realtime_asr_worker = state.get("realtime_asr_worker")
             if process is None or audio_path is None or temp_dir is None or started is None:
                 return False
 
@@ -981,6 +1148,7 @@ def build_ptt_hotkey_handlers(
                 "voice_owner_active": True,
                 "voice_owner_seen": False,
                 "voice_owner_last_score": -1.0,
+                "realtime_asr_worker": None,
             })
 
         if isinstance(level_stop, threading.Event):
@@ -994,6 +1162,19 @@ def build_ptt_hotkey_handlers(
             lock.release()
             on_error({"event": "error", "error": f"{type(exc).__name__}: {exc}"})
             return False
+
+        realtime_final_text = ""
+        realtime_transcribe_latency_ms = 0.0
+        realtime_commit_info: dict[str, object] | None = None
+        if isinstance(realtime_asr_worker, _RealtimeASRWorkerHandle):
+            realtime_asr_worker.thread.join(timeout=5.0)
+            if realtime_asr_worker.error:
+                on_state({"event": "log", "message": f"realtime_asr_failed: {realtime_asr_worker.error}"})
+            else:
+                realtime_final_text = realtime_asr_worker.final_text
+                realtime_transcribe_latency_ms = realtime_asr_worker.transcribe_latency_ms
+                if isinstance(realtime_asr_worker.commit_info, dict):
+                    realtime_commit_info = realtime_asr_worker.commit_info
 
         record_latency_ms = (time.perf_counter() - float(started)) * 1000
         audio_path = Path(audio_path)
@@ -1018,6 +1199,9 @@ def build_ptt_hotkey_handlers(
                         refine_postprocess_rule=refine_postprocess_rule,
                         normalize_final_text=_normalize_final_text,
                         resolve_hotwords=_resolve_hotwords,
+                        prefetched_asr_text=realtime_final_text,
+                        prefetched_transcribe_latency_ms=realtime_transcribe_latency_ms,
+                        prefetched_commit_info=realtime_commit_info,
                         on_state=on_state,
                         on_result=on_result,
                         on_error=on_error,

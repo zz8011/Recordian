@@ -35,6 +35,26 @@ class _FakeStreamingResponse(_FakeResponse):
             yield line.encode("utf-8")
 
 
+class _FakeRequestsSession:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str, object]] = []
+        self._texts = iter(["你", "你好"])
+
+    def post(self, url: str, **kwargs):
+        self.calls.append(("post", url, kwargs))
+        if url.endswith("/api/start"):
+            return _FakeResponse({"session_id": "demo-session"})
+        if url.endswith("/api/chunk"):
+            return _FakeResponse({"text": next(self._texts)})
+        if url.endswith("/api/finish"):
+            return _FakeResponse({"text": "你好", "model": "qwen3-asr-1.7b"})
+        raise AssertionError(url)
+
+    def delete(self, url: str, **kwargs):
+        self.calls.append(("delete", url, kwargs))
+        return _FakeResponse({"ok": True})
+
+
 def test_http_cloud_provider_transcribe(tmp_path: Path) -> None:
     wav_path = tmp_path / "demo.wav"
     write_wav_mono_f32(wav_path, [0.0] * 1600, sample_rate=16000)
@@ -126,3 +146,25 @@ def test_http_cloud_provider_transcribe_stream_parses_sse_chunks(tmp_path: Path)
         chunks = list(provider.transcribe_file_stream(wav_path, hotwords=[]))
 
     assert chunks == ["你", "好"]
+
+
+def test_http_cloud_provider_realtime_session_roundtrip() -> None:
+    provider = HttpCloudProvider(
+        "http://127.0.0.1:8000/v1/audio/transcriptions",
+        model_name="qwen3-asr-1.7b",
+        language="zh",
+        realtime_endpoint="http://127.0.0.1:40002",
+    )
+
+    fake_session = _FakeRequestsSession()
+    with patch("requests.Session", return_value=fake_session):
+        session = provider.start_realtime_session(hotwords=["露露"])
+        update = session.push_audio(b"\x00\x00\x00\x00")
+        result = session.finish()
+
+    assert update["text"] == "你"
+    assert result.text == "你好"
+    assert result.model_name == "qwen3-asr-1.7b"
+    assert fake_session.calls[0][1].endswith("/api/start")
+    assert fake_session.calls[1][1].endswith("/api/chunk")
+    assert fake_session.calls[2][1].endswith("/api/finish")

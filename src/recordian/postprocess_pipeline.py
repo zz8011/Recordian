@@ -554,6 +554,9 @@ class PostprocessPipelineContext:
     on_state: EventCallback
     on_result: EventCallback
     on_error: EventCallback
+    prefetched_asr_text: str = ""
+    prefetched_transcribe_latency_ms: float = 0.0
+    prefetched_commit_info: dict[str, object] | None = None
 
 
 def run_postprocess_pipeline(context: PostprocessPipelineContext) -> None:
@@ -643,10 +646,16 @@ def run_postprocess_pipeline(context: PostprocessPipelineContext) -> None:
                 context.on_state({"event": "log", "message": f"asr_stream_commit_fallback: {type(exc).__name__}: {exc}"})
 
         if not streamed_commit:
-            asr = context.provider.transcribe_file(context.audio_path, hotwords=effective_hotwords)
-            transcribe_latency_ms = (time.perf_counter() - t0) * 1000
-            raw_text = getattr(asr, "text", "")
-            text = context.normalize_final_text(raw_text)
+            prefetched_text = str(getattr(context, "prefetched_asr_text", "") or "")
+            if prefetched_text.strip():
+                raw_text = prefetched_text
+                text = context.normalize_final_text(raw_text)
+                transcribe_latency_ms = float(getattr(context, "prefetched_transcribe_latency_ms", 0.0) or 0.0)
+            else:
+                asr = context.provider.transcribe_file(context.audio_path, hotwords=effective_hotwords)
+                transcribe_latency_ms = (time.perf_counter() - t0) * 1000
+                raw_text = getattr(asr, "text", "")
+                text = context.normalize_final_text(raw_text)
 
             if (
                 routing.commit_local
@@ -689,7 +698,10 @@ def run_postprocess_pipeline(context: PostprocessPipelineContext) -> None:
                             }
                         )
 
-                if routing.commit_local:
+                if routing.commit_local and context.prefetched_commit_info is not None and context.refiner is None:
+                    commit_info = dict(context.prefetched_commit_info)
+                    streamed_commit = bool(commit_info.get("committed", False))
+                elif routing.commit_local:
                     commit_info = _commit_text(
                         context.committer,
                         text,
