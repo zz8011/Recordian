@@ -17,10 +17,12 @@ from recordian.hotkey_dictate import (
     _cleanup_stutter_text,
     _coerce_bool,
     _commit_text,
+    _display_audio_level,
     _expand_key_name,
     _extract_refine_postprocess_rule,
     _float_to_pcm16le,
     _is_level_speech_frame,
+    _is_soft_keepalive_speech_frame,
     _merge_stream_text,
     _normalize_final_text,
     _owner_gate_level,
@@ -246,6 +248,34 @@ def test_commit_text_appends_hard_enter_detail_when_enabled(monkeypatch) -> None
     assert payload["committed"] is True
     assert "typed" in str(payload["detail"])
     assert "hard_enter_sent" in str(payload["detail"])
+
+
+def test_commit_text_waits_before_hard_enter_for_clipboard_paste(monkeypatch) -> None:
+    class _ClipboardCommitter:
+        backend_name = "xdotool-clipboard"
+
+        def commit(self, text: str):  # noqa: ANN001
+            class _R:
+                backend = "xdotool-clipboard"
+                committed = True
+                detail = "paste:ctrl+v"
+
+            return _R()
+
+    delays: list[float] = []
+
+    class _EnterR:
+        committed = True
+        detail = "hard_enter_sent"
+
+    monkeypatch.setattr("recordian.hotkey_dictate.time.sleep", lambda value: delays.append(value))
+    monkeypatch.setattr("recordian.hotkey_dictate.send_hard_enter", lambda committer: _EnterR())
+
+    payload = _commit_text(_ClipboardCommitter(), "你好", auto_hard_enter=True)
+
+    assert payload["committed"] is True
+    assert delays
+    assert delays[0] > 0.0
 
 
 def test_resolve_auto_hard_enter_reads_config(tmp_path: Path) -> None:
@@ -522,6 +552,12 @@ def test_level_speech_frame_requires_signal_and_energy() -> None:
     assert _is_level_speech_frame(level=0.02, rms=0.02, noise_floor=0.0015) is False
 
 
+def test_soft_keepalive_speech_frame_is_more_tolerant_after_speech_started() -> None:
+    assert _is_level_speech_frame(level=0.045, rms=0.0025, noise_floor=0.0015) is False
+    assert _is_soft_keepalive_speech_frame(level=0.045, rms=0.0025, noise_floor=0.0015) is True
+    assert _is_soft_keepalive_speech_frame(level=0.01, rms=0.0008, noise_floor=0.0015) is False
+
+
 def test_update_speech_evidence_smooths_transient_spikes() -> None:
     score = 0.0
     confirmed = False
@@ -559,6 +595,12 @@ def test_owner_gate_level_hides_non_owner_activity() -> None:
     assert _owner_gate_level(0.66, owner_filter_enabled=True, owner_active=False) == 0.0
     assert _owner_gate_level(-1.0, owner_filter_enabled=False, owner_active=True) == 0.0
     assert _owner_gate_level(2.0, owner_filter_enabled=True, owner_active=True) == 1.0
+
+
+def test_display_audio_level_is_independent_from_owner_gate() -> None:
+    assert _display_audio_level(0.66) == 0.66
+    assert _display_audio_level(-1.0) == 0.0
+    assert _display_audio_level(2.0) == 1.0
 
 
 def test_should_skip_owner_gated_asr_requires_owner_presence() -> None:

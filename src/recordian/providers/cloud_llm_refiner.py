@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from urllib.parse import urlparse
 
 from .base_text_refiner import BaseTextRefiner
@@ -91,6 +92,21 @@ class CloudLLMRefiner(BaseTextRefiner):
         cleaned = self._remove_think_tags(text)
         # Some models may echo control tokens from prompts.
         return cleaned.replace("/no_think", "").strip()
+
+    def refine_stream(self, text: str):
+        if not text.strip():
+            return
+
+        if self.api_format == "ollama":
+            yield from self._refine_stream_ollama(text)
+            return
+        if self.api_format == "openai":
+            yield from self._refine_stream_openai(text)
+            return
+
+        output = self._refine_anthropic(text)
+        if output:
+            yield output
 
     def _refine_anthropic(self, text: str) -> str:
         """使用 Anthropic API 格式"""
@@ -203,6 +219,75 @@ class CloudLLMRefiner(BaseTextRefiner):
 
         return self._sanitize_output(output)
 
+    def _refine_stream_openai(self, text: str):
+        prompt = self._build_prompt(text)
+
+        try:
+            import requests
+        except ModuleNotFoundError as exc:
+            raise RuntimeError(
+                "requests 未安装。请执行: pip install requests"
+            ) from exc
+
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {self.api_key}",
+        }
+
+        payload = {
+            "model": self.model,
+            "max_tokens": self.max_tokens,
+            "temperature": self.temperature,
+            "stream": True,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": prompt,
+                }
+            ],
+            "chat_template_kwargs": {
+                "enable_thinking": bool(self.enable_thinking),
+            },
+        }
+
+        response = requests.post(
+            f"{self.api_base}/chat/completions",
+            headers=headers,
+            json=payload,
+            timeout=self.timeout,
+            stream=True,
+        )
+
+        if response.status_code != 200:
+            raise RuntimeError(
+                f"API 调用失败: {response.status_code} {response.text}"
+            )
+
+        for raw_line in response.iter_lines(decode_unicode=False):
+            if not raw_line:
+                continue
+            line = raw_line.decode("utf-8", errors="replace").strip()
+            if not line.startswith("data:"):
+                continue
+            payload = line[5:].strip()
+            if payload == "[DONE]":
+                break
+            event = json.loads(payload)
+            choices = event.get("choices")
+            if not isinstance(choices, list) or not choices:
+                continue
+            choice = choices[0]
+            if not isinstance(choice, dict):
+                continue
+            delta = choice.get("delta", {})
+            if not isinstance(delta, dict):
+                continue
+            content = delta.get("content")
+            if isinstance(content, str) and content:
+                yield content
+            if choice.get("finish_reason") is not None:
+                break
+
     def _refine_ollama(self, text: str) -> str:
         """使用 Ollama 原生 API 格式"""
         prompt = self._build_prompt(text)
@@ -254,6 +339,62 @@ class CloudLLMRefiner(BaseTextRefiner):
         output = message.get("content", "").strip()
 
         return self._sanitize_output(output)
+
+    def _refine_stream_ollama(self, text: str):
+        prompt = self._build_prompt(text)
+
+        try:
+            import requests
+        except ModuleNotFoundError as exc:
+            raise RuntimeError(
+                "requests 未安装。请执行: pip install requests"
+            ) from exc
+
+        headers = {
+            "Content-Type": "application/json",
+        }
+
+        payload = {
+            "model": self.model,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": prompt,
+                }
+            ],
+            "stream": True,
+            "think": bool(self.enable_thinking),
+            "options": {
+                "num_predict": self.max_tokens,
+                "temperature": self.temperature,
+            }
+        }
+
+        response = requests.post(
+            f"{self.api_base}/api/chat",
+            headers=headers,
+            json=payload,
+            timeout=self.timeout,
+            stream=True,
+        )
+
+        if response.status_code != 200:
+            raise RuntimeError(
+                f"API 调用失败: {response.status_code} {response.text}"
+            )
+
+        for raw_line in response.iter_lines(decode_unicode=False):
+            if not raw_line:
+                continue
+            event = json.loads(raw_line.decode("utf-8", errors="replace"))
+            message = event.get("message", {})
+            if not isinstance(message, dict):
+                continue
+            content = message.get("content")
+            if isinstance(content, str) and content:
+                yield content
+            if bool(event.get("done")):
+                break
 
     def _build_prompt(self, text: str) -> str:
         """构建文本精炼 prompt"""

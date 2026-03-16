@@ -1,6 +1,10 @@
 """测试 CloudLLMRefiner 云端精炼器"""
 from __future__ import annotations
 
+import pytest
+
+pytest.importorskip("requests")
+
 
 class TestCloudLLMRefinerInit:
     """测试 CloudLLMRefiner 初始化"""
@@ -182,3 +186,34 @@ class TestCloudLLMRefinerInit:
 
         assert result == "整理完成"
         assert captured["json"]["chat_template_kwargs"] == {"enable_thinking": True}
+
+    def test_openai_refine_stream_yields_content_chunks(self, monkeypatch) -> None:
+        from recordian.providers.cloud_llm_refiner import CloudLLMRefiner
+
+        class _Response:
+            status_code = 200
+            text = ""
+
+            def iter_lines(self, decode_unicode: bool = False):
+                lines = [
+                    'data: {"choices":[{"delta":{"reasoning_content":"先想一想"}}]}',
+                    'data: {"choices":[{"delta":{"content":"整理"}}]}',
+                    'data: {"choices":[{"delta":{"content":"完成"},"finish_reason":"stop"}]}',
+                    'data: [DONE]',
+                ]
+                for line in lines:
+                    yield line.encode("utf-8")
+
+        import requests
+
+        monkeypatch.setattr(requests, "post", lambda *args, **kwargs: _Response())
+
+        refiner = CloudLLMRefiner(
+            api_base="http://192.168.5.111/v1-openai",
+            api_key="test-key",
+            model="demo-model",
+            api_format="openai",
+            enable_thinking=True,
+        )
+
+        assert list(refiner.refine_stream("测试一下")) == ["整理", "完成"]

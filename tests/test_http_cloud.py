@@ -25,6 +25,16 @@ class _FakeResponse:
         return self._payload
 
 
+class _FakeStreamingResponse(_FakeResponse):
+    def __init__(self, lines: list[str]) -> None:
+        super().__init__({})
+        self._lines = lines
+
+    def iter_lines(self, decode_unicode: bool = False):
+        for line in self._lines:
+            yield line.encode("utf-8")
+
+
 def test_http_cloud_provider_transcribe(tmp_path: Path) -> None:
     wav_path = tmp_path / "demo.wav"
     write_wav_mono_f32(wav_path, [0.0] * 1600, sample_rate=16000)
@@ -89,3 +99,30 @@ def test_estimate_english_ratio_in_base() -> None:
     assert _estimate_english_ratio("hello world") == 1.0
     assert _estimate_english_ratio("你好世界") == 0.0
     assert _estimate_english_ratio("") == 0.0
+
+
+def test_http_cloud_provider_transcribe_stream_parses_sse_chunks(tmp_path: Path) -> None:
+    wav_path = tmp_path / "demo.wav"
+    write_wav_mono_f32(wav_path, [0.0] * 1600, sample_rate=16000)
+    provider = HttpCloudProvider(
+        "http://127.0.0.1:8000/v1/audio/transcriptions",
+        model_name="Qwen3-ASR-1.7B",
+        language="zh",
+    )
+
+    streaming = _FakeStreamingResponse(
+        [
+            'data: {"choices":[{"delta":{"content":"language"}}]}',
+            'data: {"choices":[{"delta":{"content":" None<asr_text>你"}}]}',
+            'data: {"choices":[{"delta":{"content":"好"}}]}',
+            'data: {"choices":[{"delta":{"content":"</asr_text>"}}]}',
+            'data: [DONE]',
+        ]
+    )
+    with (
+        patch("requests.get", return_value=_FakeResponse({"data": [{"id": "Qwen3-ASR-1.7B"}]})),
+        patch("requests.post", return_value=streaming),
+    ):
+        chunks = list(provider.transcribe_file_stream(wav_path, hotwords=[]))
+
+    assert chunks == ["你", "好"]

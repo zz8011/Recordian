@@ -135,6 +135,342 @@ def test_run_postprocess_pipeline_runs_asr_refine_commit_and_lexicon(tmp_path: P
     assert any(event.get("event") == "log" and "ASR 原始输出" in str(event.get("message")) for event in state_events)
 
 
+def test_run_postprocess_pipeline_waits_before_hard_enter_for_clipboard_paste(tmp_path: Path, monkeypatch) -> None:
+    audio_path, state_events, result_events, error_events = _base_context(tmp_path)
+
+    class _Provider:
+        def transcribe_file(self, audio_path: Path, hotwords: list[str]):  # noqa: ANN001
+            return SimpleNamespace(text="测试文本")
+
+    class _Committer:
+        backend_name = "xdotool-clipboard"
+        target_window_id = None
+
+        def commit(self, text: str) -> SimpleNamespace:
+            return SimpleNamespace(backend="xdotool-clipboard", committed=True, detail="paste:ctrl+v")
+
+    delays: list[float] = []
+
+    class _EnterResult:
+        committed = True
+        detail = "hard_enter_sent"
+
+    monkeypatch.setattr(
+        "recordian.postprocess_pipeline.read_wav_mono_f32",
+        lambda path: np.array([0.3, -0.2, 0.1], dtype=np.float32),
+    )
+    monkeypatch.setattr("recordian.postprocess_pipeline.time.sleep", lambda value: delays.append(value))
+    monkeypatch.setattr("recordian.postprocess_pipeline.send_hard_enter", lambda committer: _EnterResult())
+
+    context = PostprocessPipelineContext(
+        args=argparse.Namespace(
+            config_path="",
+            auto_hard_enter=True,
+            debug_diagnostics=False,
+            enable_streaming_refine=False,
+        ),
+        audio_path=audio_path,
+        record_backend="ffmpeg-pulse",
+        record_latency_ms=111.0,
+        owner_filter_enabled=False,
+        owner_seen=False,
+        owner_last_score=-1.0,
+        state={"target_window_id": 88},
+        provider=_Provider(),
+        refiner=None,
+        committer=_Committer(),
+        auto_lexicon=None,
+        refine_postprocess_rule="none",
+        normalize_final_text=lambda text: str(text).strip(),
+        resolve_hotwords=lambda: [],
+        on_state=state_events.append,
+        on_result=result_events.append,
+        on_error=error_events.append,
+    )
+
+    run_postprocess_pipeline(context)
+
+    assert not error_events
+    assert delays
+    assert delays[0] > 0.0
+
+
+def test_run_postprocess_pipeline_streams_asr_commit_when_enabled(tmp_path: Path, monkeypatch) -> None:
+    audio_path, state_events, result_events, error_events = _base_context(tmp_path)
+
+    class _Provider:
+        def transcribe_file_stream(self, audio_path: Path, hotwords: list[str]):  # noqa: ANN001
+            yield "你"
+            yield "好"
+
+    class _Committer:
+        backend_name = "xdotool"
+        target_window_id = None
+
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        def commit(self, text: str) -> SimpleNamespace:
+            self.calls.append(text)
+            return SimpleNamespace(backend="xdotool", committed=True, detail=f"typed:{text}")
+
+    committer = _Committer()
+    monkeypatch.setattr(
+        "recordian.postprocess_pipeline.read_wav_mono_f32",
+        lambda path: np.array([0.3, -0.2, 0.1], dtype=np.float32),
+    )
+    monkeypatch.setattr(
+        "recordian.postprocess_pipeline.send_remote_paste_from_args",
+        lambda args, text, *, log=None: {"enabled": False},
+    )
+
+    context = PostprocessPipelineContext(
+        args=argparse.Namespace(
+            config_path="",
+            auto_hard_enter=False,
+            debug_diagnostics=False,
+            enable_streaming_refine=False,
+            enable_streaming_commit=True,
+            enable_remote_paste=False,
+        ),
+        audio_path=audio_path,
+        record_backend="ffmpeg-pulse",
+        record_latency_ms=111.0,
+        owner_filter_enabled=False,
+        owner_seen=False,
+        owner_last_score=-1.0,
+        state={"target_window_id": 88},
+        provider=_Provider(),
+        refiner=None,
+        committer=committer,
+        auto_lexicon=None,
+        refine_postprocess_rule="none",
+        normalize_final_text=lambda text: str(text).strip(),
+        resolve_hotwords=lambda: [],
+        on_state=state_events.append,
+        on_result=result_events.append,
+        on_error=error_events.append,
+    )
+
+    run_postprocess_pipeline(context)
+
+    assert not error_events
+    assert committer.calls == ["你", "好"]
+    assert result_events[0]["result"]["text"] == "你好"
+    assert any(event.get("event") == "stream_partial" for event in state_events)
+
+
+def test_run_postprocess_pipeline_streams_asr_commit_with_normalized_growth(tmp_path: Path, monkeypatch) -> None:
+    audio_path, state_events, result_events, error_events = _base_context(tmp_path)
+
+    class _Provider:
+        def transcribe_file_stream(self, audio_path: Path, hotwords: list[str]):  # noqa: ANN001
+            yield "Docker"
+            yield "DockerDocker"
+
+    class _Committer:
+        backend_name = "xdotool"
+        target_window_id = None
+
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        def commit(self, text: str) -> SimpleNamespace:
+            self.calls.append(text)
+            return SimpleNamespace(backend="xdotool", committed=True, detail=f"typed:{text}")
+
+    committer = _Committer()
+    monkeypatch.setattr(
+        "recordian.postprocess_pipeline.read_wav_mono_f32",
+        lambda path: np.array([0.3, -0.2, 0.1], dtype=np.float32),
+    )
+    monkeypatch.setattr(
+        "recordian.postprocess_pipeline.send_remote_paste_from_args",
+        lambda args, text, *, log=None: {"enabled": False},
+    )
+
+    context = PostprocessPipelineContext(
+        args=argparse.Namespace(
+            config_path="",
+            auto_hard_enter=False,
+            debug_diagnostics=False,
+            enable_streaming_refine=False,
+            enable_streaming_commit=True,
+            enable_remote_paste=False,
+        ),
+        audio_path=audio_path,
+        record_backend="ffmpeg-pulse",
+        record_latency_ms=111.0,
+        owner_filter_enabled=False,
+        owner_seen=False,
+        owner_last_score=-1.0,
+        state={"target_window_id": 88},
+        provider=_Provider(),
+        refiner=None,
+        committer=committer,
+        auto_lexicon=None,
+        refine_postprocess_rule="none",
+        normalize_final_text=lambda text: "Docker" if text == "DockerDocker" else str(text).strip(),
+        resolve_hotwords=lambda: [],
+        on_state=state_events.append,
+        on_result=result_events.append,
+        on_error=error_events.append,
+    )
+
+    run_postprocess_pipeline(context)
+
+    assert not error_events
+    assert committer.calls == ["Docker"]
+    assert result_events[0]["result"]["text"] == "Docker"
+
+
+def test_run_postprocess_pipeline_streams_refine_commit_when_enabled(tmp_path: Path, monkeypatch) -> None:
+    audio_path, state_events, result_events, error_events = _base_context(tmp_path)
+
+    class _Provider:
+        def transcribe_file(self, audio_path: Path, hotwords: list[str]):  # noqa: ANN001
+            return SimpleNamespace(text="原始文本")
+
+    class _Refiner:
+        prompt_template = "请整理文本：{text}"
+
+        def refine_stream(self, text: str):
+            yield "整理"
+            yield "完成"
+
+    class _Committer:
+        backend_name = "xdotool"
+        target_window_id = None
+
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        def commit(self, text: str) -> SimpleNamespace:
+            self.calls.append(text)
+            return SimpleNamespace(backend="xdotool", committed=True, detail=f"typed:{text}")
+
+    committer = _Committer()
+    monkeypatch.setattr(
+        "recordian.postprocess_pipeline.read_wav_mono_f32",
+        lambda path: np.array([0.3, -0.2, 0.1], dtype=np.float32),
+    )
+    monkeypatch.setattr(
+        "recordian.postprocess_pipeline.send_remote_paste_from_args",
+        lambda args, text, *, log=None: {"enabled": False},
+    )
+
+    context = PostprocessPipelineContext(
+        args=argparse.Namespace(
+            config_path="",
+            auto_hard_enter=False,
+            debug_diagnostics=False,
+            enable_streaming_refine=False,
+            enable_streaming_commit=True,
+            enable_remote_paste=False,
+        ),
+        audio_path=audio_path,
+        record_backend="ffmpeg-pulse",
+        record_latency_ms=111.0,
+        owner_filter_enabled=False,
+        owner_seen=False,
+        owner_last_score=-1.0,
+        state={"target_window_id": 88},
+        provider=_Provider(),
+        refiner=_Refiner(),
+        committer=committer,
+        auto_lexicon=None,
+        refine_postprocess_rule="none",
+        normalize_final_text=lambda text: str(text).strip(),
+        resolve_hotwords=lambda: [],
+        on_state=state_events.append,
+        on_result=result_events.append,
+        on_error=error_events.append,
+    )
+
+    run_postprocess_pipeline(context)
+
+    assert not error_events
+    assert committer.calls == ["整理", "完成"]
+    assert result_events[0]["result"]["text"] == "整理完成"
+    assert any(event.get("event") == "refine_stream_chunk" for event in state_events)
+
+
+def test_run_postprocess_pipeline_falls_back_to_oneshot_refine_when_postprocess_rule_enabled(tmp_path: Path, monkeypatch) -> None:
+    audio_path, state_events, result_events, error_events = _base_context(tmp_path)
+
+    class _Provider:
+        def transcribe_file(self, audio_path: Path, hotwords: list[str]):  # noqa: ANN001
+            return SimpleNamespace(text="原始文本")
+
+    class _Refiner:
+        prompt_template = "请整理文本：{text}"
+
+        def refine(self, text: str) -> str:
+            return "我我想"
+
+        def refine_stream(self, text: str):
+            yield "我"
+            yield "我"
+            yield "想"
+
+    class _Committer:
+        backend_name = "xdotool"
+        target_window_id = None
+
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        def commit(self, text: str) -> SimpleNamespace:
+            self.calls.append(text)
+            return SimpleNamespace(backend="xdotool", committed=True, detail=f"typed:{text}")
+
+    committer = _Committer()
+    monkeypatch.setattr(
+        "recordian.postprocess_pipeline.read_wav_mono_f32",
+        lambda path: np.array([0.3, -0.2, 0.1], dtype=np.float32),
+    )
+    monkeypatch.setattr(
+        "recordian.postprocess_pipeline.send_remote_paste_from_args",
+        lambda args, text, *, log=None: {"enabled": False},
+    )
+
+    context = PostprocessPipelineContext(
+        args=argparse.Namespace(
+            config_path="",
+            auto_hard_enter=False,
+            debug_diagnostics=False,
+            enable_streaming_refine=False,
+            enable_streaming_commit=True,
+            enable_remote_paste=False,
+        ),
+        audio_path=audio_path,
+        record_backend="ffmpeg-pulse",
+        record_latency_ms=111.0,
+        owner_filter_enabled=False,
+        owner_seen=False,
+        owner_last_score=-1.0,
+        state={"target_window_id": 88},
+        provider=_Provider(),
+        refiner=_Refiner(),
+        committer=committer,
+        auto_lexicon=None,
+        refine_postprocess_rule="zh-stutter-lite",
+        normalize_final_text=lambda text: str(text).strip(),
+        resolve_hotwords=lambda: [],
+        on_state=state_events.append,
+        on_result=result_events.append,
+        on_error=error_events.append,
+    )
+
+    run_postprocess_pipeline(context)
+
+    assert not error_events
+    assert committer.calls == ["我想"]
+    assert result_events[0]["result"]["text"] == "我想"
+    assert not any(event.get("event") == "refine_stream_chunk" for event in state_events)
+    assert any("refine_stream_commit_skipped" in str(event.get("message")) for event in state_events)
+
+
 def test_run_postprocess_pipeline_records_remote_paste_result(tmp_path: Path, monkeypatch) -> None:
     audio_path, state_events, result_events, error_events = _base_context(tmp_path)
 

@@ -395,6 +395,18 @@ class TrayApp:
                 # Keep one-shot UX: do not show streaming words while recording.
                 if self.state.status == "recording":
                     self.state.detail = "Recording..."
+                elif self.state.status == "processing":
+                    detail = _truncate(text, 48)
+                    self.state.detail = detail
+                    self.overlay.set_state("processing", detail)
+        elif et == "refine_stream_chunk":
+            text = str(event.get("accumulated", "")).strip()
+            if text:
+                self.state.last_text = text
+                if self.state.status == "processing":
+                    detail = _truncate(text, 48)
+                    self.state.detail = detail
+                    self.overlay.set_state("processing", detail)
         elif et == "audio_level":
             self.overlay.set_level(float(event.get("level", 0.0) or 0.0))
         elif et == "processing_started":
@@ -553,6 +565,25 @@ class TrayApp:
         effect, restarted, _ = _save_config_changes(
             self.config_path,
             {"auto_hard_enter": bool(enabled)},
+            apply_now=True,
+            restart_callback=lambda: self.root.after(0, self.backend.restart),
+        )
+        self.events.put({"event": "log", "message": f"{mode_text}（{effect_label(effect)}）"})
+
+        try:
+            from .linux_notify import notify
+
+            notify(effect_status_message(effect, restarted=restarted), title=f"Recordian: {mode_text}")
+        except Exception:  # noqa: BLE001
+            pass
+
+        self._update_tray_menu()
+
+    def toggle_streaming_commit(self, enabled: bool) -> None:
+        mode_text = "已开启流式上屏" if enabled else "已关闭流式上屏"
+        effect, restarted, _ = _save_config_changes(
+            self.config_path,
+            {"enable_streaming_commit": bool(enabled)},
             apply_now=True,
             restart_callback=lambda: self.root.after(0, self.backend.restart),
         )
@@ -812,6 +843,7 @@ class TrayApp:
         current_enable_thinking = current.get("enable_thinking", current.get("refine_enable_thinking", False))
         current_notify_backend = normalize_notify_backend(current.get("notify_backend", "auto"))
         current["auto_hard_enter"] = bool(current.get("auto_hard_enter", False))
+        current["enable_streaming_commit"] = bool(current.get("enable_streaming_commit", False))
         current["wake_use_webrtcvad"] = bool(current.get("wake_use_webrtcvad", True))
         try:
             wake_vad_aggr = int(current.get("wake_vad_aggressiveness", 2))
@@ -2142,6 +2174,16 @@ class TrayApp:
             row = _add_field(
                 sec_advanced,
                 row,
+                key="enable_streaming_commit",
+                label="流式上屏",
+                value=current.get("enable_streaming_commit", False),
+                kind="bool",
+                default_bool=False,
+                hint="关闭时保持当前一次性上屏；开启后按模型流式结果增量上屏。",
+            )
+            row = _add_field(
+                sec_advanced,
+                row,
                 key="warmup",
                 label="启动时预热",
                 value=current.get("warmup", True),
@@ -2810,6 +2852,7 @@ class TrayApp:
                         "record_backend": str(_get_value("record_backend")).strip(),
                         "commit_backend": str(_get_value("commit_backend")).strip(),
                         "auto_hard_enter": bool(_get_value("auto_hard_enter")),
+                        "enable_streaming_commit": bool(_get_value("enable_streaming_commit")),
                         "asr_provider": str(_get_value("asr_provider")).strip() or str(current.get("asr_provider", "qwen-asr")),
                         "qwen_model": str(_get_value("qwen_model")).strip(),
                         "qwen_language": str(_get_value("qwen_language")).strip() or str(current.get("qwen_language", "Chinese")),
@@ -3134,6 +3177,13 @@ class TrayApp:
         menu.append(auto_hard_enter_item)
         self._appindicator_auto_hard_enter_item = auto_hard_enter_item
 
+        streaming_commit_item = Gtk.CheckMenuItem(label="流式上屏")
+        streaming_commit_enabled = bool(config.get("enable_streaming_commit", False))
+        streaming_commit_item.set_active(streaming_commit_enabled)
+        streaming_commit_item.connect("toggled", lambda item: self.root.after(0, lambda: self.toggle_streaming_commit(item.get_active())))
+        menu.append(streaming_commit_item)
+        self._appindicator_streaming_commit_item = streaming_commit_item
+
         # Copy last text
         copy_text_item = Gtk.MenuItem(label="复制最后识别的文本")
         copy_text_item.connect("activate", lambda _: self.root.after(0, self.copy_last_text))
@@ -3225,6 +3275,9 @@ class TrayApp:
                     auto_hard_enter_item = getattr(self, "_appindicator_auto_hard_enter_item", None)
                     if auto_hard_enter_item is not None:
                         auto_hard_enter_item.set_active(bool(cfg.get("auto_hard_enter", False)))
+                    streaming_commit_item = getattr(self, "_appindicator_streaming_commit_item", None)
+                    if streaming_commit_item is not None:
+                        streaming_commit_item.set_active(bool(cfg.get("enable_streaming_commit", False)))
                     self._sync_appindicator_preset_submenu()
                     try:
                         indicator.set_icon(icon_path)

@@ -196,7 +196,7 @@ def test_send_hard_enter_unsupported_backend() -> None:
     assert "unsupported" in result.detail
 
 
-def test_send_hard_enter_prefers_pynput(monkeypatch) -> None:
+def test_send_hard_enter_prefers_backend_specific_path_over_pynput(monkeypatch) -> None:
     from recordian.linux_commit import XdotoolClipboardCommitter, send_hard_enter
 
     called = {"xdotool": False}
@@ -211,8 +211,15 @@ def test_send_hard_enter_prefers_pynput(monkeypatch) -> None:
     committer = XdotoolClipboardCommitter(target_window_id=12345, clipboard_timeout_ms=0)
     result = send_hard_enter(committer)
     assert result.committed is True
-    assert "pynput" in result.detail
-    assert called["xdotool"] is False
+    assert "pynput" not in result.detail
+    assert called["xdotool"] is True
+
+
+def test_paste_to_enter_delay_seconds_only_for_paste_style_commits() -> None:
+    from recordian.linux_commit import CommitResult, paste_to_enter_delay_seconds
+
+    assert paste_to_enter_delay_seconds(CommitResult(backend="xdotool-clipboard", committed=True, detail="paste:ctrl+v")) > 0.0
+    assert paste_to_enter_delay_seconds(CommitResult(backend="xdotool", committed=True, detail="typed")) == 0.0
 
 
 # ============================================================================

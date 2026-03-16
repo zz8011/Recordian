@@ -87,6 +87,12 @@ def add_dictate_args(parser: argparse.ArgumentParser) -> None:
         default=False,
         help="Send a real Enter key event after committing text",
     )
+    parser.add_argument(
+        "--enable-streaming-commit",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Stream model output into the target app incrementally when supported",
+    )
 
     parser.add_argument(
         "--asr-provider",

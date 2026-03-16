@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from .audio import read_wav_mono_f32
-from .linux_commit import send_hard_enter
+from .linux_commit import paste_to_enter_delay_seconds, send_hard_enter
 from .remote_paste.client import resolve_remote_paste_routing, send_remote_paste_from_args
 
 EventCallback = Callable[[dict[str, object]], None]
@@ -244,12 +244,89 @@ def _commit_text(committer: Any, text: str, *, auto_hard_enter: bool = False) ->
         result = committer.commit(stripped)
         detail = str(result.detail)
         if result.committed and auto_hard_enter:
+            enter_delay_s = paste_to_enter_delay_seconds(result)
+            if enter_delay_s > 0.0:
+                time.sleep(enter_delay_s)
             enter_result = send_hard_enter(committer)
             enter_detail = str(enter_result.detail)
             detail = f"{detail};{enter_detail}" if detail else enter_detail
         return {"backend": result.backend, "committed": result.committed, "detail": detail}
     except Exception as exc:  # noqa: BLE001
         return {"backend": committer.backend_name, "committed": False, "detail": str(exc)}
+
+
+def _merge_stream_text(prev: str, current: str) -> str:
+    if not prev:
+        return current
+    if current.startswith(prev):
+        return current
+    if prev.endswith(current):
+        return prev
+    return prev + current
+
+
+def _stream_display_delta(prev_display: str, next_display: str) -> tuple[str, str]:
+    if next_display == prev_display:
+        return prev_display, ""
+    if next_display.startswith(prev_display):
+        return next_display, next_display[len(prev_display):]
+    if prev_display.startswith(next_display):
+        return prev_display, ""
+    return prev_display, ""
+
+
+@dataclass(slots=True)
+class _StreamingCommitAccumulator:
+    committer: Any
+    accumulated_text: str = ""
+    chunk_count: int = 0
+    any_committed: bool = False
+    last_backend: str = ""
+    last_result: Any | None = None
+    error: str = ""
+
+    def append_chunk(self, chunk: str) -> None:
+        token = str(chunk)
+        if token == "":
+            return
+        self.accumulated_text += token
+        if self.error:
+            return
+        try:
+            result = self.committer.commit(token)
+        except Exception as exc:  # noqa: BLE001
+            self.error = str(exc)
+            return
+        self.chunk_count += 1
+        self.last_result = result
+        self.last_backend = str(getattr(result, "backend", "") or getattr(self.committer, "backend_name", "unknown"))
+        if bool(getattr(result, "committed", False)):
+            self.any_committed = True
+
+    def finalize(self, *, final_text: str, auto_hard_enter: bool) -> dict[str, object]:
+        if self.error and not self.any_committed and final_text.strip():
+            return _commit_text(self.committer, final_text, auto_hard_enter=auto_hard_enter)
+
+        backend = self.last_backend or getattr(self.committer, "backend_name", "unknown")
+        details: list[str] = []
+        if self.chunk_count:
+            details.append(f"streaming_chunks:{self.chunk_count}")
+        if self.error:
+            details.append(f"streaming_error:{self.error}")
+        if auto_hard_enter and self.any_committed and self.last_result is not None:
+            enter_delay_s = paste_to_enter_delay_seconds(self.last_result)
+            if enter_delay_s > 0.0:
+                time.sleep(enter_delay_s)
+            enter_result = send_hard_enter(self.committer)
+            enter_detail = str(getattr(enter_result, "detail", "")).strip()
+            if enter_detail:
+                details.append(enter_detail)
+        detail = ";".join(part for part in details if part) or "streaming_complete"
+        return {
+            "backend": backend,
+            "committed": self.any_committed,
+            "detail": detail,
+        }
 
 
 def _remote_only_commit_info(remote_result: Mapping[str, Any]) -> dict[str, object]:
@@ -372,6 +449,95 @@ def _run_refinement(
     return text, refine_latency_ms
 
 
+def _streaming_commit_enabled(args: argparse.Namespace) -> bool:
+    return bool(getattr(args, "enable_streaming_commit", False))
+
+
+def _run_asr_streaming_commit(
+    *,
+    context: "PostprocessPipelineContext",
+    effective_hotwords: list[str],
+    auto_hard_enter: bool,
+) -> tuple[str, float, dict[str, object]]:
+    if not hasattr(context.provider, "transcribe_file_stream"):
+        raise NotImplementedError("asr_stream_unsupported")
+
+    accumulator = _StreamingCommitAccumulator(context.committer)
+    raw_streamed_text = ""
+    committed_text = ""
+    t0 = time.perf_counter()
+    for chunk in context.provider.transcribe_file_stream(context.audio_path, hotwords=effective_hotwords):
+        raw_streamed_text = _merge_stream_text(raw_streamed_text, str(chunk))
+        normalized_text = context.normalize_final_text(raw_streamed_text)
+        committed_text, delta = _stream_display_delta(committed_text, normalized_text)
+        if delta:
+            accumulator.append_chunk(delta)
+            context.on_state(
+                {
+                    "event": "stream_partial",
+                    "chunk": delta,
+                    "text": committed_text,
+                }
+            )
+    transcribe_latency_ms = (time.perf_counter() - t0) * 1000
+    final_text = committed_text.strip()
+    commit_info = accumulator.finalize(final_text=final_text, auto_hard_enter=auto_hard_enter)
+    return final_text, transcribe_latency_ms, commit_info
+
+
+def _run_refinement_streaming_commit(
+    *,
+    context: "PostprocessPipelineContext",
+    text: str,
+    effective_hotwords: list[str],
+    auto_hard_enter: bool,
+) -> tuple[str, float, dict[str, object]]:
+    refiner = context.refiner
+    assert refiner is not None
+    _sync_refiner_preset(context.args, refiner, context.on_state)
+
+    base_prompt_template = getattr(refiner, "prompt_template", None)
+    protected_terms = _select_refine_protected_terms(text, effective_hotwords)
+    prompt_with_guards = _build_refine_prompt_with_protected_terms(base_prompt_template, protected_terms)
+    if prompt_with_guards != base_prompt_template:
+        refiner.prompt_template = prompt_with_guards
+    if context.args.debug_diagnostics and protected_terms:
+        context.on_state({"event": "log", "message": f"diag refine_protected_terms={protected_terms}"})
+
+    context.on_state({"event": "log", "message": f"ASR 原始输出: {text}"})
+    accumulator = _StreamingCommitAccumulator(context.committer)
+    refined_text = ""
+    committed_text = ""
+    t1 = time.perf_counter()
+    try:
+        for chunk in refiner.refine_stream(text):
+            token = str(chunk)
+            if not token:
+                continue
+            refined_text += token
+            current_text = _apply_refine_postprocess(refined_text, rule=context.refine_postprocess_rule)
+            committed_text, delta = _stream_display_delta(committed_text, current_text)
+            if delta:
+                accumulator.append_chunk(delta)
+            context.on_state(
+                {
+                    "event": "refine_stream_chunk",
+                    "chunk": delta,
+                    "accumulated": committed_text,
+                }
+            )
+    finally:
+        if prompt_with_guards != base_prompt_template:
+            refiner.prompt_template = base_prompt_template
+
+    refine_latency_ms = (time.perf_counter() - t1) * 1000
+    final_text = committed_text.strip()
+    if final_text:
+        context.on_state({"event": "log", "message": f"精炼后输出: {final_text}"})
+    commit_info = accumulator.finalize(final_text=final_text, auto_hard_enter=auto_hard_enter)
+    return final_text, refine_latency_ms, commit_info
+
+
 @dataclass(slots=True)
 class PostprocessPipelineContext:
     args: argparse.Namespace
@@ -454,51 +620,105 @@ def run_postprocess_pipeline(context: PostprocessPipelineContext) -> None:
         except Exception:
             pass
 
+        auto_hard_enter = _resolve_auto_hard_enter(context.args)
+        routing = resolve_remote_paste_routing(context.args)
         t0 = time.perf_counter()
         effective_hotwords = context.resolve_hotwords()
-        asr = context.provider.transcribe_file(context.audio_path, hotwords=effective_hotwords)
-        transcribe_latency_ms = (time.perf_counter() - t0) * 1000
-        raw_text = getattr(asr, "text", "")
-        text = context.normalize_final_text(raw_text)
-
+        raw_text = ""
+        text = ""
+        transcribe_latency_ms = 0.0
         refine_latency_ms = 0.0
-        if context.refiner and text.strip():
-            text, refine_latency_ms = _run_refinement(
-                args=context.args,
-                refiner=context.refiner,
-                text=text,
-                effective_hotwords=effective_hotwords,
-                refine_postprocess_rule=context.refine_postprocess_rule,
-                on_state=context.on_state,
-            )
-            if context.args.debug_diagnostics:
+        commit_info: dict[str, object]
+
+        if routing.commit_local:
+            _apply_target_window(context.committer, context.state)
+
+        streamed_commit = False
+        if routing.commit_local and _streaming_commit_enabled(context.args) and context.refiner is None:
+            try:
+                text, transcribe_latency_ms, commit_info = _run_asr_streaming_commit(
+                    context=context,
+                    effective_hotwords=effective_hotwords,
+                    auto_hard_enter=auto_hard_enter,
+                )
+                raw_text = text
+                streamed_commit = True
+            except Exception as exc:  # noqa: BLE001
+                context.on_state({"event": "log", "message": f"asr_stream_commit_fallback: {type(exc).__name__}: {exc}"})
+
+        if not streamed_commit:
+            asr = context.provider.transcribe_file(context.audio_path, hotwords=effective_hotwords)
+            transcribe_latency_ms = (time.perf_counter() - t0) * 1000
+            raw_text = getattr(asr, "text", "")
+            text = context.normalize_final_text(raw_text)
+
+            if (
+                routing.commit_local
+                and _streaming_commit_enabled(context.args)
+                and context.refiner is not None
+                and text.strip()
+                and context.refine_postprocess_rule == "none"
+                and hasattr(context.refiner, "refine_stream")
+            ):
+                try:
+                    text, refine_latency_ms, commit_info = _run_refinement_streaming_commit(
+                        context=context,
+                        text=text,
+                        effective_hotwords=effective_hotwords,
+                        auto_hard_enter=auto_hard_enter,
+                    )
+                    streamed_commit = True
+                except Exception as exc:  # noqa: BLE001
+                    context.on_state({"event": "log", "message": f"refine_stream_commit_fallback: {type(exc).__name__}: {exc}"})
+            elif (
+                routing.commit_local
+                and _streaming_commit_enabled(context.args)
+                and context.refiner is not None
+                and text.strip()
+                and context.refine_postprocess_rule != "none"
+            ):
                 context.on_state(
                     {
                         "event": "log",
-                        "message": (
-                            f"text_refine original_len={len(raw_text)}"
-                            f" refined_len={len(text)}"
-                            f" latency_ms={refine_latency_ms:.1f}"
-                            f" streaming={getattr(context.args, 'enable_streaming_refine', False)}"
-                        ),
+                        "message": f"refine_stream_commit_skipped: refine_postprocess_rule={context.refine_postprocess_rule}",
                     }
                 )
 
-        auto_hard_enter = _resolve_auto_hard_enter(context.args)
-        routing = resolve_remote_paste_routing(context.args)
-        if routing.commit_local:
-            _apply_target_window(context.committer, context.state)
-            commit_info = _commit_text(
-                context.committer,
-                text,
-                auto_hard_enter=auto_hard_enter,
-            )
-        else:
-            commit_info = {
-                "backend": "remote-paste",
-                "committed": False,
-                "detail": "routed_to_remote_paste",
-            }
+            if not streamed_commit:
+                if context.refiner and text.strip():
+                    text, refine_latency_ms = _run_refinement(
+                        args=context.args,
+                        refiner=context.refiner,
+                        text=text,
+                        effective_hotwords=effective_hotwords,
+                        refine_postprocess_rule=context.refine_postprocess_rule,
+                        on_state=context.on_state,
+                    )
+                    if context.args.debug_diagnostics:
+                        context.on_state(
+                            {
+                                "event": "log",
+                                "message": (
+                                    f"text_refine original_len={len(raw_text)}"
+                                    f" refined_len={len(text)}"
+                                    f" latency_ms={refine_latency_ms:.1f}"
+                                    f" streaming={getattr(context.args, 'enable_streaming_refine', False)}"
+                                ),
+                            }
+                        )
+
+                if routing.commit_local:
+                    commit_info = _commit_text(
+                        context.committer,
+                        text,
+                        auto_hard_enter=auto_hard_enter,
+                    )
+                else:
+                    commit_info = {
+                        "backend": "remote-paste",
+                        "committed": False,
+                        "detail": "routed_to_remote_paste",
+                    }
         remote_result = send_remote_paste_from_args(
             context.args,
             text,
@@ -515,7 +735,7 @@ def run_postprocess_pipeline(context: PostprocessPipelineContext) -> None:
                 {
                     "event": "log",
                     "message": (
-                        "diag finalize source=oneshot"
+                        f"diag finalize source={'streaming' if streamed_commit else 'oneshot'}"
                         f" text_len={len(text)}"
                         f" committed={bool(commit_info.get('committed', False))}"
                         f" commit_backend={commit_info.get('backend', '')}"

@@ -14,6 +14,7 @@ from .exceptions import CommitError
 logger = logging.getLogger(__name__)
 
 _CLIPBOARD_SETTLE_DELAY_S = 0.22
+_PASTE_TO_ENTER_DELAY_S = 0.12
 
 
 @dataclass(slots=True)
@@ -92,18 +93,13 @@ def send_hard_enter(committer: TextCommitter) -> CommitResult:
         if backend in {"none", "stdout"}:
             return CommitResult(backend=backend, committed=False, detail="hard_enter_unsupported_backend")
 
-        # Prefer real keyboard simulation first. Some apps ignore xdotool key events
-        # but accept physical-like key press/release from pynput.
-        if _send_hard_enter_via_pynput():
-            return CommitResult(backend=backend, committed=True, detail="hard_enter_sent:pynput")
-
         if backend == "wtype":
             if not which("wtype"):
                 raise CommitError("wtype not found in PATH")
             _run_command(["wtype", "-k", "Return"])
             return CommitResult(backend=backend, committed=True, detail="hard_enter_sent")
 
-        if backend in {"xdotool", "xdotool-clipboard", "auto"}:
+        if backend in {"xdotool", "xdotool-clipboard", "auto", "auto-fallback", "fallback"}:
             if not which("xdotool"):
                 raise CommitError("xdotool not found in PATH")
             wid = getattr(committer, "target_window_id", None)
@@ -113,9 +109,30 @@ def send_hard_enter(committer: TextCommitter) -> CommitResult:
                 detail += f" wid:{wid}"
             return CommitResult(backend=backend, committed=True, detail=detail)
 
+        # Fall back to a global physical-like keypress only when backend-specific
+        # injection is unavailable. This avoids focus/race issues after paste.
+        if _send_hard_enter_via_pynput():
+            return CommitResult(backend=backend, committed=True, detail="hard_enter_sent:pynput")
+
         return CommitResult(backend=backend, committed=False, detail="hard_enter_unsupported_backend")
     except Exception as exc:  # noqa: BLE001
         return CommitResult(backend=backend, committed=False, detail=f"hard_enter_failed:{exc}")
+
+
+def requires_paste_to_enter_delay(result: CommitResult) -> bool:
+    """Return True when Enter should wait for a preceding paste to settle."""
+    backend = str(getattr(result, "backend", "")).strip().lower()
+    detail = str(getattr(result, "detail", "")).strip().lower()
+    if backend == "xdotool-clipboard":
+        return True
+    return "paste:" in detail
+
+
+def paste_to_enter_delay_seconds(result: CommitResult) -> float:
+    """Delay between paste-style commit and hard Enter to avoid event reordering."""
+    if requires_paste_to_enter_delay(result):
+        return _PASTE_TO_ENTER_DELAY_S
+    return 0.0
 
 
 def _send_hard_enter_via_pynput() -> bool:

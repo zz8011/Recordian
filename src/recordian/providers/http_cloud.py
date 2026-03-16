@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import json
 import subprocess
 from pathlib import Path
 from shutil import which
@@ -156,6 +157,101 @@ class HttpCloudProvider(ASRProvider):
         }
         return raw, audio_path.name, mime_map.get(suffix, "application/octet-stream")
 
+    def _build_headers(self, *, accept: str) -> dict[str, str]:
+        headers = {"Accept": accept}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+        return headers
+
+    def _build_openai_form_data(self, requests_module, headers: dict[str, str], *, hotwords: list[str]) -> dict[str, str]:  # noqa: ANN001
+        form_data: dict[str, str] = {
+            "model": self._resolve_openai_model_name(requests_module, headers),
+        }
+        if self.language and self.language.lower() != "auto":
+            lang_map = {"chinese": "zh", "english": "en"}
+            normalized = lang_map.get(self.language.lower(), self.language)
+            form_data["language"] = normalized
+        if hotwords:
+            form_data["prompt"] = "热词: " + ", ".join(hotwords)
+        return form_data
+
+    def transcribe_file_stream(self, wav_path: Path, *, hotwords: list[str]):
+        if not wav_path.exists():
+            raise FileNotFoundError(wav_path)
+        if not self._is_openai_transcription_endpoint():
+            raise NotImplementedError("streaming transcription only supports OpenAI-compatible endpoints")
+
+        try:
+            import requests
+        except ImportError as exc:
+            raise ImportError(
+                "requests library is required for HttpCloudProvider. Install with: pip install requests"
+            ) from exc
+
+        headers = self._build_headers(accept="text/event-stream")
+        upload_data, upload_name, upload_mime = self._prepare_openai_audio_file(wav_path)
+        form_data = self._build_openai_form_data(requests, headers, hotwords=hotwords)
+        form_data["stream"] = "true"
+        files = {
+            "file": (upload_name, upload_data, upload_mime),
+        }
+        response = requests.post(
+            self.endpoint,
+            data=form_data,
+            files=files,
+            headers=headers,
+            timeout=self.timeout_s,
+            stream=True,
+        )
+        response.raise_for_status()
+
+        started = False
+        buffered = ""
+        asr_tag = "<asr_text>"
+        end_tag = "</asr_text>"
+
+        for raw_line in response.iter_lines(decode_unicode=False):
+            if not raw_line:
+                continue
+            line = raw_line.decode("utf-8", errors="replace").strip()
+            if not line.startswith("data:"):
+                continue
+            payload = line[5:].strip()
+            if payload == "[DONE]":
+                break
+            event = json.loads(payload)
+            choices = event.get("choices")
+            if not isinstance(choices, list) or not choices:
+                continue
+            delta = choices[0].get("delta", {})
+            if not isinstance(delta, dict):
+                continue
+            chunk = str(delta.get("content", ""))
+            if not chunk:
+                continue
+            buffered += chunk
+            if not started:
+                idx = buffered.find(asr_tag)
+                if idx != -1:
+                    started = True
+                    buffered = buffered[idx + len(asr_tag):]
+                elif len(buffered) > 64:
+                    started = True
+            if not started:
+                continue
+            while True:
+                end_idx = buffered.find(end_tag)
+                if end_idx == -1:
+                    break
+                current = buffered[:end_idx]
+                if current:
+                    yield current
+                buffered = buffered[end_idx + len(end_tag):]
+                started = False
+            if started and buffered:
+                yield buffered
+                buffered = ""
+
     @property
     def provider_name(self) -> str:
         return "http-cloud"
@@ -177,25 +273,12 @@ class HttpCloudProvider(ASRProvider):
 
         audio_data = wav_path.read_bytes()
 
-        headers = {
-            "Accept": "application/json",
-        }
-        if self.api_key:
-            headers["Authorization"] = f"Bearer {self.api_key}"
+        headers = self._build_headers(accept="application/json")
 
         if self._is_openai_transcription_endpoint():
             # OpenAI-compatible transcription API (e.g. vLLM /v1/audio/transcriptions)
             upload_data, upload_name, upload_mime = self._prepare_openai_audio_file(wav_path)
-            form_data: dict[str, str] = {
-                "model": self._resolve_openai_model_name(requests, headers),
-            }
-            if self.language and self.language.lower() != "auto":
-                lang_map = {"chinese": "zh", "english": "en"}
-                normalized = lang_map.get(self.language.lower(), self.language)
-                form_data["language"] = normalized
-            if hotwords:
-                # Best-effort prompt injection for providers that support `prompt`.
-                form_data["prompt"] = "热词: " + ", ".join(hotwords)
+            form_data = self._build_openai_form_data(requests, headers, hotwords=hotwords)
 
             files = {
                 "file": (upload_name, upload_data, upload_mime),

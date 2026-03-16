@@ -11,6 +11,7 @@ class SettingEffect(str, Enum):
 
 _SETTING_EFFECTS: dict[str, SettingEffect] = {
     "auto_hard_enter": SettingEffect.IMMEDIATE,
+    "enable_streaming_commit": SettingEffect.RESTART_REQUIRED,
     "refine_preset": SettingEffect.NEXT_SESSION,
     "sound_on_path": SettingEffect.IMMEDIATE,
     "sound_off_path": SettingEffect.IMMEDIATE,

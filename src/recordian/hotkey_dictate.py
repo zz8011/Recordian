@@ -16,7 +16,7 @@ from recordian.runtime_config import apply_namespace_runtime_normalization, norm
 
 from .audio_feedback import default_sound_off_path, default_sound_on_path, play_sound
 from .auto_lexicon import AutoLexicon
-from .linux_commit import get_focused_window_id, resolve_committer, send_hard_enter
+from .linux_commit import get_focused_window_id, paste_to_enter_delay_seconds, resolve_committer, send_hard_enter
 from .linux_dictate import (
     add_dictate_args,
     choose_record_backend,
@@ -82,10 +82,16 @@ from .wake_session_monitor import (
     _adaptive_vad_threshold as _monitor_adaptive_vad_threshold,
 )
 from .wake_session_monitor import (
+    _display_audio_level as _monitor_display_audio_level,
+)
+from .wake_session_monitor import (
     _float_to_pcm16le as _monitor_float_to_pcm16le,
 )
 from .wake_session_monitor import (
     _is_level_speech_frame as _monitor_is_level_speech_frame,
+)
+from .wake_session_monitor import (
+    _is_soft_keepalive_speech_frame as _monitor_is_soft_keepalive_speech_frame,
 )
 from .wake_session_monitor import (
     _owner_gate_level as _monitor_owner_gate_level,
@@ -142,10 +148,12 @@ _apply_target_window = _pipeline_apply_target_window
 _should_skip_owner_gated_asr = _pipeline_should_skip_owner_gated_asr
 _pick_vad_sample_rate = _monitor_pick_vad_sample_rate
 _vad_frame_bytes = _monitor_vad_frame_bytes
+_display_audio_level = _monitor_display_audio_level
 _float_to_pcm16le = _monitor_float_to_pcm16le
 _resample_audio_for_vad = _monitor_resample_audio_for_vad
 _adaptive_vad_threshold = _monitor_adaptive_vad_threshold
 _is_level_speech_frame = _monitor_is_level_speech_frame
+_is_soft_keepalive_speech_frame = _monitor_is_soft_keepalive_speech_frame
 _update_speech_evidence = _monitor_update_speech_evidence
 _owner_gate_level = _monitor_owner_gate_level
 _semantic_text_signal_len = _monitor_semantic_text_signal_len
@@ -593,6 +601,9 @@ def _commit_text(committer: Any, text: str, *, auto_hard_enter: bool = False) ->
         result = committer.commit(stripped)
         detail = str(result.detail)
         if result.committed and auto_hard_enter:
+            enter_delay_s = paste_to_enter_delay_seconds(result)
+            if enter_delay_s > 0.0:
+                time.sleep(enter_delay_s)
             enter_result = send_hard_enter(committer)
             enter_detail = str(enter_result.detail)
             detail = f"{detail};{enter_detail}" if detail else enter_detail
@@ -1151,7 +1162,7 @@ def _parse_args_with_config(parser: argparse.ArgumentParser) -> argparse.Namespa
     try:
         args.wake_semantic_end_silence_s = max(0.2, float(getattr(args, "wake_semantic_end_silence_s", 1.5)))
     except Exception:
-        args.wake_semantic_end_silence_s = 1.0
+        args.wake_semantic_end_silence_s = 1.5
     try:
         args.wake_semantic_min_chars = max(1, int(getattr(args, "wake_semantic_min_chars", 1)))
     except Exception:
