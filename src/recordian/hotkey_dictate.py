@@ -1217,25 +1217,24 @@ def build_ptt_hotkey_handlers(
             on_error({"event": "error", "error": f"{type(exc).__name__}: {exc}"})
             return False
 
-        realtime_final_text = ""
-        realtime_transcribe_latency_ms = 0.0
-        realtime_commit_info: dict[str, object] | None = None
-        if isinstance(realtime_asr_worker, _RealtimeASRWorkerHandle):
-            realtime_asr_worker.thread.join(timeout=5.0)
-            if realtime_asr_worker.error:
-                on_state({"event": "log", "message": f"realtime_asr_failed: {realtime_asr_worker.error}"})
-            else:
-                realtime_final_text = realtime_asr_worker.final_text
-                realtime_transcribe_latency_ms = realtime_asr_worker.transcribe_latency_ms
-                if isinstance(realtime_asr_worker.commit_info, dict):
-                    realtime_commit_info = realtime_asr_worker.commit_info
-
         record_latency_ms = (time.perf_counter() - float(started)) * 1000
         audio_path = Path(audio_path)
         on_state({"event": "processing_started", "record_backend": recorder_backend, "audio_path": str(audio_path), "record_latency_ms": record_latency_ms})
 
         def _worker() -> None:
             try:
+                realtime_final_text = ""
+                realtime_transcribe_latency_ms = 0.0
+                realtime_commit_info: dict[str, object] | None = None
+                if isinstance(realtime_asr_worker, _RealtimeASRWorkerHandle):
+                    realtime_asr_worker.thread.join(timeout=5.0)
+                    if realtime_asr_worker.error:
+                        on_state({"event": "log", "message": f"realtime_asr_failed: {realtime_asr_worker.error}"})
+                    else:
+                        realtime_final_text = realtime_asr_worker.final_text
+                        realtime_transcribe_latency_ms = realtime_asr_worker.transcribe_latency_ms
+                        if isinstance(realtime_asr_worker.commit_info, dict):
+                            realtime_commit_info = realtime_asr_worker.commit_info
                 run_postprocess_pipeline(
                     PostprocessPipelineContext(
                         args=args,
@@ -1728,6 +1727,9 @@ def _main_impl() -> None:
             on_state=_emit,
         )
 
+        def _request_stop_recording() -> None:
+            threading.Thread(target=stop_recording, daemon=True, name="recordian-stop-recording").start()
+
         if bool(getattr(args, "enable_voice_wake", False)):
             runtime_cfg = make_wake_runtime_config(args)
             model_cfg = make_wake_model_config(args)
@@ -1768,7 +1770,7 @@ def _main_impl() -> None:
                 if stop_keys and stop_keys.issubset(pressed) and not stop_pressed["active"] and toggle_recording["active"]:
                     stop_pressed["active"] = True
                     toggle_recording["active"] = False
-                    stop_recording()
+                    _request_stop_recording()
                     return True
 
                 # Toggle start key (only when not a subset of PTT key to avoid double-trigger)
@@ -1804,7 +1806,7 @@ def _main_impl() -> None:
                 if trigger_pressed["active"] and not trigger_keys.issubset(pressed):
                     trigger_pressed["active"] = False
                     if not toggle_recording["active"]:
-                        stop_recording()
+                        _request_stop_recording()
                 if stop_event.is_set():
                     return False
                 return True
@@ -1826,7 +1828,7 @@ def _main_impl() -> None:
                     stop_trigger_pressed["active"] = True
                     if recording["active"]:
                         recording["active"] = False
-                        stop_recording()
+                        _request_stop_recording()
                     return True
                 # Start key
                 if trigger_keys.issubset(pressed) and not trigger_pressed["active"]:
@@ -1840,7 +1842,7 @@ def _main_impl() -> None:
                     elif not stop_keys:
                         # No dedicated stop key: same key toggles off
                         recording["active"] = False
-                        stop_recording()
+                        _request_stop_recording()
                 return True
 
             def _on_release(key: object):
