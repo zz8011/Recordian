@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import ctypes
 import logging
 import os
 import subprocess
 import sys
 import threading
 import time
+from ctypes.util import find_library
 from dataclasses import dataclass
 from shutil import which
 
@@ -14,7 +16,10 @@ from .exceptions import CommitError
 logger = logging.getLogger(__name__)
 
 _CLIPBOARD_SETTLE_DELAY_S = 0.22
-_PASTE_TO_ENTER_DELAY_S = 0.12
+_POST_PASTE_OWNER_HOLD_S = 0.18
+_PASTE_TO_ENTER_DELAY_S = 0.45
+_XTEST_LOOKUP_UNSET = object()
+_XTEST_LIBS: tuple[ctypes.CDLL, ctypes.CDLL] | None | object = _XTEST_LOOKUP_UNSET
 
 
 @dataclass(slots=True)
@@ -106,10 +111,13 @@ def send_hard_enter(committer: TextCommitter) -> CommitResult:
             if not which("xdotool"):
                 raise CommitError("xdotool not found in PATH")
             wid = getattr(target_committer, "target_window_id", None)
-            _xdotool_key("return", window_id=wid if isinstance(wid, int) else None)
+            focused_before = get_focused_window_id()
+            _xdotool_hard_return(window_id=wid if isinstance(wid, int) else None)
             detail = "hard_enter_sent"
             if isinstance(wid, int):
                 detail += f" wid:{wid}"
+            if isinstance(focused_before, int):
+                detail += f" focus_before:{focused_before}"
             return CommitResult(backend=backend, committed=True, detail=detail)
 
         # Fall back to a global physical-like keypress only when backend-specific
@@ -235,6 +243,11 @@ class XdotoolClipboardCommitter(TextCommitter):
 
         try:
             result = send_paste_shortcut(target_window_id=self.target_window_id)
+            # Electron/web editors often request clipboard contents a moment
+            # after Ctrl+V is dispatched. Keep the transient owner alive long
+            # enough for the target app to complete the paste handshake.
+            if clipboard_owner is not None:
+                time.sleep(_POST_PASTE_OWNER_HOLD_S)
             detail = str(result.detail).replace("paste_only:", "paste:", 1)
             if self.clipboard_timeout_ms > 0:
                 detail += f" clear_after:{self.clipboard_timeout_ms}ms"
@@ -798,6 +811,91 @@ def _xdotool_key(shortcut: str, *, window_id: int | None = None) -> None:
         raise CommitError("xdotool not found") from exc
     except subprocess.CalledProcessError as exc:
         raise CommitError(f"xdotool key failed: {exc}") from exc
+
+
+def _xdotool_hard_return(*, window_id: int | None = None) -> None:
+    """Send a press/release Return pair instead of a generic key sequence."""
+    if _send_hard_enter_via_xtest(window_id=window_id):
+        return
+    if window_id is not None and _should_refocus_window(window_id):
+        _xdotool_focus_window(window_id)
+        time.sleep(0.15)
+    try:
+        subprocess.run(["xdotool", "keydown", "--clearmodifiers", "Return"], check=True)
+        subprocess.run(["xdotool", "keyup", "--clearmodifiers", "Return"], check=True)
+    except FileNotFoundError as exc:
+        raise CommitError("xdotool not found") from exc
+    except subprocess.CalledProcessError as exc:
+        raise CommitError(f"xdotool hard return failed: {exc}") from exc
+
+
+def _send_hard_enter_via_xtest(*, window_id: int | None = None) -> bool:
+    """Use X11 XTest to inject Return without spawning a helper process."""
+    libs = _load_xtest_libraries()
+    if libs is None:
+        return False
+    x11, xtst = libs
+    if window_id is not None and _should_refocus_window(window_id):
+        _xdotool_focus_window(window_id)
+        time.sleep(0.06)
+    display = x11.XOpenDisplay(None)
+    if not display:
+        return False
+    try:
+        keysym = x11.XStringToKeysym(b"Return")
+        if not keysym:
+            return False
+        keycode = int(x11.XKeysymToKeycode(display, keysym))
+        if keycode <= 0:
+            return False
+        if xtst.XTestFakeKeyEvent(display, keycode, 1, 0) == 0:
+            return False
+        if xtst.XTestFakeKeyEvent(display, keycode, 0, 0) == 0:
+            return False
+        x11.XFlush(display)
+        return True
+    except Exception:
+        return False
+    finally:
+        try:
+            x11.XCloseDisplay(display)
+        except Exception:
+            pass
+
+
+def _load_xtest_libraries() -> tuple[ctypes.CDLL, ctypes.CDLL] | None:
+    global _XTEST_LIBS
+    if _XTEST_LIBS is not _XTEST_LOOKUP_UNSET:
+        return _XTEST_LIBS if isinstance(_XTEST_LIBS, tuple) else None
+
+    x11_path = find_library("X11")
+    xtst_path = find_library("Xtst")
+    if not x11_path or not xtst_path:
+        _XTEST_LIBS = None
+        return None
+
+    try:
+        x11 = ctypes.CDLL(x11_path)
+        xtst = ctypes.CDLL(xtst_path)
+    except OSError:
+        _XTEST_LIBS = None
+        return None
+
+    x11.XOpenDisplay.argtypes = [ctypes.c_char_p]
+    x11.XOpenDisplay.restype = ctypes.c_void_p
+    x11.XCloseDisplay.argtypes = [ctypes.c_void_p]
+    x11.XCloseDisplay.restype = ctypes.c_int
+    x11.XFlush.argtypes = [ctypes.c_void_p]
+    x11.XFlush.restype = ctypes.c_int
+    x11.XStringToKeysym.argtypes = [ctypes.c_char_p]
+    x11.XStringToKeysym.restype = ctypes.c_ulong
+    x11.XKeysymToKeycode.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
+    x11.XKeysymToKeycode.restype = ctypes.c_uint
+    xtst.XTestFakeKeyEvent.argtypes = [ctypes.c_void_p, ctypes.c_uint, ctypes.c_int, ctypes.c_ulong]
+    xtst.XTestFakeKeyEvent.restype = ctypes.c_int
+
+    _XTEST_LIBS = (x11, xtst)
+    return _XTEST_LIBS
 
 
 def _xdotool_focus_window(window_id: int) -> None:

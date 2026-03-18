@@ -93,8 +93,9 @@ def test_xdotool_clipboard_committer_waits_for_clipboard_settle(monkeypatch):
     committer.commit("测试文本")
 
     assert order == ["paste:ctrl+v", "owner:stop"]
-    assert slept
+    assert len(slept) >= 2
     assert slept[0] >= 0.2
+    assert slept[1] >= 0.15
 
 
 def test_xdotool_clipboard_committer_falls_back_when_no_transient_owner(monkeypatch):
@@ -197,19 +198,21 @@ def test_xdotool_clipboard_multiple_commits_cancel_previous_timer(monkeypatch):
 def test_send_hard_enter_xdotool_clipboard(monkeypatch) -> None:
     from recordian.linux_commit import XdotoolClipboardCommitter, send_hard_enter
 
-    calls: list[tuple[str, int | None]] = []
+    calls: list[int | None] = []
 
-    def _fake_xdotool_key(shortcut: str, *, window_id=None) -> None:
-        calls.append((shortcut, window_id))
+    def _fake_hard_return(*, window_id=None) -> None:
+        calls.append(window_id)
 
     monkeypatch.setattr("recordian.linux_commit._send_hard_enter_via_pynput", lambda: False)
     monkeypatch.setattr("recordian.linux_commit.which", lambda x: "/usr/bin/" + x)
-    monkeypatch.setattr("recordian.linux_commit._xdotool_key", _fake_xdotool_key)
+    monkeypatch.setattr("recordian.linux_commit._xdotool_hard_return", _fake_hard_return)
+    monkeypatch.setattr("recordian.linux_commit.get_focused_window_id", lambda: 12345)
 
     committer = XdotoolClipboardCommitter(target_window_id=12345, clipboard_timeout_ms=0)
     result = send_hard_enter(committer)
     assert result.committed is True
-    assert calls == [("return", 12345)]
+    assert calls == [12345]
+    assert "focus_before:12345" in result.detail
 
 
 def test_send_hard_enter_unsupported_backend() -> None:
@@ -225,12 +228,13 @@ def test_send_hard_enter_prefers_backend_specific_path_over_pynput(monkeypatch) 
 
     called = {"xdotool": False}
 
-    def _fake_xdotool_key(shortcut: str, *, window_id=None) -> None:  # noqa: ANN001
+    def _fake_hard_return(*, window_id=None) -> None:  # noqa: ANN001
         called["xdotool"] = True
 
     monkeypatch.setattr("recordian.linux_commit._send_hard_enter_via_pynput", lambda: True)
     monkeypatch.setattr("recordian.linux_commit.which", lambda x: "/usr/bin/" + x)
-    monkeypatch.setattr("recordian.linux_commit._xdotool_key", _fake_xdotool_key)
+    monkeypatch.setattr("recordian.linux_commit._xdotool_hard_return", _fake_hard_return)
+    monkeypatch.setattr("recordian.linux_commit.get_focused_window_id", lambda: 12345)
 
     committer = XdotoolClipboardCommitter(target_window_id=12345, clipboard_timeout_ms=0)
     result = send_hard_enter(committer)
@@ -242,14 +246,15 @@ def test_send_hard_enter_prefers_backend_specific_path_over_pynput(monkeypatch) 
 def test_send_hard_enter_resolves_wrapped_fallback_committer(monkeypatch) -> None:
     from recordian.linux_commit import CommitterWithFallback, StdoutCommitter, XdotoolClipboardCommitter, send_hard_enter
 
-    calls: list[tuple[str, int | None]] = []
+    calls: list[int | None] = []
 
-    def _fake_xdotool_key(shortcut: str, *, window_id=None) -> None:
-        calls.append((shortcut, window_id))
+    def _fake_hard_return(*, window_id=None) -> None:
+        calls.append(window_id)
 
     monkeypatch.setattr("recordian.linux_commit._send_hard_enter_via_pynput", lambda: False)
     monkeypatch.setattr("recordian.linux_commit.which", lambda x: "/usr/bin/" + x if x == "xdotool" else None)
-    monkeypatch.setattr("recordian.linux_commit._xdotool_key", _fake_xdotool_key)
+    monkeypatch.setattr("recordian.linux_commit._xdotool_hard_return", _fake_hard_return)
+    monkeypatch.setattr("recordian.linux_commit.get_focused_window_id", lambda: 54321)
 
     committer = CommitterWithFallback(
         committers=[
@@ -262,7 +267,47 @@ def test_send_hard_enter_resolves_wrapped_fallback_committer(monkeypatch) -> Non
 
     assert result.committed is True
     assert result.backend == "xdotool-clipboard-fallback"
-    assert calls == [("return", 54321)]
+    assert calls == [54321]
+
+
+def test_xdotool_hard_return_uses_press_release(monkeypatch) -> None:
+    from recordian.linux_commit import _xdotool_hard_return
+
+    calls: list[list[str]] = []
+
+    monkeypatch.setattr("recordian.linux_commit._send_hard_enter_via_xtest", lambda *, window_id=None: False)
+    monkeypatch.setattr("recordian.linux_commit.get_focused_window_id", lambda: 2468)
+    monkeypatch.setattr("recordian.linux_commit.time.sleep", lambda seconds: None)
+    monkeypatch.setattr(
+        "recordian.linux_commit.subprocess.run",
+        lambda cmd, check=True: calls.append(cmd),
+    )
+
+    _xdotool_hard_return(window_id=2468)
+
+    assert calls == [
+        ["xdotool", "keydown", "--clearmodifiers", "Return"],
+        ["xdotool", "keyup", "--clearmodifiers", "Return"],
+    ]
+
+
+def test_xdotool_hard_return_prefers_xtest_when_available(monkeypatch) -> None:
+    from recordian.linux_commit import _xdotool_hard_return
+
+    calls: list[int | None] = []
+
+    monkeypatch.setattr(
+        "recordian.linux_commit._send_hard_enter_via_xtest",
+        lambda *, window_id=None: calls.append(window_id) or True,
+    )
+    monkeypatch.setattr(
+        "recordian.linux_commit.subprocess.run",
+        lambda cmd, check=True: (_ for _ in ()).throw(AssertionError("subprocess should not be called")),
+    )
+
+    _xdotool_hard_return(window_id=2468)
+
+    assert calls == [2468]
 
 
 def test_xdotool_key_skips_redundant_refocus_when_target_already_active(monkeypatch) -> None:
