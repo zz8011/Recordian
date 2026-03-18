@@ -1602,6 +1602,10 @@ def test_voice_wake_owner_gate_inconclusive_falls_back_to_asr(monkeypatch) -> No
     monkeypatch.setattr("recordian.hotkey_dictate.create_provider", lambda args: _FakeProvider())
     monkeypatch.setattr("recordian.hotkey_dictate.get_focused_window_id", lambda: None)
     monkeypatch.setattr("recordian.hotkey_dictate.start_record_process", _fake_start_record_process)
+    monkeypatch.setattr(
+        "recordian.hotkey_dictate.start_wake_session_monitor",
+        lambda context: SimpleNamespace(is_alive=lambda: False),
+    )
     monkeypatch.setattr("recordian.hotkey_dictate.stop_record_process", lambda *args, **kwargs: None)
 
     start_recording, stop_recording, _, _ = build_ptt_hotkey_handlers(
