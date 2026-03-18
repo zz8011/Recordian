@@ -90,19 +90,22 @@ def send_hard_enter(committer: TextCommitter) -> CommitResult:
     """Send a real Enter key event (not text newline) via current commit backend."""
     backend = getattr(committer, "backend_name", "unknown")
     try:
-        if backend in {"none", "stdout"}:
+        target_committer = _resolve_hard_enter_committer(committer)
+        target_backend = str(getattr(target_committer, "backend_name", backend)).strip().lower()
+
+        if target_backend in {"none", "stdout"}:
             return CommitResult(backend=backend, committed=False, detail="hard_enter_unsupported_backend")
 
-        if backend == "wtype":
+        if target_backend == "wtype":
             if not which("wtype"):
                 raise CommitError("wtype not found in PATH")
             _run_command(["wtype", "-k", "Return"])
             return CommitResult(backend=backend, committed=True, detail="hard_enter_sent")
 
-        if backend in {"xdotool", "xdotool-clipboard", "auto", "auto-fallback", "fallback"}:
+        if target_backend.startswith("xdotool") or target_backend in {"auto", "auto-fallback", "fallback"}:
             if not which("xdotool"):
                 raise CommitError("xdotool not found in PATH")
-            wid = getattr(committer, "target_window_id", None)
+            wid = getattr(target_committer, "target_window_id", None)
             _xdotool_key("return", window_id=wid if isinstance(wid, int) else None)
             detail = "hard_enter_sent"
             if isinstance(wid, int):
@@ -117,6 +120,24 @@ def send_hard_enter(committer: TextCommitter) -> CommitResult:
         return CommitResult(backend=backend, committed=False, detail="hard_enter_unsupported_backend")
     except Exception as exc:  # noqa: BLE001
         return CommitResult(backend=backend, committed=False, detail=f"hard_enter_failed:{exc}")
+
+
+def _resolve_hard_enter_committer(committer: TextCommitter) -> TextCommitter:
+    """Pick the concrete committer that should inject Enter for wrapped backends."""
+    committers = getattr(committer, "committers", None)
+    if isinstance(committers, list):
+        for entry in committers:
+            if not isinstance(entry, tuple) or not entry:
+                continue
+            candidate = entry[0]
+            backend = str(getattr(candidate, "backend_name", "")).strip().lower()
+            if backend == "wtype" or backend.startswith("xdotool"):
+                return candidate
+        if committers and isinstance(committers[0], tuple) and committers[0]:
+            first = committers[0][0]
+            if isinstance(first, TextCommitter):
+                return first
+    return committer
 
 
 def requires_paste_to_enter_delay(result: CommitResult) -> bool:
@@ -767,7 +788,7 @@ def _xdotool_key(shortcut: str, *, window_id: int | None = None) -> None:
     """Send a key combination via xdotool."""
     token = shortcut.replace(" ", "").replace("_", "+")
     xdotool_key = token.replace("insert", "Insert")
-    if window_id is not None:
+    if window_id is not None and _should_refocus_window(window_id):
         _xdotool_focus_window(window_id)
         time.sleep(0.15)  # Electron apps need more time to transfer focus to input field
     cmd = ["xdotool", "key", "--clearmodifiers", xdotool_key]
@@ -789,6 +810,18 @@ def _xdotool_focus_window(window_id: int) -> None:
         )
     except (FileNotFoundError, subprocess.CalledProcessError):
         pass
+
+
+def _should_refocus_window(window_id: int) -> bool:
+    """Skip redundant refocus when the target window is already active.
+
+    Electron apps like WeChat can lose the editor-level focus if we refocus the
+    top-level window again right before sending Ctrl+V/Enter.
+    """
+    current = get_focused_window_id()
+    if current is None:
+        return True
+    return current != window_id
 
 def _run_command_with_input(cmd: list[str], text: str) -> None:
     try:

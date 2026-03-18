@@ -239,6 +239,74 @@ def test_send_hard_enter_prefers_backend_specific_path_over_pynput(monkeypatch) 
     assert called["xdotool"] is True
 
 
+def test_send_hard_enter_resolves_wrapped_fallback_committer(monkeypatch) -> None:
+    from recordian.linux_commit import CommitterWithFallback, StdoutCommitter, XdotoolClipboardCommitter, send_hard_enter
+
+    calls: list[tuple[str, int | None]] = []
+
+    def _fake_xdotool_key(shortcut: str, *, window_id=None) -> None:
+        calls.append((shortcut, window_id))
+
+    monkeypatch.setattr("recordian.linux_commit._send_hard_enter_via_pynput", lambda: False)
+    monkeypatch.setattr("recordian.linux_commit.which", lambda x: "/usr/bin/" + x if x == "xdotool" else None)
+    monkeypatch.setattr("recordian.linux_commit._xdotool_key", _fake_xdotool_key)
+
+    committer = CommitterWithFallback(
+        committers=[
+            (XdotoolClipboardCommitter(target_window_id=54321, clipboard_timeout_ms=0), "xdotool-clipboard"),
+            (StdoutCommitter(), "stdout"),
+        ],
+        notify_on_fallback=False,
+    )
+    result = send_hard_enter(committer)
+
+    assert result.committed is True
+    assert result.backend == "xdotool-clipboard-fallback"
+    assert calls == [("return", 54321)]
+
+
+def test_xdotool_key_skips_redundant_refocus_when_target_already_active(monkeypatch) -> None:
+    from recordian.linux_commit import _xdotool_key
+
+    focus_calls: list[int] = []
+    run_calls: list[list[str]] = []
+
+    monkeypatch.setattr("recordian.linux_commit.get_focused_window_id", lambda: 2468)
+    monkeypatch.setattr("recordian.linux_commit._xdotool_focus_window", lambda window_id: focus_calls.append(window_id))
+    monkeypatch.setattr("recordian.linux_commit.time.sleep", lambda seconds: None)
+    monkeypatch.setattr(
+        "recordian.linux_commit.subprocess.run",
+        lambda cmd, check=True: run_calls.append(cmd),
+    )
+
+    _xdotool_key("ctrl+v", window_id=2468)
+
+    assert focus_calls == []
+    assert run_calls == [["xdotool", "key", "--clearmodifiers", "ctrl+v"]]
+
+
+def test_xdotool_key_refocuses_when_target_window_changed(monkeypatch) -> None:
+    from recordian.linux_commit import _xdotool_key
+
+    focus_calls: list[int] = []
+    run_calls: list[list[str]] = []
+    sleep_calls: list[float] = []
+
+    monkeypatch.setattr("recordian.linux_commit.get_focused_window_id", lambda: 1357)
+    monkeypatch.setattr("recordian.linux_commit._xdotool_focus_window", lambda window_id: focus_calls.append(window_id))
+    monkeypatch.setattr("recordian.linux_commit.time.sleep", lambda seconds: sleep_calls.append(seconds))
+    monkeypatch.setattr(
+        "recordian.linux_commit.subprocess.run",
+        lambda cmd, check=True: run_calls.append(cmd),
+    )
+
+    _xdotool_key("ctrl+v", window_id=2468)
+
+    assert focus_calls == [2468]
+    assert sleep_calls == [0.15]
+    assert run_calls == [["xdotool", "key", "--clearmodifiers", "ctrl+v"]]
+
+
 def test_paste_to_enter_delay_seconds_only_for_paste_style_commits() -> None:
     from recordian.linux_commit import CommitResult, paste_to_enter_delay_seconds
 
