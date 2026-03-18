@@ -53,6 +53,13 @@ def _overlay_hide_delay_seconds(overlay: WaveformRenderer, state: str, detail: s
     return 0.0
 
 
+def _next_event_poll_delay_ms(*, handled_events: int) -> int:
+    """Back off tray polling when no backend events are pending."""
+    if handled_events > 0:
+        return 24
+    return 180
+
+
 def _sqlite_backup(src_path: Path, dst_path: Path) -> None:
     """Copy SQLite DB with online backup API (safer than plain file copy for live DB)."""
     src = Path(src_path).expanduser()
@@ -344,17 +351,19 @@ class TrayApp:
         self._start_tray()
         if not self.args.no_auto_start:
             self.backend.start()
-        self.root.after(80, self._poll_events)
+        self.root.after(_next_event_poll_delay_ms(handled_events=0), self._poll_events)
         self.root.mainloop()
 
     def _poll_events(self) -> None:
+        handled_events = 0
         while True:
             try:
                 event = self.events.get_nowait()
             except queue.Empty:
                 break
+            handled_events += 1
             self._handle_event(event)
-        self.root.after(80, self._poll_events)
+        self.root.after(_next_event_poll_delay_ms(handled_events=handled_events), self._poll_events)
 
     def _handle_event(self, event: dict[str, object]) -> None:
         et = str(event.get("event", ""))

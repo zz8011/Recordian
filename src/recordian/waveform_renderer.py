@@ -6,6 +6,20 @@ import time
 import tkinter as tk
 
 
+def desired_tick_interval_seconds(
+    *,
+    state: str,
+    hide_deadline: float | None,
+    active_tick_s: float,
+    idle_tick_s: float,
+) -> float:
+    if state in {"recording", "processing", "error"}:
+        return active_tick_s
+    if hide_deadline is not None:
+        return active_tick_s
+    return idle_tick_s
+
+
 class WaveformRenderer:
     """波形动画渲染器：使用 pyglet/OpenGL shader 渲染音频可视化叠加层"""
 
@@ -13,6 +27,8 @@ class WaveformRenderer:
     ERROR_HIDE_DELAY_S = 1.55
     IDLE_HIDE_DELAY_WITH_DETAIL_S = 1.10
     IDLE_HIDE_DELAY_EMPTY_S = 0.35
+    ACTIVE_TICK_S = 1.0 / 60.0
+    IDLE_TICK_S = 1.0 / 12.0
 
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
@@ -238,6 +254,24 @@ void main() {
             program["u_motion"] = float(motion)
             quad.draw(gl.GL_TRIANGLE_STRIP)
 
+        current_tick_s = self.IDLE_TICK_S
+
+        def _set_tick_interval(interval_s: float) -> None:
+            nonlocal current_tick_s
+            if abs(current_tick_s - interval_s) < 1e-6:
+                return
+            pyglet.clock.unschedule(update)
+            pyglet.clock.schedule_interval(update, interval_s)
+            current_tick_s = interval_s
+
+        def _desired_tick_interval() -> float:
+            return desired_tick_interval_seconds(
+                state=self.state,
+                hide_deadline=self.hide_deadline,
+                active_tick_s=self.ACTIVE_TICK_S,
+                idle_tick_s=self.IDLE_TICK_S,
+            )
+
         def update(dt: float) -> None:
             nonlocal phase
             phase += dt
@@ -304,9 +338,16 @@ void main() {
                 window.set_visible(False)
                 self.hide_deadline = None
 
-        pyglet.clock.schedule_interval(update, 1.0 / 60.0)
+            if window.visible:
+                window.draw(dt)
+
+            _set_tick_interval(_desired_tick_interval())
+
+        pyglet.clock.schedule_interval(update, current_tick_s)
         self._ready.set()
-        pyglet.app.run()
+        # Disable pyglet's default 60 FPS global redraw loop. The overlay draws
+        # on its own adaptive tick so idle CPU actually drops with the slower rate.
+        pyglet.app.run(None)
 
     def set_state(self, state: str, detail: str = "") -> None:
         self._cmd_queue.put(("state", (state, detail)))

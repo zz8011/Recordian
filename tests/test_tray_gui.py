@@ -7,6 +7,7 @@ from recordian.tray_gui import (
     _derive_openai_models_endpoint,
     _export_auto_lexicon_db,
     _format_diagnostic_report,
+    _next_event_poll_delay_ms,
     _hex_with_alpha,
     _import_auto_lexicon_db,
     _load_hotkey_default_config,
@@ -59,6 +60,11 @@ def test_overlay_hide_delay_seconds_matches_renderer_constants() -> None:
     assert _overlay_hide_delay_seconds(overlay, "error", "x") == WaveformRenderer.ERROR_HIDE_DELAY_S
     assert _overlay_hide_delay_seconds(overlay, "idle", "有文字") == WaveformRenderer.IDLE_HIDE_DELAY_WITH_DETAIL_S
     assert _overlay_hide_delay_seconds(overlay, "idle", "") == WaveformRenderer.IDLE_HIDE_DELAY_EMPTY_S
+
+
+def test_next_event_poll_delay_ms_backs_off_when_idle() -> None:
+    assert _next_event_poll_delay_ms(handled_events=0) == 180
+    assert _next_event_poll_delay_ms(handled_events=3) == 24
 
 
 def test_tray_gui_no_mktemp() -> None:

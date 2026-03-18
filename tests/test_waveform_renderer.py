@@ -15,6 +15,34 @@ pytestmark = pytest.mark.skipif(
 )
 
 
+def test_desired_tick_interval_seconds_uses_idle_rate_when_hidden() -> None:
+    from recordian.waveform_renderer import desired_tick_interval_seconds
+
+    assert desired_tick_interval_seconds(
+        state="idle",
+        hide_deadline=None,
+        active_tick_s=1.0 / 60.0,
+        idle_tick_s=1.0 / 12.0,
+    ) == 1.0 / 12.0
+
+
+def test_desired_tick_interval_seconds_uses_active_rate_when_animating() -> None:
+    from recordian.waveform_renderer import desired_tick_interval_seconds
+
+    assert desired_tick_interval_seconds(
+        state="recording",
+        hide_deadline=None,
+        active_tick_s=1.0 / 60.0,
+        idle_tick_s=1.0 / 12.0,
+    ) == 1.0 / 60.0
+    assert desired_tick_interval_seconds(
+        state="idle",
+        hide_deadline=time.time() + 1.0,
+        active_tick_s=1.0 / 60.0,
+        idle_tick_s=1.0 / 12.0,
+    ) == 1.0 / 60.0
+
+
 class TestWaveformRendererInit:
     """测试 WaveformRenderer 初始化和 shader 编译"""
 
