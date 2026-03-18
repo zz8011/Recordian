@@ -2,7 +2,12 @@ import argparse
 import io
 from types import SimpleNamespace
 
-from recordian.wake_session_monitor import WakeSessionMonitorContext, start_wake_session_monitor
+from recordian.wake_session_monitor import (
+    WakeSessionMonitorContext,
+    _effective_wake_auto_stop_silence_s,
+    _should_extend_last_speech_timestamp,
+    start_wake_session_monitor,
+)
 
 
 def test_start_wake_session_monitor_exits_when_monitor_stream_ends() -> None:
@@ -59,3 +64,33 @@ def test_start_wake_session_monitor_exits_when_monitor_stream_ends() -> None:
     assert not thread.is_alive()
     assert state["voice_owner_filter_enabled"] is False
     assert state["voice_owner_active"] is True
+
+
+def test_should_extend_last_speech_timestamp_only_after_speech_started() -> None:
+    assert _should_extend_last_speech_timestamp(
+        speech_detected_raw=False,
+        speech_detected=False,
+        speech_started=False,
+    ) is False
+    assert _should_extend_last_speech_timestamp(
+        speech_detected_raw=True,
+        speech_detected=False,
+        speech_started=False,
+    ) is False
+    assert _should_extend_last_speech_timestamp(
+        speech_detected_raw=True,
+        speech_detected=True,
+        speech_started=False,
+    ) is True
+    assert _should_extend_last_speech_timestamp(
+        speech_detected_raw=True,
+        speech_detected=False,
+        speech_started=True,
+    ) is True
+
+
+def test_effective_wake_auto_stop_silence_respects_backend_floor() -> None:
+    assert _effective_wake_auto_stop_silence_s(0.0) == 1.5
+    assert _effective_wake_auto_stop_silence_s(1.0) == 1.5
+    assert _effective_wake_auto_stop_silence_s(1.5) == 1.5
+    assert _effective_wake_auto_stop_silence_s(2.2) == 2.2

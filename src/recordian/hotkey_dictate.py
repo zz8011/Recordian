@@ -33,7 +33,6 @@ from .linux_dictate import (
     stop_record_process,
 )
 from .linux_notify import Notification, resolve_notifier
-from .remote_paste.client import resolve_remote_paste_routing
 from .postprocess_pipeline import (
     PostprocessPipelineContext,
     run_postprocess_pipeline,
@@ -74,6 +73,7 @@ from .postprocess_pipeline import (
 from .postprocess_pipeline import (
     _text_contains_term as _pipeline_text_contains_term,
 )
+from .remote_paste.client import resolve_remote_paste_routing
 from .runtime_deps import ensure_ffmpeg_available
 from .voice_wake import (
     DEFAULT_WAKE_KEYWORD_THRESHOLD,

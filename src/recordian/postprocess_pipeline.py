@@ -478,7 +478,7 @@ def _streaming_commit_enabled(args: argparse.Namespace) -> bool:
 
 def _run_asr_streaming_commit(
     *,
-    context: "PostprocessPipelineContext",
+    context: PostprocessPipelineContext,
     effective_hotwords: list[str],
     auto_hard_enter: bool,
 ) -> tuple[str, float, dict[str, object]]:
@@ -510,7 +510,7 @@ def _run_asr_streaming_commit(
 
 def _run_refinement_streaming_commit(
     *,
-    context: "PostprocessPipelineContext",
+    context: PostprocessPipelineContext,
     text: str,
     effective_hotwords: list[str],
     auto_hard_enter: bool,

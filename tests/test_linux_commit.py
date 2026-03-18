@@ -138,7 +138,7 @@ def test_clipboard_timeout_negative_value_uses_default(monkeypatch):
 
 
 def test_resolve_streaming_committer_prefers_xdotool_for_clipboard_backend(monkeypatch):
-    from recordian.linux_commit import XDoToolCommitter, XdotoolClipboardCommitter, resolve_streaming_committer
+    from recordian.linux_commit import XdotoolClipboardCommitter, XDoToolCommitter, resolve_streaming_committer
 
     monkeypatch.setattr("recordian.linux_commit.which", lambda x: "/usr/bin/" + x)
 
@@ -244,7 +244,12 @@ def test_send_hard_enter_prefers_backend_specific_path_over_pynput(monkeypatch) 
 
 
 def test_send_hard_enter_resolves_wrapped_fallback_committer(monkeypatch) -> None:
-    from recordian.linux_commit import CommitterWithFallback, StdoutCommitter, XdotoolClipboardCommitter, send_hard_enter
+    from recordian.linux_commit import (
+        CommitterWithFallback,
+        StdoutCommitter,
+        XdotoolClipboardCommitter,
+        send_hard_enter,
+    )
 
     calls: list[int | None] = []
 

@@ -71,7 +71,7 @@ _MONITOR_EOF = object()
 
 
 class _MonitorReader:
-    def __init__(self, owner: "_MonitorFanout", q: "queue.Queue[object]") -> None:
+    def __init__(self, owner: _MonitorFanout, q: queue.Queue[object]) -> None:
         self._owner = owner
         self._queue = q
         self._buffer = bytearray()
@@ -114,13 +114,13 @@ class _MonitorFanout:
         self._source = source
         self._chunk_size = max(1, int(chunk_size))
         self._lock = threading.Lock()
-        self._queues: list["queue.Queue[object]"] = []
+        self._queues: list[queue.Queue[object]] = []
         self._closed = False
         self._thread = threading.Thread(target=self._run, name="recordian-monitor-fanout", daemon=True)
         self._thread.start()
 
     def open_reader(self) -> _MonitorReader:
-        q: "queue.Queue[object]" = queue.Queue()
+        q: queue.Queue[object] = queue.Queue()
         with self._lock:
             if self._closed:
                 q.put(_MONITOR_EOF)
@@ -128,7 +128,7 @@ class _MonitorFanout:
                 self._queues.append(q)
         return _MonitorReader(self, q)
 
-    def remove_reader(self, q: "queue.Queue[object]") -> None:
+    def remove_reader(self, q: queue.Queue[object]) -> None:
         with self._lock:
             if q in self._queues:
                 self._queues.remove(q)

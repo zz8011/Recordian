@@ -73,6 +73,14 @@ def _is_level_speech_frame(*, level: float, rms: float, noise_floor: float) -> b
     return level >= dynamic_level_threshold and rms >= dynamic_rms_threshold
 
 
+def _is_soft_keepalive_speech_frame(*, level: float, rms: float, noise_floor: float) -> bool:
+    """Use a softer threshold to keep an active wake session alive through strict-VAD misses."""
+    floor = max(0.0, noise_floor)
+    dynamic_level_threshold = _adaptive_vad_threshold(0.05, floor * 14.0)
+    dynamic_rms_threshold = max(0.0018, floor * 1.6)
+    return level >= dynamic_level_threshold and rms >= dynamic_rms_threshold
+
+
 def _update_speech_evidence(
     score_s: float,
     *,
@@ -101,6 +109,11 @@ def _owner_gate_level(level: float, *, owner_filter_enabled: bool, owner_active:
     if owner_active:
         return value
     return 0.0
+
+
+def _display_audio_level(level: float) -> float:
+    """Overlay animation should reflect microphone energy, not owner-gate state."""
+    return min(1.0, max(0.0, float(level)))
 
 
 def _semantic_text_signal_len(text: str) -> int:
@@ -174,6 +187,23 @@ def _should_auto_stop_semantic_session(
     if now - last_speech < acoustic_silence:
         return None
     return "semantic_silence"
+
+
+def _should_extend_last_speech_timestamp(
+    *,
+    speech_detected_raw: bool,
+    speech_detected: bool,
+    speech_started: bool,
+) -> bool:
+    """Keep an active wake session alive on intermittent raw speech once speech has started."""
+    if not speech_detected_raw:
+        return False
+    return speech_detected or speech_started
+
+
+def _effective_wake_auto_stop_silence_s(configured_silence_s: float) -> float:
+    """Wake sessions should not auto-stop more aggressively than the backend default."""
+    return max(1.5, max(0.0, float(configured_silence_s)))
 
 
 def _pcm16le_to_f32(data: bytes, *, channels: int = 1) -> list:
@@ -493,11 +523,30 @@ def start_wake_session_monitor(context: WakeSessionMonitorContext) -> threading.
             if semantic_enabled:
                 threading.Thread(target=_semantic_probe_worker, daemon=True).start()
 
-            def _emit_auto_stop(reason: str) -> bool:
+            def _emit_auto_stop(reason: str, *, now_ts: float) -> bool:
                 if bool(context.get_state("voice_auto_stopping")):
                     return False
                 context.set_state("voice_auto_stopping", True)
-                context.on_state({"event": "voice_wake_auto_stop", "reason": reason})
+                try:
+                    last_speech_ts = float(context.get_state("voice_last_speech_ts"))
+                except Exception:
+                    last_speech_ts = 0.0
+                try:
+                    started_ts = float(context.get_state("voice_started_ts"))
+                except Exception:
+                    started_ts = 0.0
+                context.on_state(
+                    {
+                        "event": "voice_wake_auto_stop",
+                        "reason": reason,
+                        "speech_detected": bool(context.get_state("voice_speech_detected")),
+                        "semantic_has_text": bool(context.get_state("voice_semantic_has_text")),
+                        "owner_active": bool(context.get_state("voice_owner_active")),
+                        "owner_seen": bool(context.get_state("voice_owner_seen")),
+                        "since_last_speech_s": max(0.0, float(now_ts) - last_speech_ts),
+                        "session_age_s": max(0.0, float(now_ts) - started_ts),
+                    }
+                )
                 threading.Thread(target=context.stop_recording, daemon=True).start()
                 return True
 
@@ -511,7 +560,9 @@ def start_wake_session_monitor(context: WakeSessionMonitorContext) -> threading.
                 if semantic_enabled:
                     no_speech_timeout_s = max(0.0, float(getattr(context.args, "wake_no_speech_timeout_s", 2.0)))
                     min_speech_s = max(0.0, float(getattr(context.args, "wake_min_speech_s", 0.5)))
-                    acoustic_silence_s = max(0.0, float(getattr(context.args, "wake_auto_stop_silence_s", 1.5)))
+                    acoustic_silence_s = _effective_wake_auto_stop_silence_s(
+                        float(getattr(context.args, "wake_auto_stop_silence_s", 1.5))
+                    )
                     semantic_has_text = bool(context.get_state("voice_semantic_has_text"))
                     semantic_last_ts = float(context.get_state("voice_semantic_last_text_ts"))
                     last_speech_ts = float(context.get_state("voice_last_speech_ts"))
@@ -527,18 +578,20 @@ def start_wake_session_monitor(context: WakeSessionMonitorContext) -> threading.
                         acoustic_silence_s=acoustic_silence_s,
                     )
                     if semantic_reason is not None:
-                        return _emit_auto_stop(semantic_reason)
+                        return _emit_auto_stop(semantic_reason, now_ts=now_ts)
                     return False
                 if not speech_detected:
                     no_speech_timeout_s = max(0.0, float(getattr(context.args, "wake_no_speech_timeout_s", 2.0)))
                     if no_speech_timeout_s > 0 and now_ts - started_ts >= no_speech_timeout_s:
-                        return _emit_auto_stop("no_speech_timeout")
+                        return _emit_auto_stop("no_speech_timeout", now_ts=now_ts)
                     return False
                 last_speech_ts = float(context.get_state("voice_last_speech_ts"))
                 if now_ts - started_ts < max(0.0, float(getattr(context.args, "wake_min_speech_s", 0.5))):
                     return False
 
-                base_silence_s = max(0.0, float(getattr(context.args, "wake_auto_stop_silence_s", 1.5)))
+                base_silence_s = _effective_wake_auto_stop_silence_s(
+                    float(getattr(context.args, "wake_auto_stop_silence_s", 1.5))
+                )
                 owner_filter_enabled_runtime = bool(getattr(context.args, "wake_owner_verify", False))
                 if owner_filter_enabled_runtime:
                     owner_active = bool(context.get_state("voice_owner_active"))
@@ -551,7 +604,7 @@ def start_wake_session_monitor(context: WakeSessionMonitorContext) -> threading.
                     silence_threshold = base_silence_s
                 if now_ts - last_speech_ts < silence_threshold:
                     return False
-                return _emit_auto_stop("silence")
+                return _emit_auto_stop("silence", now_ts=now_ts)
 
             def _process_audio_frame(mono_frame: Any, *, frames: int, sample_rate: int) -> None:
                 nonlocal noise_floor, smoothed_level, vad, vad_init_attempted, vad_log_emitted
@@ -644,12 +697,21 @@ def start_wake_session_monitor(context: WakeSessionMonitorContext) -> threading.
 
                 alpha = 0.28 if level > smoothed_level else 0.12
                 smoothed_level = smoothed_level * (1.0 - alpha) + level * alpha
-                display_level = _owner_gate_level(
+                display_level = _display_audio_level(smoothed_level)
+                gated_level = _owner_gate_level(
                     smoothed_level,
                     owner_filter_enabled=owner_filter_enabled,
                     owner_active=owner_active,
                 )
-                context.on_state({"event": "audio_level", "level": display_level})
+                context.on_state(
+                    {
+                        "event": "audio_level",
+                        "level": display_level,
+                        "raw_level": display_level,
+                        "gated_level": gated_level,
+                        "owner_active": owner_active,
+                    }
+                )
 
                 if bool(context.get_state("voice_session_active")):
                     if use_webrtc_vad and vad is None and not vad_init_attempted:
@@ -702,7 +764,9 @@ def start_wake_session_monitor(context: WakeSessionMonitorContext) -> threading.
                                 speech_detected_raw = True
                     elif _is_level_speech_frame(level=level, rms=rms, noise_floor=noise_floor):
                         speech_detected_raw = True
-                    if owner_filter_enabled and not owner_active:
+                    owner_seen = bool(context.get_state("voice_owner_seen"))
+                    owner_gate_rejected = owner_filter_enabled and not owner_active
+                    if owner_gate_rejected and not owner_seen:
                         speech_detected_raw = False
 
                     block_duration_s = max(0.0, float(frames) / float(sample_rate)) if sample_rate > 0 else 0.0
@@ -713,10 +777,24 @@ def start_wake_session_monitor(context: WakeSessionMonitorContext) -> threading.
                         confirm_s=wake_speech_confirm_s,
                     )
 
-                    if speech_detected:
+                    speech_started = bool(context.get_state("voice_speech_detected")) or bool(
+                        context.get_state("voice_semantic_has_text")
+                    )
+                    soft_keepalive = False
+                    if speech_started and not speech_detected_raw and not owner_gate_rejected:
+                        soft_keepalive = _is_soft_keepalive_speech_frame(
+                            level=level,
+                            rms=rms,
+                            noise_floor=noise_floor,
+                        )
+                    if _should_extend_last_speech_timestamp(
+                        speech_detected_raw=speech_detected_raw,
+                        speech_detected=speech_detected,
+                        speech_started=speech_started,
+                    ) or soft_keepalive:
                         context.set_state("voice_last_speech_ts", now_ts)
-                        if not semantic_enabled:
-                            context.set_state("voice_speech_detected", True)
+                    if speech_detected:
+                        context.set_state("voice_speech_detected", True)
 
             if monitor_stream is not None:
                 frame_bytes = max(1, monitor_channels) * 4
