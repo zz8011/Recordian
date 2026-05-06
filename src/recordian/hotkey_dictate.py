@@ -18,6 +18,7 @@ from __future__ import annotations
 from .arg_parser import (  # noqa: F401
     build_parser,
     parse_hotkey_spec,
+    _expand_key_name,
     _key_to_names,
     _parse_args_with_config,
     _save_runtime_config,
@@ -25,8 +26,49 @@ from .arg_parser import (  # noqa: F401
 from .recording_controller import (  # noqa: F401
     build_hotkey_handlers,
     build_ptt_hotkey_handlers,
+    _commit_text,
+)
+from .arg_parser import DEFAULT_CONFIG_PATH  # noqa: F401
+from .linux_dictate import run_dictate_once  # noqa: F401
+from .realtime_asr import (  # noqa: F401
+    _RealtimeASRWorkerHandle,
+    _start_realtime_asr_worker,
+)
+from .text_cleanup import (  # noqa: F401
+    _normalize_final_text,
+    _optimistic_first_partial,
+    _stable_prefix_delta,
 )
 from .state_manager import RecordingState  # noqa: F401
+from .postprocess_pipeline import (  # noqa: F401
+    _apply_refine_postprocess,
+    _apply_target_window,
+    _build_refine_prompt_with_protected_terms,
+    _cleanup_repeat_lite_text,
+    _cleanup_stutter_text,
+    _coerce_bool,
+    _extract_refine_postprocess_rule,
+    _resolve_auto_hard_enter,
+    _select_refine_protected_terms,
+    _should_skip_owner_gated_asr,
+    _text_contains_term,
+)
+from .wake_session_monitor import (  # noqa: F401
+    _adaptive_vad_threshold,
+    _display_audio_level,
+    _float_to_pcm16le,
+    _is_level_speech_frame,
+    _is_soft_keepalive_speech_frame,
+    _owner_gate_level,
+    _pcm16le_to_f32,
+    _pick_vad_sample_rate,
+    _resample_audio_for_vad,
+    _semantic_text_has_content,
+    _semantic_text_signal_len,
+    _should_auto_stop_semantic_session,
+    _update_speech_evidence,
+    _vad_frame_bytes,
+)
 
 __all__ = [
     "build_parser",
