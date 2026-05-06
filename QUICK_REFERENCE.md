@@ -25,7 +25,7 @@ recordian-tray
   "trigger_mode": "ptt",
   "commit_backend": "auto",
   "asr_provider": "qwen-asr",
-  "qwen_model": "./models/Qwen3-ASR-1.7B",
+  "qwen_model": "./models/Qwen3-ASR-0.6B",
   "enable_text_refine": true,
   "refine_preset": "default",
   "enable_auto_lexicon": true,

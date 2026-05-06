@@ -3,8 +3,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from recordian.models import ASRResult
-from recordian.providers.base import ASRProvider, _estimate_english_ratio
+from recordian.models import ASRResult, ASRSegment, coerce_asr_segments, coerce_asr_timestamps
+from recordian.providers.base import (
+    ASRProvider,
+    ASRProviderCapabilities,
+    _estimate_english_ratio,
+    provider_supports_file_streaming,
+    provider_supports_realtime,
+)
 
 
 class MockASRProvider(ASRProvider):
@@ -37,6 +43,65 @@ class TestASRProvider:
         result = provider.transcribe_file(Path("/tmp/test.wav"), hotwords=[])
         assert isinstance(result, ASRResult)
         assert result.text == "test"
+
+    def test_provider_support_helpers_use_capabilities(self) -> None:
+        class _CapabilityProvider(MockASRProvider):
+            @property
+            def capabilities(self) -> ASRProviderCapabilities:
+                return ASRProviderCapabilities(supports_file_streaming=True, supports_realtime=True)
+
+        provider = _CapabilityProvider()
+        assert provider_supports_file_streaming(provider) is True
+        assert provider_supports_realtime(provider) is True
+
+    def test_provider_support_helpers_fall_back_to_legacy_methods(self) -> None:
+        class _LegacyProvider:
+            def supports_realtime_transcription(self) -> bool:
+                return True
+
+            def transcribe_file_stream(self, wav_path: Path, hotwords: list[str]):  # noqa: ANN001
+                yield "chunk"
+
+        provider = _LegacyProvider()
+        assert provider_supports_file_streaming(provider) is True
+        assert provider_supports_realtime(provider) is True
+
+    def test_asr_result_defaults_keep_text_as_primary_output(self) -> None:
+        result = ASRResult(text="测试文本")
+
+        assert result.raw_text == "测试文本"
+        assert result.normalized_text == "测试文本"
+        assert result.detected_language is None
+        assert result.timestamps == []
+        assert result.segments == []
+
+    def test_asr_result_derives_timestamps_from_segments(self) -> None:
+        result = ASRResult(
+            text="hello",
+            segments=[{"text": "hello", "start": 0, "end": 520, "speaker": "spk-1"}],
+        )
+
+        assert result.timestamps == [(0, 520)]
+        assert result.segments == [
+            ASRSegment(text="hello", start_ms=0, end_ms=520, speaker="spk-1", metadata={}),
+        ]
+
+    def test_coerce_asr_timestamps_accepts_dicts_and_pairs(self) -> None:
+        timestamps = coerce_asr_timestamps(
+            [{"start": 0, "end_ms": 800}, (900, 1200), ["1300", "1500"], "bad"]
+        )
+
+        assert timestamps == [(0, 800), (900, 1200), (1300, 1500)]
+
+    def test_coerce_asr_segments_ignores_invalid_items(self) -> None:
+        segments = coerce_asr_segments(
+            [{"text": "one", "start_ms": 0, "end_ms": 500}, "bad", {"speaker": "spk-2"}]
+        )
+
+        assert segments == [
+            ASRSegment(text="one", start_ms=0, end_ms=500, speaker=None, metadata={}),
+            ASRSegment(text="", start_ms=None, end_ms=None, speaker="spk-2", metadata={}),
+        ]
 
 
 class TestEstimateEnglishRatio:

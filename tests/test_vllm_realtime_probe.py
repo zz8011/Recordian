@@ -47,9 +47,9 @@ def test_build_client_frame_masks_payload() -> None:
 
 
 def test_session_and_commit_event_shape() -> None:
-    assert _build_session_update("Qwen3-ASR-1.7B") == {
+    assert _build_session_update("Qwen3-ASR-0.6B") == {
         "type": "session.update",
-        "model": "Qwen3-ASR-1.7B",
+        "model": "Qwen3-ASR-0.6B",
     }
     assert _build_commit_event(final=False) == {
         "type": "input_audio_buffer.commit",

@@ -60,6 +60,8 @@ _SETTING_EFFECTS: dict[str, SettingEffect] = {
     "refine_api_base": SettingEffect.RESTART_REQUIRED,
     "refine_api_key": SettingEffect.RESTART_REQUIRED,
     "refine_api_model": SettingEffect.RESTART_REQUIRED,
+    "capture_refine_samples": SettingEffect.RESTART_REQUIRED,
+    "capture_refine_samples_path": SettingEffect.RESTART_REQUIRED,
     "warmup": SettingEffect.RESTART_REQUIRED,
     "debug_diagnostics": SettingEffect.RESTART_REQUIRED,
     "wake_prefix": SettingEffect.RESTART_REQUIRED,

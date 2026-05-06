@@ -11,7 +11,7 @@ import time
 import tkinter as tk
 import wave
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -146,6 +146,32 @@ def _fetch_json_url(url: str, *, headers: Mapping[str, str], timeout_s: float) -
     return status, payload
 
 
+def _describe_provider_capabilities(provider: object) -> str:
+    raw = getattr(provider, "capabilities", None)
+    features: list[str] = []
+    if raw is None:
+        return "未知"
+    if bool(getattr(raw, "supports_hotwords", False)):
+        features.append("hotwords")
+    if bool(getattr(raw, "supports_context", False)):
+        features.append("context")
+    if bool(getattr(raw, "supports_language_hint", False)):
+        features.append("language_hint")
+    if bool(getattr(raw, "supports_file_streaming", False)):
+        features.append("file_streaming")
+    if bool(getattr(raw, "supports_realtime", False)):
+        features.append("realtime")
+    return ", ".join(features) if features else "基础识别"
+
+
+def _create_asr_provider_for_diagnostics(config: Mapping[str, Any]) -> object:
+    from argparse import Namespace
+
+    from recordian.linux_dictate import create_provider
+
+    return create_provider(Namespace(**dict(config)))
+
+
 def collect_runtime_diagnostics(
     config: Mapping[str, Any],
     *,
@@ -179,6 +205,12 @@ def collect_runtime_diagnostics(
 
     asr_provider = str(normalized.get("asr_provider", "qwen-asr")).strip() or "qwen-asr"
     _add("ASR 提供方", "info", asr_provider)
+    try:
+        provider = _create_asr_provider_for_diagnostics(normalized)
+    except Exception as exc:  # noqa: BLE001
+        _add("ASR 能力", "warn", f"探测失败: {type(exc).__name__}: {exc}")
+    else:
+        _add("ASR 能力", "info", _describe_provider_capabilities(provider))
 
     if asr_provider == "http-cloud":
         endpoint = str(normalized.get("asr_endpoint", "")).strip()
@@ -265,15 +297,89 @@ def _format_diagnostic_report(rows: list[dict[str, str]]) -> str:
 
 
 @dataclass(slots=True)
+class RecentRunObservation:
+    text: str = ""
+    detected_language: str = ""
+    asr_provider: str = ""
+    asr_path: str = ""
+    asr_capabilities: str = ""
+    record_ms: float = 0.0
+    transcribe_ms: float = 0.0
+    refine_ms: float = 0.0
+
+    @property
+    def total_ms(self) -> float:
+        return self.record_ms + self.transcribe_ms + self.refine_ms
+
+
+@dataclass(slots=True)
 class UiState:
     status: str = "idle"
     detail: str = "Idle"
-    last_text: str = ""
     backend_running: bool = False
-    last_record_ms: float = 0.0
-    last_transcribe_ms: float = 0.0
-    last_refine_ms: float = 0.0
-    last_total_ms: float = 0.0
+    last_run: RecentRunObservation = field(default_factory=RecentRunObservation)
+
+
+def _extract_recent_run_observation(result: object) -> tuple[RecentRunObservation, dict[str, object]]:
+    observation = RecentRunObservation()
+    commit_info: dict[str, object] = {}
+    if not isinstance(result, dict):
+        return observation, commit_info
+
+    observation.text = str(result.get("text", "")).strip()
+    observation.detected_language = str(result.get("detected_language", "")).strip()
+    observation.asr_provider = str(result.get("asr_provider", "")).strip()
+    observation.asr_path = str(result.get("asr_path", "")).strip()
+    observation.asr_capabilities = str(result.get("asr_capabilities", "")).strip()
+    raw_commit = result.get("commit")
+    if isinstance(raw_commit, dict):
+        commit_info = raw_commit
+    observation.record_ms = float(result.get("record_latency_ms", 0.0) or 0.0)
+    observation.transcribe_ms = float(result.get("transcribe_latency_ms", 0.0) or 0.0)
+    observation.refine_ms = float(result.get("refine_latency_ms", 0.0) or 0.0)
+    return observation, commit_info
+
+
+def _format_recent_run_log_suffix(observation: RecentRunObservation) -> str:
+    suffix = ""
+    if observation.detected_language:
+        suffix += f" lang={observation.detected_language}"
+    if observation.asr_provider:
+        suffix += f" provider={observation.asr_provider}"
+    if observation.asr_path:
+        suffix += f" path={observation.asr_path}"
+    return suffix
+
+
+def _status_summary_label(state: UiState) -> str:
+    observation = state.last_run
+    if observation.total_ms > 0:
+        label = f"时间: {observation.total_ms:.0f} ms"
+    else:
+        label = "时间: --"
+    if observation.detected_language:
+        label += f" | 语言: {observation.detected_language}"
+    if observation.asr_path:
+        label += f" | 路径: {observation.asr_path}"
+    return label
+
+
+def _collect_recent_runtime_rows(state: UiState) -> list[dict[str, str]]:
+    observation = state.last_run
+    rows: list[dict[str, str]] = []
+    if observation.asr_path:
+        rows.append({"label": "最近 ASR 路径", "status": "info", "detail": observation.asr_path})
+    if observation.asr_provider:
+        rows.append({"label": "最近 ASR 提供方", "status": "info", "detail": observation.asr_provider})
+    if observation.detected_language:
+        rows.append({"label": "最近识别语言", "status": "info", "detail": observation.detected_language})
+    if observation.asr_capabilities:
+        rows.append({"label": "最近 ASR 能力", "status": "info", "detail": observation.asr_capabilities})
+    if observation.text:
+        rows.append({"label": "最近识别文本", "status": "info", "detail": _truncate(observation.text, 80)})
+    if observation.total_ms > 0:
+        rows.append({"label": "最近耗时", "status": "info", "detail": f"{observation.total_ms:.0f} ms"})
+    return rows
 
 
 def get_logo_path(status: str) -> Path:
@@ -400,7 +506,7 @@ class TrayApp:
         elif et == "stream_partial":
             text = str(event.get("text", "")).strip()
             if text:
-                self.state.last_text = text
+                self.state.last_run.text = text
                 # Keep one-shot UX: do not show streaming words while recording.
                 if self.state.status == "recording":
                     self.state.detail = "Recording..."
@@ -411,7 +517,7 @@ class TrayApp:
         elif et == "realtime_asr_partial":
             text = str(event.get("text", "")).strip()
             if text:
-                self.state.last_text = text
+                self.state.last_run.text = text
                 detail = _truncate(text, 48)
                 self.state.detail = detail
                 if self.state.status == "recording":
@@ -421,7 +527,7 @@ class TrayApp:
         elif et == "refine_stream_chunk":
             text = str(event.get("accumulated", "")).strip()
             if text:
-                self.state.last_text = text
+                self.state.last_run.text = text
                 if self.state.status == "processing":
                     detail = _truncate(text, 48)
                     self.state.detail = detail
@@ -436,43 +542,39 @@ class TrayApp:
             self._schedule_off_cue_from_overlay("processing", detail)
         elif et == "result":
             result = event.get("result")
-            text = ""
-            commit_info: dict[str, object] = {}
-            if isinstance(result, dict):
-                text = str(result.get("text", "")).strip()
-                raw_commit = result.get("commit")
-                if isinstance(raw_commit, dict):
-                    commit_info = raw_commit
-                # Extract performance metrics
-                self.state.last_record_ms = float(result.get("record_latency_ms", 0.0) or 0.0)
-                self.state.last_transcribe_ms = float(result.get("transcribe_latency_ms", 0.0) or 0.0)
-                self.state.last_refine_ms = float(result.get("refine_latency_ms", 0.0) or 0.0)
-                self.state.last_total_ms = self.state.last_record_ms + self.state.last_transcribe_ms + self.state.last_refine_ms
-            self.state.last_text = text
+            observation, commit_info = _extract_recent_run_observation(result)
+            self.state.last_run = observation
             self.state.status = "idle"
             commit_backend = str(commit_info.get("backend", ""))
             commit_detail = str(commit_info.get("detail", ""))
             committed = bool(commit_info.get("committed", False))
-            if text:
+            log_suffix = _format_recent_run_log_suffix(observation)
+            if observation.text:
                 print(
-                    f"result text={text} committed={committed} backend={commit_backend} detail={commit_detail}",
+                    (
+                        f"result text={observation.text} committed={committed} backend={commit_backend} "
+                        f"detail={commit_detail}{log_suffix}"
+                    ),
                     file=sys.stderr,
                     flush=True,
                 )
             else:
                 print(
-                    f"result text=<empty> committed={committed} backend={commit_backend} detail={commit_detail}",
+                    (
+                        f"result text=<empty> committed={committed} backend={commit_backend} "
+                        f"detail={commit_detail}{log_suffix}"
+                    ),
                     file=sys.stderr,
                     flush=True,
                 )
-            if text:
+            if observation.text:
                 if committed:
-                    self.state.detail = _truncate(text, 42)
+                    self.state.detail = _truncate(observation.text, 42)
                 else:
                     detail = str(commit_info.get("detail", "not_committed"))
-                    self.state.detail = _truncate(f"已识别(未上屏): {text}", 42)
+                    self.state.detail = _truncate(f"已识别(未上屏): {observation.text}", 42)
                     self.events.put({"event": "log", "message": f"commit_failed: {detail}"})
-                detail = _truncate(text, 48)
+                detail = _truncate(observation.text, 48)
                 self.overlay.set_state("idle", detail)
                 self._schedule_off_cue_from_overlay("idle", detail)
             else:
@@ -619,14 +721,14 @@ class TrayApp:
 
     def copy_last_text(self) -> None:
         """复制最后识别的文本到剪贴板"""
-        if not self.state.last_text:
+        if not self.state.last_run.text:
             return
         try:
             # 使用 tkinter 剪贴板
             self.root.clipboard_clear()
-            self.root.clipboard_append(self.state.last_text)
+            self.root.clipboard_append(self.state.last_run.text)
             self.root.update()
-            self.events.put({"event": "log", "message": f"已复制: {self.state.last_text[:30]}..."})
+            self.events.put({"event": "log", "message": f"已复制: {self.state.last_run.text[:30]}..."})
         except Exception as e:
             self.events.put({"event": "log", "message": f"复制失败: {e}"})
 
@@ -715,6 +817,7 @@ class TrayApp:
                     backend_running=backend_running,
                     backend_pid=backend_pid,
                 )
+                rows.extend(_collect_recent_runtime_rows(self.state))
                 report = _format_diagnostic_report(rows)
                 status_text = f"最近更新: {time.strftime('%H:%M:%S')}"
             except Exception as exc:  # noqa: BLE001
@@ -770,7 +873,7 @@ class TrayApp:
             name for name in preset_manager.list_presets()
             if name.lower() != "readme" and not name.lower().startswith("asr-")
         ]
-        builtin_order = ["default", "formal", "meeting", "summary", "technical"]
+        builtin_order = ["default", "intent", "formal", "meeting", "summary", "technical"]
         builtin = [name for name in builtin_order if name in names]
         custom = sorted(name for name in names if name not in builtin)
         ordered = builtin + custom
@@ -791,6 +894,7 @@ class TrayApp:
         current_preset = str(config.get("refine_preset", "default")).strip() or "default"
         preset_labels = {
             "default": "默认",
+            "intent": "意图整理",
             "formal": "正式",
             "meeting": "会议",
             "summary": "总结",
@@ -2012,6 +2116,24 @@ class TrayApp:
                 kind="combo",
                 options=("cuda", "cpu", "auto"),
             )
+            row = _add_field(
+                sec_refine,
+                row,
+                key="capture_refine_samples",
+                label="记录精炼样本",
+                value=current.get("capture_refine_samples", False),
+                kind="bool",
+                default_bool=False,
+                hint="每次口述保存一轮 ASR 和二轮精炼结果，便于后续对比调参。",
+            )
+            row = _add_field(
+                sec_refine,
+                row,
+                key="capture_refine_samples_path",
+                label="样本文件路径",
+                value=current.get("capture_refine_samples_path", "~/.local/share/recordian/refine-samples.jsonl"),
+                hint="JSONL 文件；每行一条样本记录。",
+            )
             row = _add_field(sec_refine, row, key="refine_n_gpu_layers", label="llama.cpp GPU 层数", value=current.get("refine_n_gpu_layers", -1))
             row = _add_field(sec_refine, row, key="refine_max_tokens", label="精炼 Max Tokens", value=current.get("refine_max_tokens", 512))
             row = _add_field(
@@ -2904,6 +3026,8 @@ class TrayApp:
                         "refine_api_base": str(_get_value("refine_api_base")).strip(),
                         "refine_api_key": str(_get_value("refine_api_key")).strip(),
                         "refine_api_model": str(_get_value("refine_api_model")).strip(),
+                        "capture_refine_samples": bool(_get_value("capture_refine_samples")),
+                        "capture_refine_samples_path": str(_get_value("capture_refine_samples_path")).strip(),
                         "enable_remote_paste": bool(_get_value("enable_remote_paste")),
                         "remote_paste_host": str(_get_value("remote_paste_host")).strip(),
                         "remote_paste_port": _parse_int_field(
@@ -3159,10 +3283,7 @@ class TrayApp:
         menu = Gtk.Menu()
 
         # 状态栏：仅显示时间
-        if self.state.last_total_ms > 0:
-            time_label = f"时间: {self.state.last_total_ms:.0f} ms"
-        else:
-            time_label = "时间: --"
+        time_label = _status_summary_label(self.state)
         status_item = Gtk.MenuItem(label=time_label)
         status_item.set_sensitive(False)
         menu.append(status_item)
@@ -3215,7 +3336,7 @@ class TrayApp:
         # Copy last text
         copy_text_item = Gtk.MenuItem(label="复制最后识别的文本")
         copy_text_item.connect("activate", lambda _: self.root.after(0, self.copy_last_text))
-        copy_text_item.set_sensitive(bool(self.state.last_text))
+        copy_text_item.set_sensitive(bool(self.state.last_run.text))
         menu.append(copy_text_item)
         self._appindicator_copy_text_item = copy_text_item
 
@@ -3281,10 +3402,7 @@ class TrayApp:
             if hasattr(self, '_glib'):
                 indicator = self.indicator
                 status_item = getattr(self, '_appindicator_status_item', None)
-                if self.state.last_total_ms > 0:
-                    label = f"时间: {self.state.last_total_ms:.0f} ms"
-                else:
-                    label = "时间: --"
+                label = _status_summary_label(self.state)
 
                 def _gtk_update():
                     if status_item is not None:
@@ -3292,7 +3410,7 @@ class TrayApp:
                     # Update copy text item sensitivity
                     copy_text_item = getattr(self, '_appindicator_copy_text_item', None)
                     if copy_text_item is not None:
-                        copy_text_item.set_sensitive(bool(self.state.last_text))
+                        copy_text_item.set_sensitive(bool(self.state.last_run.text))
                     cfg = ConfigManager.load(self.config_path)
                     text_refine_item = getattr(self, "_appindicator_text_refine_item", None)
                     if text_refine_item is not None:

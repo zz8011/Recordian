@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import numpy as np
 
 from recordian.postprocess_pipeline import PostprocessPipelineContext, run_postprocess_pipeline
+from recordian.providers import ASRProviderCapabilities
 
 
 def _base_context(tmp_path: Path) -> tuple[Path, list[dict[str, object]], list[dict[str, object]], list[dict[str, object]]]:
@@ -64,9 +65,12 @@ def test_run_postprocess_pipeline_runs_asr_refine_commit_and_lexicon(tmp_path: P
     audio_path, state_events, result_events, error_events = _base_context(tmp_path)
 
     class _Provider:
+        provider_name = "mock-asr"
+        capabilities = ASRProviderCapabilities(supports_hotwords=True, supports_context=True)
+
         def transcribe_file(self, audio_path: Path, hotwords: list[str]):  # noqa: ANN001
             assert hotwords == ["Recordian", "Docker"]
-            return SimpleNamespace(text="DockerDocker")
+            return SimpleNamespace(text="DockerDocker", detected_language="en")
 
     class _Refiner:
         prompt_template = "请整理文本：{text}"
@@ -128,11 +132,101 @@ def test_run_postprocess_pipeline_runs_asr_refine_commit_and_lexicon(tmp_path: P
     assert result_events
     payload = result_events[0]["result"]
     assert payload["text"] == "整理后的 Docker"
+    assert payload["detected_language"] == "en"
+    assert payload["asr_provider"] == "mock-asr"
+    assert payload["asr_path"] == "oneshot"
+    assert payload["asr_capabilities"] == "hotwords,context"
     assert payload["commit"]["committed"] is True
     assert payload["commit"]["detail"] == "committed:整理后的 Docker"
     assert auto_lexicon.learned == ["整理后的 Docker"]
     assert context.committer.target_window_id == 77
     assert any(event.get("event") == "log" and "ASR 原始输出" in str(event.get("message")) for event in state_events)
+    assert any(
+        event.get("event") == "log"
+        and "diag finalize" in str(event.get("message"))
+        and "asr_provider=mock-asr" in str(event.get("message"))
+        and "detected_language=en" in str(event.get("message"))
+        for event in state_events
+    )
+
+
+def test_run_postprocess_pipeline_captures_refine_samples_jsonl(tmp_path: Path, monkeypatch) -> None:
+    audio_path, state_events, result_events, error_events = _base_context(tmp_path)
+    capture_path = tmp_path / "refine-samples.jsonl"
+
+    class _Provider:
+        def transcribe_file(self, audio_path: Path, hotwords: list[str]):  # noqa: ANN001
+            return SimpleNamespace(text="原始 识别 文本")
+
+    class _Refiner:
+        prompt_template = "请整理文本：{text}"
+        model_name = "mock-refiner"
+
+        def refine(self, text: str) -> str:
+            assert text == "原始 识别 文本"
+            return "整理后的文本"
+
+    class _Committer:
+        backend_name = "stdout"
+        target_window_id = None
+
+        def commit(self, text: str) -> SimpleNamespace:
+            return SimpleNamespace(backend="stdout", committed=True, detail=f"committed:{text}")
+
+    monkeypatch.setattr(
+        "recordian.postprocess_pipeline.read_wav_mono_f32",
+        lambda path: np.array([0.3, -0.2, 0.2], dtype=np.float32),
+    )
+    monkeypatch.setattr(
+        "recordian.postprocess_pipeline.send_remote_paste_from_args",
+        lambda args, text, *, log=None: {"enabled": False},
+    )
+
+    context = PostprocessPipelineContext(
+        args=argparse.Namespace(
+            config_path="",
+            auto_hard_enter=False,
+            debug_diagnostics=True,
+            enable_streaming_refine=False,
+            capture_refine_samples=True,
+            capture_refine_samples_path=str(capture_path),
+            refine_preset="default",
+            refine_provider="local",
+            enable_streaming_commit=False,
+            enable_remote_paste=False,
+        ),
+        audio_path=audio_path,
+        record_backend="ffmpeg-pulse",
+        record_latency_ms=222.0,
+        owner_filter_enabled=False,
+        owner_seen=False,
+        owner_last_score=-1.0,
+        state={},
+        provider=_Provider(),
+        refiner=_Refiner(),
+        committer=_Committer(),
+        auto_lexicon=None,
+        refine_postprocess_rule="none",
+        normalize_final_text=lambda text: str(text).strip(),
+        resolve_hotwords=lambda: [],
+        on_state=state_events.append,
+        on_result=result_events.append,
+        on_error=error_events.append,
+    )
+
+    run_postprocess_pipeline(context)
+
+    assert not error_events
+    assert capture_path.exists()
+    lines = capture_path.read_text(encoding="utf-8").strip().splitlines()
+    assert len(lines) == 1
+    payload = json.loads(lines[0])
+    assert payload["raw_asr_text"] == "原始 识别 文本"
+    assert payload["final_text"] == "整理后的文本"
+    assert payload["refine_applied"] is True
+    assert payload["refine_changed"] is True
+    assert payload["refine_model"] == "mock-refiner"
+    assert any("diag refine_sample_captured=" in str(event.get("message", "")) for event in state_events)
 
 
 def test_run_postprocess_pipeline_reuses_prefetched_asr_text_and_commit(tmp_path: Path, monkeypatch) -> None:
@@ -185,6 +279,7 @@ def test_run_postprocess_pipeline_reuses_prefetched_asr_text_and_commit(tmp_path
         on_result=result_events.append,
         on_error=error_events.append,
         prefetched_asr_text="实时识别成功",
+        prefetched_detected_language="zh",
         prefetched_transcribe_latency_ms=123.0,
         prefetched_commit_info={"backend": "xdotool", "committed": True, "detail": "realtime_chunks:3"},
     )
@@ -194,6 +289,8 @@ def test_run_postprocess_pipeline_reuses_prefetched_asr_text_and_commit(tmp_path
     assert not error_events
     payload = result_events[0]["result"]
     assert payload["text"] == "实时识别成功"
+    assert payload["detected_language"] == "zh"
+    assert payload["asr_path"] == "prefetched"
     assert payload["transcribe_latency_ms"] == 123.0
     assert payload["commit"]["detail"] == "realtime_chunks:3"
 

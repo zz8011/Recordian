@@ -7,7 +7,7 @@
 **服务器 IP**: 192.168.5.225
 
 **提供的服务**:
-- ASR 服务（端口 8000）：Qwen3-ASR-1.7B 语音识别
+- ASR 服务（端口 8000）：Qwen3-ASR-0.6B 语音识别
 - LLM 服务（端口 11434）：Qwen2.5:7b 文本精炼
 
 ## 🚀 快速部署
@@ -25,7 +25,7 @@ sudo ./server/setup_server.sh
 2. 配置 Ollama 监听所有网络接口
 3. 下载 Qwen2.5:7b 模型
 4. 安装 Python 依赖
-5. 下载 Qwen3-ASR-1.7B 模型（可选）
+5. 下载 Qwen3-ASR-0.6B 模型（可选）
 6. 创建并启动 systemd 服务
 
 ### 方式 2：手动部署
@@ -71,14 +71,14 @@ pip install -e .[qwen-asr] flask
 
 ```bash
 pip install modelscope
-modelscope download --model Qwen/Qwen3-ASR-1.7B --local_dir ./models/Qwen3-ASR-1.7B
+modelscope download --model Qwen/Qwen3-ASR-0.6B --local_dir ./models/Qwen3-ASR-0.6B
 ```
 
 #### 步骤 6：启动 ASR 服务
 
 ```bash
 # 手动启动（测试用）
-python server/asr_server.py --host 0.0.0.0 --port 8000 --model ./models/Qwen3-ASR-1.7B
+python server/asr_server.py --host 0.0.0.0 --port 8000 --model ./models/Qwen3-ASR-0.6B
 
 # 或创建 systemd 服务（生产环境）
 sudo cp server/recordian-asr.service /etc/systemd/system/
@@ -174,7 +174,7 @@ curl http://192.168.5.225:11434/api/tags
 
 ### 显存占用
 
-- Qwen3-ASR-1.7B: ~4GB
+- Qwen3-ASR-0.6B: 体积更小，显存占用更低
 - Qwen2.5:7b: ~8GB
 - **总计**: ~12GB 显存
 
@@ -212,7 +212,7 @@ sudo ufw allow from 192.168.5.0/24 to any port 11434
 sudo journalctl -u recordian-asr -n 50
 
 # 检查模型路径
-ls -la ./models/Qwen3-ASR-1.7B
+ls -la ./models/Qwen3-ASR-0.6B
 
 # 检查 GPU
 nvidia-smi
@@ -264,7 +264,7 @@ sudo ufw status
 {
   "text": "识别结果",
   "confidence": 0.95,
-  "model": "Qwen/Qwen3-ASR-1.7B"
+  "model": "Qwen/Qwen3-ASR-0.6B"
 }
 ```
 
@@ -274,7 +274,7 @@ sudo ufw status
 ```json
 {
   "status": "ok",
-  "model": "Qwen/Qwen3-ASR-1.7B",
+  "model": "Qwen/Qwen3-ASR-0.6B",
   "device": "cuda:0"
 }
 ```

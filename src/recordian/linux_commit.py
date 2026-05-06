@@ -17,7 +17,9 @@ logger = logging.getLogger(__name__)
 
 _CLIPBOARD_SETTLE_DELAY_S = 0.22
 _POST_PASTE_OWNER_HOLD_S = 0.18
-_PASTE_TO_ENTER_DELAY_S = 0.45
+_PASTE_TO_ENTER_DELAY_S = 0.12
+_PASTE_TO_ENTER_DELAY_TERMINAL_S = 0.0
+_PASTE_TO_ENTER_DELAY_ELECTRON_S = 0.22
 _XTEST_LOOKUP_UNSET = object()
 _XTEST_LIBS: tuple[ctypes.CDLL, ctypes.CDLL] | None | object = _XTEST_LOOKUP_UNSET
 
@@ -160,8 +162,33 @@ def requires_paste_to_enter_delay(result: CommitResult) -> bool:
 def paste_to_enter_delay_seconds(result: CommitResult) -> float:
     """Delay between paste-style commit and hard Enter to avoid event reordering."""
     if requires_paste_to_enter_delay(result):
+        wid = _extract_window_id_from_detail(str(getattr(result, "detail", "")))
+        if isinstance(wid, int):
+            if _is_terminal_window(wid):
+                return _PASTE_TO_ENTER_DELAY_TERMINAL_S
+            if _is_electron_window(wid):
+                return _PASTE_TO_ENTER_DELAY_ELECTRON_S
         return _PASTE_TO_ENTER_DELAY_S
     return 0.0
+
+
+def _extract_window_id_from_detail(detail: str) -> int | None:
+    token = str(detail or "")
+    for marker in (" wid:", ";wid:"):
+        idx = token.find(marker)
+        if idx < 0:
+            continue
+        start = idx + len(marker)
+        digits: list[str] = []
+        while start < len(token) and token[start].isdigit():
+            digits.append(token[start])
+            start += 1
+        if digits:
+            try:
+                return int("".join(digits))
+            except ValueError:
+                return None
+    return None
 
 
 def _send_hard_enter_via_pynput() -> bool:
@@ -512,6 +539,8 @@ _TERMINAL_WM_CLASSES = {
     "foot",
     "wezterm",
     "hyper",
+    "ghostty",
+    "com.mitchellh.ghostty",
 }
 
 # Known Electron app WM_CLASS names (lowercase).

@@ -56,6 +56,7 @@ class DictateResult:
     transcribe_latency_ms: float
     text: str
     commit: dict[str, object]
+    detected_language: str | None = None
 
 
 @dataclass(slots=True)
@@ -200,8 +201,8 @@ def add_dictate_args(parser: argparse.ArgumentParser) -> None:
         default="qwen-asr",
         help="ASR provider backend",
     )
-    parser.add_argument("--model", default="Qwen/Qwen3-ASR-1.7B")
-    parser.add_argument("--qwen-model", default="", help="Qwen3-ASR model path or name; overrides --model for qwen-asr provider (default: Qwen3-ASR-1.7B)")
+    parser.add_argument("--model", default="Qwen/Qwen3-ASR-0.6B")
+    parser.add_argument("--qwen-model", default="", help="Qwen3-ASR model path or name; overrides --model for qwen-asr provider (default: Qwen3-ASR-0.6B)")
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--hub", default="ms", choices=["ms", "hf"])
     parser.add_argument("--remote-code", default="")
@@ -367,39 +368,7 @@ def choose_record_backend(requested_backend: str, ffmpeg_bin: str | None) -> str
     raise RuntimeError("no recorder available: need ffmpeg(pulse) or arecord")
 
 
-def create_provider(args: argparse.Namespace) -> ASRProvider:
-    asr_provider = getattr(args, "asr_provider", "qwen-asr")
-
-    if asr_provider == "http-cloud":
-        # Use HTTP cloud provider
-        endpoint = getattr(args, "asr_endpoint", "http://127.0.0.1:8000/v1/audio/transcriptions")
-        api_key = str(getattr(args, "asr_api_key", "")).strip() or None
-        timeout_s = getattr(args, "asr_timeout_s", 30)
-        model_name = str(
-            getattr(args, "qwen_model", "")
-            or getattr(args, "model", "Qwen/Qwen3-ASR-1.7B")
-        ).strip() or "Qwen/Qwen3-ASR-1.7B"
-        language = str(getattr(args, "qwen_language", "")).strip()
-        return HttpCloudProvider(
-            endpoint=endpoint,
-            api_key=api_key,
-            timeout_s=timeout_s,
-            model_name=model_name,
-            language=language,
-            realtime_endpoint=str(getattr(args, "asr_realtime_endpoint", "")).strip(),
-        )
-
-    # Default to Qwen ASR provider
-    # --qwen-model takes priority; fall back to --model; last resort: default
-    qwen_model_override = getattr(args, "qwen_model", "")
-    if qwen_model_override:
-        model = qwen_model_override
-    else:
-        model = getattr(args, "model", "Qwen/Qwen3-ASR-1.7B")
-
-    raw_lang = getattr(args, "qwen_language", "Chinese")
-    language = None if raw_lang == "auto" else raw_lang
-
+def _resolve_asr_context(args: argparse.Namespace) -> str:
     # ASR context: merge "asr-*" preset + custom context.
     # Do not fall back to refine presets (default/formal/...) to avoid accidental override.
     asr_context_custom = str(getattr(args, "asr_context", "")).strip()
@@ -416,7 +385,43 @@ def create_provider(args: argparse.Namespace) -> ASRProvider:
             asr_context_preset_text = ""
 
     context_parts = [part for part in (asr_context_preset_text, asr_context_custom) if part.strip()]
-    asr_context = "\n".join(context_parts)
+    return "\n".join(context_parts)
+
+
+def create_provider(args: argparse.Namespace) -> ASRProvider:
+    asr_provider = getattr(args, "asr_provider", "qwen-asr")
+    asr_context = _resolve_asr_context(args)
+
+    if asr_provider == "http-cloud":
+        # Use HTTP cloud provider
+        endpoint = getattr(args, "asr_endpoint", "http://127.0.0.1:8000/v1/audio/transcriptions")
+        api_key = str(getattr(args, "asr_api_key", "")).strip() or None
+        timeout_s = getattr(args, "asr_timeout_s", 30)
+        model_name = str(
+            getattr(args, "qwen_model", "")
+            or getattr(args, "model", "Qwen/Qwen3-ASR-0.6B")
+        ).strip() or "Qwen/Qwen3-ASR-0.6B"
+        language = str(getattr(args, "qwen_language", "")).strip()
+        return HttpCloudProvider(
+            endpoint=endpoint,
+            api_key=api_key,
+            timeout_s=timeout_s,
+            model_name=model_name,
+            language=language,
+            context=asr_context,
+            realtime_endpoint=str(getattr(args, "asr_realtime_endpoint", "")).strip(),
+        )
+
+    # Default to Qwen ASR provider
+    # --qwen-model takes priority; fall back to --model; last resort: default
+    qwen_model_override = getattr(args, "qwen_model", "")
+    if qwen_model_override:
+        model = qwen_model_override
+    else:
+        model = getattr(args, "model", "Qwen/Qwen3-ASR-0.6B")
+
+    raw_lang = getattr(args, "qwen_language", "Chinese")
+    language = None if raw_lang == "auto" else raw_lang
 
     return QwenASRProvider(
         model_name=model,
@@ -572,12 +577,12 @@ def stop_record_process(
 def transcribe_and_commit(
     *,
     args: argparse.Namespace,
-    provider: QwenASRProvider,
+    provider: ASRProvider,
     committer: Any,
     audio_path: Path,
     hotwords: list[str],
     auto_hard_enter: bool = False,
-) -> tuple[str, float, dict[str, object]]:
+) -> tuple[str, float, str | None, dict[str, object]]:
     t1 = time.perf_counter()
     asr = provider.transcribe_file(audio_path, hotwords=hotwords)
     transcribe_latency_ms = (time.perf_counter() - t1) * 1000
@@ -630,7 +635,7 @@ def transcribe_and_commit(
                 "detail": str(remote_result.get("detail", "")).strip() or "remote_paste_failed",
             }
         )
-    return asr.text, transcribe_latency_ms, commit_info
+    return asr.text, transcribe_latency_ms, getattr(asr, "detected_language", None), commit_info
 
 
 def run_dictate_once(
@@ -664,7 +669,7 @@ def run_dictate_once(
             raise RuntimeError(f"record command failed with exit code={code}")
         record_latency_ms = (time.perf_counter() - t0) * 1000
 
-        text, transcribe_latency_ms, commit_info = transcribe_and_commit(
+        text, transcribe_latency_ms, detected_language, commit_info = transcribe_and_commit(
             args=args,
             provider=provider,
             committer=committer,
@@ -680,6 +685,7 @@ def run_dictate_once(
             record_latency_ms=record_latency_ms,
             transcribe_latency_ms=transcribe_latency_ms,
             text=text,
+            detected_language=detected_language,
             commit=commit_info,
         )
 

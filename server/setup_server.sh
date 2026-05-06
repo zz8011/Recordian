@@ -87,7 +87,7 @@ echo ""
 
 # 步骤 5: 下载 ASR 模型
 echo "=== 步骤 5: 检查 ASR 模型 ==="
-ASR_MODEL_PATH="$PROJECT_ROOT/models/Qwen3-ASR-1.7B"
+ASR_MODEL_PATH="$PROJECT_ROOT/models/Qwen3-ASR-0.6B"
 
 if [ -d "$ASR_MODEL_PATH" ]; then
     echo "✅ ASR 模型已存在: $ASR_MODEL_PATH"
@@ -95,13 +95,13 @@ else
     echo "⚠️  ASR 模型不存在，需要下载"
     echo "请运行以下命令下载模型："
     echo "  pip install modelscope"
-    echo "  modelscope download --model Qwen/Qwen3-ASR-1.7B --local_dir $ASR_MODEL_PATH"
+    echo "  modelscope download --model Qwen/Qwen3-ASR-0.6B --local_dir $ASR_MODEL_PATH"
     echo ""
     read -p "是否现在下载？(y/n) " -n 1 -r
     echo
     if [[ $REPLY =~ ^[Yy]$ ]]; then
         pip install modelscope
-        modelscope download --model Qwen/Qwen3-ASR-1.7B --local_dir "$ASR_MODEL_PATH"
+        modelscope download --model Qwen/Qwen3-ASR-0.6B --local_dir "$ASR_MODEL_PATH"
         echo "✅ ASR 模型下载完成"
     else
         echo "⚠️  跳过模型下载，请稍后手动下载"

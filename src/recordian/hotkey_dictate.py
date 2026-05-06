@@ -12,6 +12,7 @@ from tempfile import TemporaryDirectory
 from typing import Any
 
 from recordian.config import ConfigManager
+from recordian.refine_capture import DEFAULT_REFINE_CAPTURE_PATH
 from recordian.runtime_config import apply_namespace_runtime_normalization, normalize_runtime_config
 
 from .audio_feedback import default_sound_off_path, default_sound_on_path, play_sound
@@ -131,6 +132,7 @@ from .wake_session_monitor import (
 from .wake_session_monitor import (
     _vad_frame_bytes as _monitor_vad_frame_bytes,
 )
+from .providers import provider_supports_realtime
 
 DEFAULT_CONFIG_PATH = "~/.config/recordian/hotkey.json"
 
@@ -182,6 +184,7 @@ class RecordingState(enum.Enum):
 class _RealtimeASRWorkerHandle:
     thread: threading.Thread
     final_text: str = ""
+    detected_language: str = ""
     transcribe_latency_ms: float = 0.0
     commit_info: dict[str, object] | None = None
     error: str = ""
@@ -322,7 +325,7 @@ def _start_realtime_asr_worker(
 ) -> _RealtimeASRWorkerHandle | None:
     if not bool(getattr(args, "enable_streaming_commit", False)):
         return None
-    if not hasattr(provider, "supports_realtime_transcription") or not bool(provider.supports_realtime_transcription()):
+    if not provider_supports_realtime(provider):
         return None
 
     reader = open_monitor_stream_reader(record_handle)
@@ -395,6 +398,7 @@ def _start_realtime_asr_worker(
                     last_hypothesis = current_text
             final_result = session.finish()
             worker.final_text = normalize_final_text(final_result.text)
+            worker.detected_language = str(getattr(final_result, "detected_language", "") or "").strip()
             worker.transcribe_latency_ms = session.elapsed_ms
             if accumulator is not None:
                 worker.commit_info = accumulator.finalize(final_text=worker.final_text, auto_hard_enter=auto_hard_enter)
@@ -521,6 +525,17 @@ def build_parser() -> argparse.ArgumentParser:
         action=argparse.BooleanOptionalAction,
         default=False,
         help="Enable streaming output for text refinement (real-time display)",
+    )
+    parser.add_argument(
+        "--capture-refine-samples",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Append pass1/pass2 text pairs into a JSONL file for refinement evaluation",
+    )
+    parser.add_argument(
+        "--capture-refine-samples-path",
+        default=DEFAULT_REFINE_CAPTURE_PATH,
+        help="Output path for captured refinement samples (JSONL)",
     )
     parser.add_argument(
         "--enable-voice-wake",
@@ -1271,6 +1286,7 @@ def build_ptt_hotkey_handlers(
         def _worker() -> None:
             try:
                 realtime_final_text = ""
+                realtime_detected_language = ""
                 realtime_transcribe_latency_ms = 0.0
                 realtime_commit_info: dict[str, object] | None = None
                 if isinstance(realtime_asr_worker, _RealtimeASRWorkerHandle):
@@ -1279,6 +1295,7 @@ def build_ptt_hotkey_handlers(
                         on_state({"event": "log", "message": f"realtime_asr_failed: {realtime_asr_worker.error}"})
                     else:
                         realtime_final_text = realtime_asr_worker.final_text
+                        realtime_detected_language = realtime_asr_worker.detected_language
                         realtime_transcribe_latency_ms = realtime_asr_worker.transcribe_latency_ms
                         if isinstance(realtime_asr_worker.commit_info, dict):
                             realtime_commit_info = realtime_asr_worker.commit_info
@@ -1300,6 +1317,7 @@ def build_ptt_hotkey_handlers(
                         normalize_final_text=_normalize_final_text,
                         resolve_hotwords=_resolve_hotwords,
                         prefetched_asr_text=realtime_final_text,
+                        prefetched_detected_language=realtime_detected_language,
                         prefetched_transcribe_latency_ms=realtime_transcribe_latency_ms,
                         prefetched_commit_info=realtime_commit_info,
                         on_state=on_state,
@@ -1532,6 +1550,8 @@ def _save_runtime_config(args: argparse.Namespace) -> None:
         "refine_api_key": getattr(args, "refine_api_key", ""),
         "refine_api_model": getattr(args, "refine_api_model", "claude-3-5-sonnet-20241022"),
         "enable_streaming_refine": getattr(args, "enable_streaming_refine", False),
+        "capture_refine_samples": getattr(args, "capture_refine_samples", False),
+        "capture_refine_samples_path": getattr(args, "capture_refine_samples_path", DEFAULT_REFINE_CAPTURE_PATH),
         "enable_voice_wake": getattr(args, "enable_voice_wake", False),
         "wake_prefix": wake_runtime.prefixes,
         "wake_name": wake_runtime.names,

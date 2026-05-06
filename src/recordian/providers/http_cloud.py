@@ -2,14 +2,56 @@ from __future__ import annotations
 
 import base64
 import json
+import re
 import subprocess
 import time
 from pathlib import Path
 from shutil import which
 from urllib.parse import urlparse, urlunparse
 
-from ..models import ASRResult
-from .base import ASRProvider, _estimate_english_ratio
+from ..models import ASRResult, coerce_asr_segments, coerce_asr_timestamps
+from .asr_context import ASRContextComposer
+from .base import ASRProvider, ASRProviderCapabilities, _estimate_english_ratio
+
+
+def _hotword_variant_key(token: str) -> str:
+    return re.sub(r"[\s._-]+", "", str(token).casefold())
+
+
+def _hotword_preference_rank(token: str) -> tuple[int, int, str]:
+    text = str(token)
+    compact = re.sub(r"[\s._-]+", "", text)
+    has_upper = any(ch.isalpha() and ch.isupper() for ch in text)
+    has_lower = any(ch.isalpha() and ch.islower() for ch in text)
+    if compact == text and has_upper and has_lower:
+        bucket = 0
+    elif compact == text and has_upper:
+        bucket = 1
+    elif compact == text:
+        bucket = 2
+    else:
+        bucket = 3
+    return (bucket, len(text), text)
+
+
+def _group_hotword_variants(hotwords: list[str]) -> list[tuple[str, list[str]]]:
+    normalized = ASRContextComposer("", max_hotwords=40).normalize_hotwords(hotwords)
+    grouped: dict[str, list[str]] = {}
+    order: list[str] = []
+    for token in normalized:
+        key = _hotword_variant_key(token)
+        if key not in grouped:
+            grouped[key] = []
+            order.append(key)
+        grouped[key].append(token)
+
+    groups: list[tuple[str, list[str]]] = []
+    for key in order:
+        variants = grouped[key]
+        preferred = min(variants, key=_hotword_preference_rank)
+        aliases = [variant for variant in variants if variant != preferred]
+        groups.append((preferred, aliases))
+    return groups
 
 
 class _HttpCloudRealtimeSession:
@@ -99,12 +141,18 @@ class _HttpCloudRealtimeSession:
         response.raise_for_status()
         body = response.json()
         text = str(body.get("text", ""))
+        detected_language = body.get("detected_language", body.get("language"))
+        segments = coerce_asr_segments(body.get("segments"))
+        timestamps = coerce_asr_timestamps(body.get("timestamps"))
         return ASRResult(
             text=text,
             english_ratio=_estimate_english_ratio(text),
             model_name=str(body.get("model", self._model_name)),
+            detected_language=str(detected_language).strip() or None if detected_language is not None else None,
+            timestamps=timestamps,
+            segments=segments,
             metadata={
-                "language": body.get("language"),
+                "detected_language": detected_language,
                 "latency_seconds": body.get("latency_seconds"),
                 "realtime": True,
             },
@@ -140,6 +188,7 @@ class HttpCloudProvider(ASRProvider):
         timeout_s: float = 10.0,
         model_name: str = "",
         language: str = "",
+        context: str = "",
         realtime_endpoint: str = "",
         realtime_chunk_size_sec: float = 0.5,
         realtime_unfixed_chunk_num: int = 4,
@@ -148,14 +197,54 @@ class HttpCloudProvider(ASRProvider):
         self.endpoint = endpoint
         self.api_key = api_key
         self.timeout_s = timeout_s
-        self.model_name = model_name.strip() or "Qwen/Qwen3-ASR-1.7B"
+        self.model_name = model_name.strip() or "Qwen/Qwen3-ASR-0.6B"
         self.language = language.strip()
+        self.context = context.strip()
         self.realtime_endpoint = realtime_endpoint.strip()
         self.realtime_chunk_size_sec = max(0.1, float(realtime_chunk_size_sec))
         self.realtime_unfixed_chunk_num = max(0, int(realtime_unfixed_chunk_num))
         self.realtime_unfixed_token_num = max(0, int(realtime_unfixed_token_num))
         self._resolved_openai_model_name: str | None = None
         self._resolved_realtime_model_name: str | None = None
+
+    @property
+    def capabilities(self) -> ASRProviderCapabilities:
+        return ASRProviderCapabilities(
+            supports_hotwords=True,
+            supports_context=True,
+            supports_language_hint=True,
+            supports_file_streaming=self._is_openai_transcription_endpoint(),
+            supports_realtime=bool(self.realtime_endpoint),
+        )
+
+    def _compose_context(
+        self,
+        hotwords: list[str],
+    ) -> str:
+        grouped = _group_hotword_variants(hotwords)
+        base_context = self.context.strip()
+        if not grouped:
+            return base_context
+
+        canonical_terms = [preferred for preferred, _aliases in grouped]
+        sections: list[str] = []
+        if base_context:
+            sections.append(base_context)
+        sections.append(
+            "请优先按原样输出以下专有名词/产品名，不要替换成同音词：\n"
+            + "\n".join(f"- {term}" for term in canonical_terms)
+        )
+        alias_lines = [
+            f"{', '.join(aliases)} -> {preferred}"
+            for preferred, aliases in grouped
+            if aliases
+        ]
+        if alias_lines:
+            sections.append(
+                "如果听到接近以下说法，也优先归一为这些标准写法：\n"
+                + "\n".join(f"- {line}" for line in alias_lines)
+            )
+        return "\n".join(section.strip() for section in sections if section.strip())
 
     def _is_openai_transcription_endpoint(self) -> bool:
         path = urlparse(self.endpoint).path.lower()
@@ -249,9 +338,6 @@ class HttpCloudProvider(ASRProvider):
 
         return candidates[0]
 
-    def supports_realtime_transcription(self) -> bool:
-        return bool(self.realtime_endpoint.strip())
-
     def start_realtime_session(self, *, hotwords: list[str]):
         try:
             import requests
@@ -259,16 +345,13 @@ class HttpCloudProvider(ASRProvider):
             raise ImportError(
                 "requests library is required for HttpCloudProvider. Install with: pip install requests"
             ) from exc
-        context = ""
-        if hotwords:
-            context = "热词: " + ", ".join(hotwords)
         session = _HttpCloudRealtimeSession(
             base_url=self._resolve_realtime_base_url(),
             api_key=self.api_key,
             timeout_s=self.timeout_s,
             model_name=self._resolve_realtime_model_name(requests),
             language=self.language,
-            context=context,
+            context=self._compose_context(hotwords),
             chunk_size_sec=self.realtime_chunk_size_sec,
             unfixed_chunk_num=self.realtime_unfixed_chunk_num,
             unfixed_token_num=self.realtime_unfixed_token_num,
@@ -371,8 +454,9 @@ class HttpCloudProvider(ASRProvider):
             lang_map = {"chinese": "zh", "english": "en"}
             normalized = lang_map.get(self.language.lower(), self.language)
             form_data["language"] = normalized
-        if hotwords:
-            form_data["prompt"] = "热词: " + ", ".join(hotwords)
+        prompt = self._compose_context(hotwords)
+        if prompt:
+            form_data["prompt"] = prompt
         return form_data
 
     def transcribe_file_stream(self, wav_path: Path, *, hotwords: list[str]):
@@ -488,9 +572,12 @@ class HttpCloudProvider(ASRProvider):
                 timeout=self.timeout_s,
             )
         else:
+            normalized_hotwords = ASRContextComposer(self.context).normalize_hotwords(hotwords)
             payload = {
                 "audio_base64": base64.b64encode(audio_data).decode("utf-8"),
-                "hotwords": hotwords,
+                "hotwords": normalized_hotwords,
+                "context": self.context or None,
+                "language": self.language or None,
             }
             response = requests.post(
                 self.endpoint,
@@ -502,10 +589,16 @@ class HttpCloudProvider(ASRProvider):
         response.raise_for_status()
         data = response.json()
         text = str(data.get("text", ""))
+        detected_language = data.get("detected_language", data.get("language"))
+        segments = coerce_asr_segments(data.get("segments"))
+        timestamps = coerce_asr_timestamps(data.get("timestamps"))
         return ASRResult(
             text=text,
             confidence=data.get("confidence"),
             english_ratio=_estimate_english_ratio(text),
             model_name=str(data.get("model", self.model_name)),
+            detected_language=str(detected_language).strip() or None if detected_language is not None else None,
+            timestamps=timestamps,
+            segments=segments,
             metadata={k: v for k, v in data.items() if k not in {"text", "confidence", "model"}},
         )

@@ -400,7 +400,7 @@ async def run_probe(config: ProbeConfig) -> ProbeResult:
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="vLLM /v1/realtime WAV 探针")
     parser.add_argument("--wav", required=True, help="16kHz PCM16 WAV 文件路径")
-    parser.add_argument("--model", default="Qwen3-ASR-1.7B", help="服务端模型名")
+    parser.add_argument("--model", default="Qwen3-ASR-0.6B", help="服务端模型名")
     parser.add_argument("--url", default="http://127.0.0.1:8000", help="vLLM 服务地址或完整 /v1/realtime URL")
     parser.add_argument("--chunk-ms", type=int, default=320, help="发送分块时长（毫秒）")
     parser.add_argument("--start-after-chunks", type=int, default=1, help="累计多少块后发送首次 commit")

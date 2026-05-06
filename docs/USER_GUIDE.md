@@ -70,7 +70,7 @@ cd Recordian
 ```bash
 source .venv/bin/activate
 pip install modelscope
-modelscope download --model Qwen/Qwen3-ASR-1.7B --local_dir ./models/Qwen3-ASR-1.7B
+modelscope download --model Qwen/Qwen3-ASR-0.6B --local_dir ./models/Qwen3-ASR-0.6B
 ```
 
 ### 3.3 手动安装
@@ -117,7 +117,7 @@ recordian-hotkey-dictate --save-config
 ```bash
 recordian-vllm-realtime-probe \
   --wav /path/to/sample.wav \
-  --model Qwen3-ASR-1.7B \
+  --model Qwen3-ASR-0.6B \
   --url http://127.0.0.1:8000
 ```
 
@@ -136,7 +136,7 @@ recordian-vllm-realtime-probe \
   "record_backend": "auto",
   "commit_backend": "auto",
   "asr_provider": "qwen-asr",
-  "qwen_model": "./models/Qwen3-ASR-1.7B",
+  "qwen_model": "./models/Qwen3-ASR-0.6B",
   "qwen_language": "Chinese",
   "enable_text_refine": true,
   "refine_provider": "local",

@@ -10,6 +10,7 @@ from recordian.setting_effects import (
 def test_setting_effect_for_known_keys() -> None:
     assert setting_effect_for_key("auto_hard_enter") is SettingEffect.IMMEDIATE
     assert setting_effect_for_key("refine_preset") is SettingEffect.NEXT_SESSION
+    assert setting_effect_for_key("capture_refine_samples") is SettingEffect.RESTART_REQUIRED
     assert setting_effect_for_key("enable_voice_wake") is SettingEffect.RESTART_REQUIRED
 
 

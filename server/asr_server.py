@@ -13,7 +13,7 @@ API 端点：
         响应：{"status": "ok", "model": "qwen3-asr-1.7b"}
 
 使用方法：
-    python asr_server.py --host 0.0.0.0 --port 8000 --model Qwen/Qwen3-ASR-1.7B
+    python asr_server.py --host 0.0.0.0 --port 8000 --model Qwen/Qwen3-ASR-0.6B
 """
 
 from __future__ import annotations
@@ -39,6 +39,33 @@ app = Flask(__name__)
 # 全局变量：ASR 模型
 asr_model = None
 model_name = None
+
+
+def _normalize_hotwords(hotwords: object) -> list[str]:
+    if not isinstance(hotwords, list):
+        return []
+
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for raw in hotwords:
+        token = str(raw).strip()
+        if not token or token in seen:
+            continue
+        seen.add(token)
+        normalized.append(token)
+    return normalized
+
+
+def _compose_context(*, context: object, hotwords: object) -> str:
+    base_context = str(context or "").strip()
+    normalized_hotwords = _normalize_hotwords(hotwords)
+    if not normalized_hotwords:
+        return base_context
+
+    hotword_hint = "热词: " + ", ".join(normalized_hotwords)
+    if not base_context:
+        return hotword_hint
+    return f"{base_context}\n{hotword_hint}"
 
 
 def load_asr_model(model_path: str, device: str = "cuda:0") -> None:
@@ -106,7 +133,10 @@ def transcribe():
         if not audio_base64:
             return jsonify({"error": "Missing audio_base64"}), 400
 
-        hotwords = data.get("hotwords", [])
+        hotwords = _normalize_hotwords(data.get("hotwords", []))
+        context = _compose_context(context=data.get("context", ""), hotwords=hotwords)
+        raw_language = data.get("language")
+        language = str(raw_language).strip() or None if raw_language is not None else None
 
         # 解码音频
         try:
@@ -121,11 +151,17 @@ def transcribe():
 
         try:
             # 识别
-            logger.info(f"Transcribing audio: {len(audio_data)} bytes")
+            logger.info(
+                "Transcribing audio: %s bytes hotwords=%s context_len=%s language=%s",
+                len(audio_data),
+                hotwords,
+                len(context),
+                language or "auto",
+            )
             results = asr_model.transcribe(
                 audio=temp_path,
-                context="",
-                language=None,
+                context=context,
+                language=language,
                 return_time_stamps=False,
             )
 
@@ -138,6 +174,9 @@ def transcribe():
                 "text": text,
                 "confidence": 0.95,  # Qwen3-ASR 不提供置信度
                 "model": model_name,
+                "applied_hotwords": hotwords,
+                "applied_context": context,
+                "requested_language": language,
             })
 
         finally:
@@ -167,8 +206,8 @@ def main():
     )
     parser.add_argument(
         "--model",
-        default="Qwen/Qwen3-ASR-1.7B",
-        help="ASR model path (default: Qwen/Qwen3-ASR-1.7B)",
+        default="Qwen/Qwen3-ASR-0.6B",
+        help="ASR model path (default: Qwen/Qwen3-ASR-0.6B)",
     )
     parser.add_argument(
         "--device",

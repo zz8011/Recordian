@@ -3,32 +3,12 @@ from __future__ import annotations
 from pathlib import Path
 
 from ..models import ASRResult
-from .base import ASRProvider, _estimate_english_ratio
+from .asr_context import ASRContextComposer
+from .base import ASRProvider, ASRProviderCapabilities, _estimate_english_ratio
 
 
 def _compose_qwen_context(base_context: str, hotwords: list[str], *, max_hotwords: int = 40) -> str:
-    base = (base_context or "").strip()
-    if not hotwords:
-        return base
-
-    deduped: list[str] = []
-    seen: set[str] = set()
-    for raw in hotwords:
-        token = str(raw).strip()
-        if not token or token in seen:
-            continue
-        seen.add(token)
-        deduped.append(token)
-        if len(deduped) >= max(0, int(max_hotwords)):
-            break
-
-    if not deduped:
-        return base
-
-    hotword_hint = "热词参考: " + "、".join(deduped)
-    if not base:
-        return hotword_hint
-    return f"{base}\n{hotword_hint}"
+    return ASRContextComposer(base_context, max_hotwords=max_hotwords).compose_text(hotwords)
 
 
 class QwenASRProvider(ASRProvider):
@@ -62,6 +42,14 @@ class QwenASRProvider(ASRProvider):
     @property
     def provider_name(self) -> str:
         return f"qwen-asr:{self.model_name}"
+
+    @property
+    def capabilities(self) -> ASRProviderCapabilities:
+        return ASRProviderCapabilities(
+            supports_hotwords=True,
+            supports_context=True,
+            supports_language_hint=True,
+        )
 
     def _lazy_load(self) -> None:
         if self._model is not None:
@@ -165,7 +153,7 @@ class QwenASRProvider(ASRProvider):
         vad_temp_file = None if processed_audio == str(wav_path) else processed_audio
 
         try:
-            context = _compose_qwen_context(self.context, hotwords)
+            context = ASRContextComposer(self.context).compose_text(hotwords)
             results = self._model.transcribe(
                 audio=processed_audio,
                 context=context,
@@ -175,15 +163,17 @@ class QwenASRProvider(ASRProvider):
 
             result = results[0]
             text = (result.text or "").strip()
+            detected_language = getattr(result, "language", None)
             metadata: dict[str, object] = {"source": "qwen_asr"}
-            if hasattr(result, "language"):
-                metadata["detected_language"] = result.language
+            if detected_language:
+                metadata["detected_language"] = detected_language
 
             return ASRResult(
                 text=text,
                 confidence=None,
                 english_ratio=_estimate_english_ratio(text),
                 model_name=self.model_name,
+                detected_language=str(detected_language).strip() or None if detected_language is not None else None,
                 metadata=metadata,
             )
         finally:

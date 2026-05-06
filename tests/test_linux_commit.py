@@ -495,6 +495,24 @@ def test_is_terminal_window_detects_gnome_terminal(monkeypatch):
     assert _is_terminal_window(12345) is True
 
 
+def test_is_terminal_window_detects_ghostty(monkeypatch):
+    """测试检测 Ghostty"""
+    from recordian.linux_commit import _is_terminal_window
+
+    def _fake_run(cmd, **kwargs):
+        result = Mock()
+        result.stdout = 'WM_CLASS(STRING) = "ghostty", "com.mitchellh.ghostty"'
+        result.returncode = 0
+        return result
+
+    monkeypatch.setattr("recordian.linux_commit.which", lambda x: "/usr/bin/" + x)
+    monkeypatch.setattr("subprocess.run", _fake_run)
+
+    linux_commit._WINDOW_DETECTION_CACHE.clear()
+
+    assert _is_terminal_window(12345) is True
+
+
 def test_is_terminal_window_rejects_browser(monkeypatch):
     """测试非终端应用返回 False"""
     from recordian.linux_commit import _is_terminal_window
@@ -511,6 +529,25 @@ def test_is_terminal_window_rejects_browser(monkeypatch):
     linux_commit._WINDOW_DETECTION_CACHE.clear()
 
     assert _is_terminal_window(12345) is False
+
+
+def test_send_paste_shortcut_uses_ctrl_shift_v_for_ghostty(monkeypatch):
+    from recordian.linux_commit import send_paste_shortcut
+
+    calls: list[tuple[str, int | None]] = []
+
+    monkeypatch.setattr("recordian.linux_commit.which", lambda x: "/usr/bin/" + x)
+    monkeypatch.setattr("recordian.linux_commit._is_terminal_window", lambda wid: wid == 12345)
+    monkeypatch.setattr(
+        "recordian.linux_commit._xdotool_key",
+        lambda shortcut, *, window_id=None: calls.append((shortcut, window_id)),
+    )
+
+    result = send_paste_shortcut(target_window_id=12345)
+
+    assert result.committed is True
+    assert result.detail == "paste_only:ctrl+shift+v wid:12345"
+    assert calls == [("ctrl+shift+v", 12345)]
 
 
 # ============================================================================

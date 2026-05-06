@@ -10,6 +10,8 @@ from typing import Any
 
 from .audio import read_wav_mono_f32
 from .linux_commit import paste_to_enter_delay_seconds, resolve_streaming_committer, send_hard_enter
+from .providers import provider_supports_file_streaming, provider_supports_realtime
+from .refine_capture import append_refine_sample, resolve_refine_capture_path
 from .remote_paste.client import resolve_remote_paste_routing, send_remote_paste_from_args
 
 EventCallback = Callable[[dict[str, object]], None]
@@ -386,6 +388,10 @@ def _emit_result(
     transcribe_latency_ms: float,
     refine_latency_ms: float,
     text: str,
+    detected_language: str,
+    asr_provider: str,
+    asr_path: str,
+    asr_capabilities: str,
     commit: dict[str, object],
 ) -> None:
     on_result(
@@ -399,10 +405,86 @@ def _emit_result(
                 "transcribe_latency_ms": transcribe_latency_ms,
                 "refine_latency_ms": refine_latency_ms,
                 "text": text,
+                "detected_language": detected_language,
+                "asr_provider": asr_provider,
+                "asr_path": asr_path,
+                "asr_capabilities": asr_capabilities,
                 "commit": commit,
             },
         }
     )
+
+
+def _describe_asr_provider(provider: object) -> str:
+    name = str(getattr(provider, "provider_name", "")).strip()
+    if name:
+        return name
+    return type(provider).__name__
+
+
+def _describe_asr_capabilities(provider: object) -> str:
+    capabilities = getattr(provider, "capabilities", None)
+    labels: list[str] = []
+    if bool(getattr(capabilities, "supports_hotwords", False)):
+        labels.append("hotwords")
+    if bool(getattr(capabilities, "supports_context", False)):
+        labels.append("context")
+    if bool(getattr(capabilities, "supports_language_hint", False)):
+        labels.append("language_hint")
+    if provider_supports_file_streaming(provider):
+        labels.append("file_streaming")
+    if provider_supports_realtime(provider):
+        labels.append("realtime")
+    if not labels:
+        return "basic"
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for label in labels:
+        if label in seen:
+            continue
+        seen.add(label)
+        deduped.append(label)
+    return ",".join(deduped)
+
+
+def _capture_refine_sample(
+    *,
+    args: argparse.Namespace,
+    audio_path: Path,
+    record_backend: str,
+    raw_text: str,
+    final_text: str,
+    refiner: Any | None,
+    transcribe_latency_ms: float,
+    refine_latency_ms: float,
+    commit_info: dict[str, object],
+    on_state: EventCallback,
+) -> None:
+    if not bool(getattr(args, "capture_refine_samples", False)):
+        return
+    if not str(raw_text).strip() and not str(final_text).strip():
+        return
+
+    output_path = resolve_refine_capture_path(
+        getattr(args, "capture_refine_samples_path", "")
+    )
+    append_refine_sample(
+        output_path=output_path,
+        audio_path=audio_path,
+        raw_asr_text=raw_text,
+        final_text=final_text,
+        refine_applied=refiner is not None and bool(str(raw_text).strip()),
+        refine_changed=str(raw_text).strip() != str(final_text).strip(),
+        refine_preset=str(getattr(args, "refine_preset", "default")).strip() or "default",
+        refine_provider=str(getattr(args, "refine_provider", "")).strip(),
+        refine_model=str(getattr(refiner, "model_name", "") or getattr(refiner, "model", "")).strip(),
+        record_backend=record_backend,
+        transcribe_latency_ms=transcribe_latency_ms,
+        refine_latency_ms=refine_latency_ms,
+        commit_info=commit_info,
+    )
+    if getattr(args, "debug_diagnostics", False):
+        on_state({"event": "log", "message": f"diag refine_sample_captured={output_path}"})
 
 
 def _sync_refiner_preset(args: argparse.Namespace, refiner: Any, on_state: EventCallback) -> None:
@@ -482,7 +564,7 @@ def _run_asr_streaming_commit(
     effective_hotwords: list[str],
     auto_hard_enter: bool,
 ) -> tuple[str, float, dict[str, object]]:
-    if not hasattr(context.provider, "transcribe_file_stream"):
+    if not provider_supports_file_streaming(context.provider):
         raise NotImplementedError("asr_stream_unsupported")
 
     accumulator = _StreamingCommitAccumulator(resolve_streaming_committer(context.committer))
@@ -578,6 +660,7 @@ class PostprocessPipelineContext:
     on_result: EventCallback
     on_error: EventCallback
     prefetched_asr_text: str = ""
+    prefetched_detected_language: str = ""
     prefetched_transcribe_latency_ms: float = 0.0
     prefetched_commit_info: dict[str, object] | None = None
 
@@ -606,6 +689,10 @@ def run_postprocess_pipeline(context: PostprocessPipelineContext) -> None:
                 transcribe_latency_ms=0.0,
                 refine_latency_ms=0.0,
                 text="",
+                detected_language="",
+                asr_provider=_describe_asr_provider(context.provider),
+                asr_path="owner_gate_skipped",
+                asr_capabilities=_describe_asr_capabilities(context.provider),
                 commit={
                     "backend": "none",
                     "committed": False,
@@ -636,6 +723,10 @@ def run_postprocess_pipeline(context: PostprocessPipelineContext) -> None:
                     transcribe_latency_ms=0.0,
                     refine_latency_ms=0.0,
                     text="",
+                    detected_language="",
+                    asr_provider=_describe_asr_provider(context.provider),
+                    asr_path="silence_skipped",
+                    asr_capabilities=_describe_asr_capabilities(context.provider),
                     commit={"backend": "none", "committed": False, "detail": "silence_skipped"},
                 )
                 return
@@ -648,9 +739,13 @@ def run_postprocess_pipeline(context: PostprocessPipelineContext) -> None:
         effective_hotwords = context.resolve_hotwords()
         raw_text = ""
         text = ""
+        detected_language = ""
         transcribe_latency_ms = 0.0
         refine_latency_ms = 0.0
         commit_info: dict[str, object]
+        asr_path = "oneshot"
+        asr_provider = _describe_asr_provider(context.provider)
+        asr_capabilities = _describe_asr_capabilities(context.provider)
 
         if routing.commit_local:
             _apply_target_window(context.committer, context.state)
@@ -665,19 +760,31 @@ def run_postprocess_pipeline(context: PostprocessPipelineContext) -> None:
                 )
                 raw_text = text
                 streamed_commit = True
+                asr_path = "streaming_commit"
             except Exception as exc:  # noqa: BLE001
-                context.on_state({"event": "log", "message": f"asr_stream_commit_fallback: {type(exc).__name__}: {exc}"})
+                context.on_state(
+                    {
+                        "event": "log",
+                        "message": (
+                            f"asr_stream_commit_fallback: {type(exc).__name__}: {exc} "
+                            f"provider={asr_provider} caps={asr_capabilities}"
+                        ),
+                    }
+                )
 
         if not streamed_commit:
             prefetched_text = str(getattr(context, "prefetched_asr_text", "") or "")
             if prefetched_text.strip():
                 raw_text = prefetched_text
                 text = context.normalize_final_text(raw_text)
+                detected_language = str(getattr(context, "prefetched_detected_language", "") or "").strip()
                 transcribe_latency_ms = float(getattr(context, "prefetched_transcribe_latency_ms", 0.0) or 0.0)
+                asr_path = "prefetched"
             else:
                 asr = context.provider.transcribe_file(context.audio_path, hotwords=effective_hotwords)
                 transcribe_latency_ms = (time.perf_counter() - t0) * 1000
                 raw_text = getattr(asr, "text", "")
+                detected_language = str(getattr(asr, "detected_language", "") or "").strip()
                 text = context.normalize_final_text(raw_text)
 
             if (
@@ -697,7 +804,15 @@ def run_postprocess_pipeline(context: PostprocessPipelineContext) -> None:
                     )
                     streamed_commit = True
                 except Exception as exc:  # noqa: BLE001
-                    context.on_state({"event": "log", "message": f"refine_stream_commit_fallback: {type(exc).__name__}: {exc}"})
+                    context.on_state(
+                        {
+                            "event": "log",
+                            "message": (
+                                f"refine_stream_commit_fallback: {type(exc).__name__}: {exc} "
+                                f"provider={asr_provider} caps={asr_capabilities}"
+                            ),
+                        }
+                    )
 
             if not streamed_commit:
                 if context.refiner and text.strip():
@@ -754,6 +869,10 @@ def run_postprocess_pipeline(context: PostprocessPipelineContext) -> None:
                     "event": "log",
                     "message": (
                         f"diag finalize source={'streaming' if streamed_commit else 'oneshot'}"
+                        f" asr_path={asr_path}"
+                        f" asr_provider={asr_provider}"
+                        f" asr_caps={asr_capabilities}"
+                        f" detected_language={detected_language or 'unknown'}"
                         f" text_len={len(text)}"
                         f" committed={bool(commit_info.get('committed', False))}"
                         f" commit_backend={commit_info.get('backend', '')}"
@@ -772,6 +891,19 @@ def run_postprocess_pipeline(context: PostprocessPipelineContext) -> None:
                 if context.args.debug_diagnostics:
                     context.on_state({"event": "log", "message": f"diag auto_lexicon_learn_failed: {exc}"})
 
+        _capture_refine_sample(
+            args=context.args,
+            audio_path=context.audio_path,
+            record_backend=context.record_backend,
+            raw_text=raw_text,
+            final_text=text,
+            refiner=context.refiner,
+            transcribe_latency_ms=transcribe_latency_ms,
+            refine_latency_ms=refine_latency_ms,
+            commit_info=commit_info,
+            on_state=context.on_state,
+        )
+
         _emit_result(
             context.on_result,
             audio_path=context.audio_path,
@@ -780,6 +912,10 @@ def run_postprocess_pipeline(context: PostprocessPipelineContext) -> None:
             transcribe_latency_ms=transcribe_latency_ms,
             refine_latency_ms=refine_latency_ms,
             text=text,
+            detected_language=detected_language,
+            asr_provider=asr_provider,
+            asr_path=asr_path,
+            asr_capabilities=asr_capabilities,
             commit=commit_info,
         )
     except Exception as exc:  # noqa: BLE001

@@ -1,4 +1,4 @@
-from .base import ASRProvider
+from .base import ASRProvider, ASRProviderCapabilities, provider_supports_file_streaming, provider_supports_realtime
 from .base_text_refiner import BaseTextRefiner
 from .cloud_llm_refiner import CloudLLMRefiner
 from .http_cloud import HttpCloudProvider
@@ -9,6 +9,9 @@ from .streaming_base import StreamingASRProvider
 
 __all__ = [
     "ASRProvider",
+    "ASRProviderCapabilities",
+    "provider_supports_file_streaming",
+    "provider_supports_realtime",
     "BaseTextRefiner",
     "StreamingASRProvider",
     "HttpCloudProvider",

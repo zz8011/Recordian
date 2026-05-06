@@ -29,6 +29,7 @@ from recordian.hotkey_dictate import (
     _owner_gate_level,
     _pcm16le_to_f32,
     _pick_vad_sample_rate,
+    _RealtimeASRWorkerHandle,
     _resample_audio_for_vad,
     _resolve_auto_hard_enter,
     _select_refine_protected_terms,
@@ -132,7 +133,7 @@ def test_start_realtime_asr_worker_commits_append_only_partial_text() -> None:
             return {"text": next(self._texts)}
 
         def finish(self):
-            return SimpleNamespace(text="你好啊")
+            return SimpleNamespace(text="你好啊", detected_language="zh")
 
         @property
         def elapsed_ms(self) -> float:
@@ -184,6 +185,7 @@ def test_start_realtime_asr_worker_commits_append_only_partial_text() -> None:
     worker.thread.join(timeout=1.0)
 
     assert worker.final_text == "你好啊"
+    assert worker.detected_language == "zh"
     assert worker.transcribe_latency_ms == 321.0
     assert worker.commit_info is not None
     assert committer.calls == ["你", "好啊"]
@@ -1396,6 +1398,78 @@ def test_ptt_start_recording_applies_target_window_before_realtime_worker(monkey
     time.sleep(0.1)
 
     assert captured_window_ids == [456]
+
+
+def test_ptt_stop_recording_passes_prefetched_detected_language_to_postprocess(monkeypatch) -> None:
+    events: list[dict[str, object]] = []
+    captured_contexts: list[object] = []
+    postprocess_done = threading.Event()
+
+    class _FakeProvider:
+        provider_name = "http-cloud"
+
+        def transcribe_file(self, audio_path: Path, hotwords: list[str]) -> SimpleNamespace:  # noqa: ANN001
+            return SimpleNamespace(text="不应走到这里")
+
+    class _FakeCommitter:
+        backend_name = "xdotool"
+        target_window_id = None
+
+        def commit(self, text: str) -> SimpleNamespace:
+            return SimpleNamespace(backend="xdotool", committed=True, detail="typed")
+
+    class _FakeProcess:
+        def poll(self) -> int:
+            return 0
+
+    def _fake_start_record_process(**kwargs) -> RecordProcessHandle:  # noqa: ANN003
+        output_path = kwargs["output_path"]
+        output_path.write_bytes(b"")
+        return RecordProcessHandle(process=_FakeProcess(), monitor_stream=io.BytesIO(b""))
+
+    def _fake_start_realtime_asr_worker(**kwargs):  # noqa: ANN003
+        thread = threading.Thread(target=lambda: None)
+        thread.start()
+        thread.join(timeout=1.0)
+        return _RealtimeASRWorkerHandle(
+            thread=thread,
+            final_text="实时识别",
+            detected_language="en",
+            transcribe_latency_ms=88.0,
+            commit_info={"backend": "xdotool", "committed": True, "detail": "realtime_chunks:2"},
+        )
+
+    def _fake_run_postprocess_pipeline(context) -> None:  # noqa: ANN001
+        captured_contexts.append(context)
+        postprocess_done.set()
+
+    monkeypatch.setattr("recordian.hotkey_dictate.ensure_ffmpeg_available", lambda: "/usr/bin/ffmpeg")
+    monkeypatch.setattr("recordian.hotkey_dictate.choose_record_backend", lambda requested, ffmpeg_bin: "ffmpeg-pulse")
+    monkeypatch.setattr("recordian.hotkey_dictate.resolve_committer", lambda backend: _FakeCommitter())
+    monkeypatch.setattr("recordian.hotkey_dictate.create_provider", lambda args: _FakeProvider())
+    monkeypatch.setattr("recordian.hotkey_dictate.get_focused_window_id", lambda: None)
+    monkeypatch.setattr("recordian.hotkey_dictate.start_record_process", _fake_start_record_process)
+    monkeypatch.setattr("recordian.hotkey_dictate.stop_record_process", lambda *args, **kwargs: None)
+    monkeypatch.setattr("recordian.hotkey_dictate._start_realtime_asr_worker", _fake_start_realtime_asr_worker)
+    monkeypatch.setattr("recordian.hotkey_dictate.run_postprocess_pipeline", _fake_run_postprocess_pipeline)
+
+    start_recording, stop_recording, _, _ = build_ptt_hotkey_handlers(
+        args=_fake_ptt_args(),
+        on_result=events.append,
+        on_error=events.append,
+        on_busy=events.append,
+        on_state=events.append,
+    )
+
+    assert start_recording() is True
+    assert stop_recording() is True
+    assert postprocess_done.wait(timeout=1.0) is True
+    assert captured_contexts
+    context = captured_contexts[0]
+    assert context.prefetched_asr_text == "实时识别"
+    assert context.prefetched_detected_language == "en"
+    assert context.prefetched_transcribe_latency_ms == 88.0
+    assert context.prefetched_commit_info == {"backend": "xdotool", "committed": True, "detail": "realtime_chunks:2"}
 
 
 def test_ptt_start_failure_releases_lock_and_recovers(monkeypatch) -> None:

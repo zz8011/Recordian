@@ -43,7 +43,21 @@ def test_qwen_asr_transcribe_injects_hotwords_to_context(tmp_path: Path, monkeyp
 
     result = provider.transcribe_file(wav_path, hotwords=["OpenClaw", "小二", "OpenClaw"])
     assert result.text == "测试文本"
+    assert result.raw_text == "测试文本"
+    assert result.normalized_text == "测试文本"
+    assert result.detected_language == "zh"
     assert "固定上下文" in fake_model.last_context
     assert "热词参考:" in fake_model.last_context
     assert "OpenClaw" in fake_model.last_context
     assert "小二" in fake_model.last_context
+
+
+def test_qwen_asr_capabilities_declared() -> None:
+    from recordian.providers.qwen_asr import QwenASRProvider
+
+    capabilities = QwenASRProvider().capabilities
+
+    assert capabilities.supports_hotwords is True
+    assert capabilities.supports_context is True
+    assert capabilities.supports_language_hint is True
+    assert capabilities.supports_realtime is False

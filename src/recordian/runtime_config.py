@@ -11,6 +11,7 @@ DEFAULT_WAKE_PREFIX = ["嗨", "嘿"]
 DEFAULT_WAKE_NAME = ["小二"]
 DEFAULT_OWNER_PROFILE = "~/.config/recordian/owner_voice_profile.json"
 DEFAULT_AUTO_LEXICON_DB = "~/.config/recordian/auto_lexicon.db"
+DEFAULT_REFINE_CAPTURE_PATH = "~/.local/share/recordian/refine-samples.jsonl"
 
 _PROJECT_ROOT = Path(__file__).parent.parent.parent
 _ASSETS_DIR = Path(__file__).parent.parent.parent / "assets"
@@ -140,6 +141,11 @@ def normalize_runtime_config(
         str(normalized.get("auto_lexicon_db", DEFAULT_AUTO_LEXICON_DB)).strip() or DEFAULT_AUTO_LEXICON_DB,
         base_dir=config_base_dir,
     )
+    if "capture_refine_samples_path" in normalized:
+        normalized["capture_refine_samples_path"] = _normalize_path_string(
+            normalized.get("capture_refine_samples_path", DEFAULT_REFINE_CAPTURE_PATH),
+            base_dir=config_base_dir,
+        )
     normalized["deskflow_active_screen_path"] = _normalize_path_string(
         normalized.get("deskflow_active_screen_path", "~/.local/state/deskflow/active_screen.json"),
         base_dir=config_base_dir,

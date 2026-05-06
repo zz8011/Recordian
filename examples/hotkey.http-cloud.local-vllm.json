@@ -1,7 +1,7 @@
 {
   "asr_provider": "http-cloud",
   "asr_endpoint": "http://127.0.0.1:8000/v1/audio/transcriptions",
-  "qwen_model": "Qwen3-ASR-1.7B",
+  "qwen_model": "Qwen3-ASR-0.6B",
   "commit_backend": "auto",
   "notify_backend": "auto",
   "enable_text_refine": true,

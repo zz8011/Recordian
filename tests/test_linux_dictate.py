@@ -174,7 +174,7 @@ def test_create_provider_merges_asr_preset_and_custom_context(monkeypatch) -> No
     args = argparse.Namespace(
         asr_provider="qwen-asr",
         qwen_model="Qwen/Qwen3-ASR-0.6B",
-        model="Qwen/Qwen3-ASR-1.7B",
+        model="Qwen/Qwen3-ASR-0.6B",
         device="cpu",
         qwen_language="Chinese",
         qwen_max_new_tokens=512,
@@ -204,7 +204,7 @@ def test_create_provider_does_not_fallback_to_refine_default_preset(monkeypatch)
     args = argparse.Namespace(
         asr_provider="qwen-asr",
         qwen_model="Qwen/Qwen3-ASR-0.6B",
-        model="Qwen/Qwen3-ASR-1.7B",
+        model="Qwen/Qwen3-ASR-0.6B",
         device="cpu",
         qwen_language="Chinese",
         qwen_max_new_tokens=512,
@@ -213,6 +213,40 @@ def test_create_provider_does_not_fallback_to_refine_default_preset(monkeypatch)
     )
     create_provider(args)
     assert captured.get("context") == "OpenClaw,Recordian"
+
+
+def test_create_provider_passes_asr_context_to_http_cloud(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    class _FakeProvider:
+        def __init__(self, **kwargs) -> None:  # noqa: ANN003
+            captured.update(kwargs)
+
+    class _PresetManager:
+        def load_preset(self, name: str) -> str:
+            assert name == "asr-meeting"
+            return "会议术语A,会议术语B"
+
+    monkeypatch.setattr("recordian.linux_dictate.HttpCloudProvider", _FakeProvider)
+    monkeypatch.setattr("recordian.preset_manager.PresetManager", _PresetManager)
+
+    args = argparse.Namespace(
+        asr_provider="http-cloud",
+        asr_endpoint="http://127.0.0.1:8000/v1/audio/transcriptions",
+        asr_api_key="",
+        asr_timeout_s=30,
+        asr_realtime_endpoint="http://127.0.0.1:40002",
+        qwen_model="Qwen/Qwen3-ASR-0.6B",
+        model="Qwen/Qwen3-ASR-0.6B",
+        qwen_language="Chinese",
+        asr_context_preset="meeting",
+        asr_context="OpenClaw,Recordian",
+    )
+
+    create_provider(args)
+    context = str(captured.get("context", ""))
+    assert "会议术语A" in context
+    assert "OpenClaw" in context
 
 
 def test_stop_record_process_ffmpeg_uses_sigint() -> None:
@@ -302,7 +336,7 @@ def test_transcribe_and_commit_includes_remote_paste_result(monkeypatch, tmp_pat
         remote_paste_timeout_s=3.0,
         deskflow_log_path="",
     )
-    text, _latency, commit_info = transcribe_and_commit(
+    text, _latency, detected_language, commit_info = transcribe_and_commit(
         args=args,
         provider=_Provider(),
         committer=_Committer(),
@@ -312,6 +346,7 @@ def test_transcribe_and_commit_includes_remote_paste_result(monkeypatch, tmp_pat
     )
 
     assert text == "远端文本"
+    assert detected_language is None
     assert captured["text"] == "远端文本"
     assert commit_info["committed"] is True
     assert commit_info["remote_paste"]["sent"] is True
@@ -356,7 +391,7 @@ def test_transcribe_and_commit_routes_to_remote_only_when_deskflow_screen_matche
         deskflow_log_path="",
         remote_paste_screen_name="remote-screen",
     )
-    text, _latency, commit_info = transcribe_and_commit(
+    text, _latency, detected_language, commit_info = transcribe_and_commit(
         args=args,
         provider=_Provider(),
         committer=_Committer(),
@@ -366,6 +401,7 @@ def test_transcribe_and_commit_routes_to_remote_only_when_deskflow_screen_matche
     )
 
     assert text == "远端文本"
+    assert detected_language is None
     assert commit_info["backend"] == "remote-paste"
     assert commit_info["committed"] is True
     assert commit_info["detail"] == "ok"
