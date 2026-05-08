@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import sys
 from dataclasses import dataclass, field
 from enum import Enum
 
-try:
-    from enum import StrEnum  # type: ignore[attr-defined]
-except ImportError:
+if sys.version_info >= (3, 11):
+    from enum import StrEnum
+else:
     class StrEnum(str, Enum):
         """Python 3.10 fallback for enum.StrEnum."""
 
@@ -30,6 +31,8 @@ class ASRSegment:
 
 def _coerce_optional_ms(value: object) -> int | None:
     if value is None:
+        return None
+    if not isinstance(value, (int, float, str)):
         return None
     try:
         numeric = float(value)

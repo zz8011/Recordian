@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -211,12 +212,17 @@ class ConfigManager:
             if p.exists():
                 ConfigManager.backup(p)
 
-            # 保存配置
+            # 保存配置（可能含 API 密钥等敏感字段，限制文件权限）
             p.parent.mkdir(parents=True, exist_ok=True)
-            p.write_text(
-                json.dumps(config, ensure_ascii=False, indent=2),
-                encoding="utf-8"
-            )
+            old_umask = os.umask(0o077)
+            try:
+                p.write_text(
+                    json.dumps(config, ensure_ascii=False, indent=2),
+                    encoding="utf-8",
+                )
+                p.chmod(0o600)
+            finally:
+                os.umask(old_umask)
         except OSError as e:
             raise ConfigError(f"保存配置文件失败: {e}") from e
 

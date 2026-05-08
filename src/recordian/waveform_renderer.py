@@ -4,6 +4,7 @@ import queue
 import threading
 import time
 import tkinter as tk
+from typing import cast
 
 
 def desired_tick_interval_seconds(
@@ -133,13 +134,13 @@ void main() {
 }
 """
         try:
-            config = gl.Config(double_buffer=True, alpha_size=8)
+            config = gl.Config(double_buffer=True, alpha_size=8)  # type: ignore[abstract]
             overlay_style = getattr(
                 pyglet.window.Window,
                 "WINDOW_STYLE_OVERLAY",
                 pyglet.window.Window.WINDOW_STYLE_BORDERLESS,
             )
-            window = pyglet.window.Window(
+            window = pyglet.window.Window(  # type: ignore[abstract]
                 width=352, height=352, caption="Recordian Overlay",
                 style=overlay_style, resizable=False, visible=False, config=config,
             )
@@ -149,7 +150,7 @@ void main() {
                 "WINDOW_STYLE_OVERLAY",
                 pyglet.window.Window.WINDOW_STYLE_BORDERLESS,
             )
-            window = pyglet.window.Window(
+            window = pyglet.window.Window(  # type: ignore[abstract]
                 width=352, height=352, caption="Recordian Overlay",
                 style=overlay_style, resizable=False, visible=False,
             )
@@ -203,23 +204,23 @@ void main() {
 
         try:
             from pyglet.libs.x11 import xlib as x11
-            display = getattr(window, "_x_display", None)
+            xdisp = getattr(window, "_x_display", None)
             xwin = getattr(window, "_window", None)
-            if display is not None and xwin is not None:
+            if xdisp is not None and xwin is not None:
                 wm_hints = x11.XAllocWMHints()
                 if wm_hints:
                     wm_hints.contents.flags = x11.InputHint
                     wm_hints.contents.input = 0
-                    x11.XSetWMHints(display, xwin, wm_hints)
+                    x11.XSetWMHints(xdisp, xwin, wm_hints)
                     x11.XFree(wm_hints)
                 sz_hints = x11.XAllocSizeHints()
                 if sz_hints:
                     sz_hints.contents.flags = x11.PPosition | x11.USPosition
                     sz_hints.contents.x = _pos_x
                     sz_hints.contents.y = _pos_y
-                    x11.XSetWMNormalHints(display, xwin, sz_hints)
+                    x11.XSetWMNormalHints(xdisp, xwin, sz_hints)
                     x11.XFree(sz_hints)
-                x11.XFlush(display)
+                x11.XFlush(xdisp)
         except Exception:
             pass
 
@@ -284,7 +285,7 @@ void main() {
                     pyglet.app.exit()
                     return
                 if cmd == "state":
-                    state, detail = payload  # type: ignore[misc]
+                    state, detail = cast(tuple[str, str], payload)
                     self.state = str(state)
                     self.detail = str(detail)
                     self.hide_deadline = None

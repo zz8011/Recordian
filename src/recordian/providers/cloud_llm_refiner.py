@@ -139,18 +139,40 @@ class CloudLLMRefiner(BaseTextRefiner):
             "anthropic-version": "2023-06-01",
         }
 
-    def _build_anthropic_payload(self, prompt: str) -> dict:
+    # --- Prompt -----------------------------------------------------------
+
+    _DEFAULT_SYSTEM_PROMPT = (
+        "整理以下语音识别文本：\n"
+        "- 去除重复词语和句子\n"
+        "- 去除语气助词（嗯、啊、呃、那个、这个、然后等）\n"
+        "- 添加正确标点符号\n"
+        "- 保持原意，通顺易读\n"
+        "- 直接输出结果，不要思考过程"
+    )
+
+    def _build_messages(self, text: str) -> list[dict[str, str]]:
+        """构建 system/user 分离的消息列表（防止 prompt 注入）。
+
+        将指令放入 system 角色确保模型优先遵循，用户文本放入 user
+        角色，避免恶意文本篡改指令。
+        """
+        if self.prompt_template:
+            # 使用 .replace() 代替 .format() 防止格式字符串攻击
+            user_content = self.prompt_template.replace("{text}", text)
+            return [{"role": "user", "content": user_content}]
+
+        return [
+            {"role": "system", "content": self._DEFAULT_SYSTEM_PROMPT},
+            {"role": "user", "content": f"原文：{text}\n\n整理后："},
+        ]
+
+    def _build_anthropic_payload(self, messages: list[dict[str, str]]) -> dict:
         """Anthropic-compatible API 请求体"""
         return {
             "model": self.model,
             "max_tokens": self.max_tokens,
             "temperature": self.temperature,
-            "messages": [
-                {
-                    "role": "user",
-                    "content": prompt,
-                }
-            ],
+            "messages": messages,
         }
 
     @staticmethod
@@ -162,17 +184,18 @@ class CloudLLMRefiner(BaseTextRefiner):
         if content and isinstance(content, list):
             for item in content:
                 if isinstance(item, dict) and item.get("type") == "text":
-                    return item.get("text", "").strip()
+                    text = item.get("text", "")
+                    return text.strip() if isinstance(text, str) else ""
         return ""
 
     def _refine_anthropic(self, text: str) -> str:
         """使用 Anthropic API 格式"""
-        prompt = self._build_prompt(text)
+        messages = self._build_messages(text)
         requests = self._ensure_requests()
 
         # 调用 Anthropic-compatible API
         headers = self._build_anthropic_headers()
-        payload = self._build_anthropic_payload(prompt)
+        payload = self._build_anthropic_payload(messages)
 
         response = requests.post(
             f"{self.api_base}/v1/messages",
@@ -194,18 +217,15 @@ class CloudLLMRefiner(BaseTextRefiner):
             "Authorization": f"Bearer {self.api_key}",
         }
 
-    def _build_openai_payload(self, prompt: str, *, stream: bool = False) -> dict:
+    def _build_openai_payload(
+        self, messages: list[dict[str, str]], *, stream: bool = False
+    ) -> dict:
         """OpenAI-compatible API 请求体"""
         payload: dict = {
             "model": self.model,
             "max_tokens": self.max_tokens,
             "temperature": self.temperature,
-            "messages": [
-                {
-                    "role": "user",
-                    "content": prompt,
-                }
-            ],
+            "messages": messages,
             # vLLM/GPUStack serving Qwen3.5 defaults to reasoning mode unless
             # chat_template_kwargs.enable_thinking is explicitly disabled.
             "chat_template_kwargs": {
@@ -220,19 +240,23 @@ class CloudLLMRefiner(BaseTextRefiner):
     def _parse_openai_response(result: dict) -> str:
         """从 OpenAI API 响应中提取文本"""
         choices = result.get("choices", [])
-        if choices and len(choices) > 0:
-            message = choices[0].get("message", {})
-            return message.get("content", "").strip()
+        if choices and isinstance(choices, list):
+            choice = choices[0]
+            if isinstance(choice, dict):
+                message = choice.get("message", {})
+                if isinstance(message, dict):
+                    content = message.get("content", "")
+                    return content.strip() if isinstance(content, str) else ""
         return ""
 
     def _refine_openai(self, text: str) -> str:
         """使用 OpenAI API 格式（Groq, DeepSeek 等）"""
-        prompt = self._build_prompt(text)
+        messages = self._build_messages(text)
         requests = self._ensure_requests()
 
         # 调用 OpenAI-compatible API
         headers = self._build_openai_headers()
-        payload = self._build_openai_payload(prompt)
+        payload = self._build_openai_payload(messages)
 
         response = requests.post(
             f"{self.api_base}/chat/completions",
@@ -246,11 +270,11 @@ class CloudLLMRefiner(BaseTextRefiner):
         return self._sanitize_output(output)
 
     def _refine_stream_openai(self, text: str):
-        prompt = self._build_prompt(text)
+        messages = self._build_messages(text)
         requests = self._ensure_requests()
 
         headers = self._build_openai_headers()
-        payload = self._build_openai_payload(prompt, stream=True)
+        payload = self._build_openai_payload(messages, stream=True)
 
         response = requests.post(
             f"{self.api_base}/chat/completions",
@@ -294,16 +318,13 @@ class CloudLLMRefiner(BaseTextRefiner):
             "Content-Type": "application/json",
         }
 
-    def _build_ollama_payload(self, prompt: str, *, stream: bool = False) -> dict:
+    def _build_ollama_payload(
+        self, messages: list[dict[str, str]], *, stream: bool = False
+    ) -> dict:
         """Ollama 原生 API 请求体"""
         return {
             "model": self.model,
-            "messages": [
-                {
-                    "role": "user",
-                    "content": prompt,
-                }
-            ],
+            "messages": messages,
             "stream": stream,
             # Qwen3.5 reasoning models on Ollama may put output in `thinking`
             # unless `think` is explicitly disabled.
@@ -318,16 +339,19 @@ class CloudLLMRefiner(BaseTextRefiner):
     def _parse_ollama_response(result: dict) -> str:
         """从 Ollama API 响应中提取文本"""
         message = result.get("message", {})
-        return message.get("content", "").strip()
+        if isinstance(message, dict):
+            content = message.get("content", "")
+            return content.strip() if isinstance(content, str) else ""
+        return ""
 
     def _refine_ollama(self, text: str) -> str:
         """使用 Ollama 原生 API 格式"""
-        prompt = self._build_prompt(text)
+        messages = self._build_messages(text)
         requests = self._ensure_requests()
 
         # 调用 Ollama 原生 API
         headers = self._build_ollama_headers()
-        payload = self._build_ollama_payload(prompt)
+        payload = self._build_ollama_payload(messages)
 
         response = requests.post(
             f"{self.api_base}/api/chat",
@@ -341,11 +365,11 @@ class CloudLLMRefiner(BaseTextRefiner):
         return self._sanitize_output(output)
 
     def _refine_stream_ollama(self, text: str):
-        prompt = self._build_prompt(text)
+        messages = self._build_messages(text)
         requests = self._ensure_requests()
 
         headers = self._build_ollama_headers()
-        payload = self._build_ollama_payload(prompt, stream=True)
+        payload = self._build_ollama_payload(messages, stream=True)
 
         response = requests.post(
             f"{self.api_base}/api/chat",
@@ -369,21 +393,6 @@ class CloudLLMRefiner(BaseTextRefiner):
             if bool(event.get("done")):
                 break
 
-    # --- Prompt -----------------------------------------------------------
+    # --- Legacy -----------------------------------------------------------
 
-    def _build_prompt(self, text: str) -> str:
-        """构建文本精炼 prompt"""
-        if self.prompt_template:
-            return self.prompt_template.format(text=text)
-
-        # 默认 prompt
-        return f"""整理以下语音识别文本：
-- 去除重复词语和句子
-- 去除语气助词（嗯、啊、呃、那个、这个、然后等）
-- 添加正确标点符号
-- 保持原意，通顺易读
-- 直接输出结果，不要思考过程
-
-原文：{text}
-
-整理后："""
+    # _build_prompt 已移除，由 _build_messages 替代（system/user 角色分离）

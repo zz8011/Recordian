@@ -14,7 +14,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from shutil import which
 from tempfile import TemporaryDirectory
-from typing import Any, BinaryIO
+from typing import Any, BinaryIO, cast
 
 from .linux_commit import resolve_committer, send_hard_enter
 from .providers import ASRProvider, HttpCloudProvider, QwenASRProvider
@@ -420,13 +420,13 @@ def create_provider(args: argparse.Namespace) -> ASRProvider:
     else:
         model = getattr(args, "model", "Qwen/Qwen3-ASR-0.6B")
 
-    raw_lang = getattr(args, "qwen_language", "Chinese")
-    language = None if raw_lang == "auto" else raw_lang
+    raw_lang = cast(str, getattr(args, "qwen_language", "Chinese"))
+    qwen_language: str | None = None if raw_lang == "auto" else raw_lang
 
     return QwenASRProvider(
         model_name=model,
         device=getattr(args, "device", "cuda:0"),
-        language=language,
+        language=qwen_language,
         max_new_tokens=getattr(args, "qwen_max_new_tokens", 1024),
         context=asr_context,
     )
@@ -473,10 +473,10 @@ def start_record_process(
         bufsize=0 if monitor_enabled else -1,
     )
     _ACTIVE_PROCESSES.append(proc)
-    monitor_hub = _MonitorFanout(proc.stdout) if monitor_enabled and proc.stdout is not None else None
+    monitor_hub = _MonitorFanout(cast(BinaryIO, proc.stdout)) if monitor_enabled and proc.stdout is not None else None
     return RecordProcessHandle(
         process=proc,
-        monitor_stream=monitor_hub.open_reader() if monitor_hub is not None else None,
+        monitor_stream=cast(BinaryIO | None, monitor_hub.open_reader()) if monitor_hub is not None else None,
         monitor_sample_rate=int(args.sample_rate),
         monitor_channels=int(args.channels),
         monitor_hub=monitor_hub,
@@ -495,7 +495,7 @@ def open_monitor_stream_reader(process: RecordProcessHandle | subprocess.Popen[A
     if isinstance(process, RecordProcessHandle):
         monitor_hub = getattr(process, "monitor_hub", None)
         if monitor_hub is not None:
-            return monitor_hub.open_reader()
+            return cast(BinaryIO, monitor_hub.open_reader())
         return process.monitor_stream
     return None
 
@@ -641,7 +641,7 @@ def transcribe_and_commit(
 def run_dictate_once(
     args: argparse.Namespace,
     *,
-    provider: QwenASRProvider | None = None,
+    provider: ASRProvider | None = None,
     committer: Any | None = None,
 ) -> DictateResult:
     ffmpeg_bin = ensure_ffmpeg_available()

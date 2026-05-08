@@ -75,6 +75,17 @@ def resolve_notifier(backend: str) -> Notifier:
     raise ValueError(f"unsupported notify backend: {backend}")
 
 
+_notifier_instance: Notifier | None = None
+
+
+def notify(body: str, *, title: str = "Recordian", urgency: str = "normal") -> None:
+    """Module-level convenience wrapper for sending desktop notifications."""
+    global _notifier_instance  # noqa: PLW0603
+    if _notifier_instance is None:
+        _notifier_instance = resolve_notifier("auto")
+    _notifier_instance.notify(Notification(title=title, body=body, urgency=urgency))
+
+
 def _normalize_urgency(level: str) -> str:
     normalized = level.strip().lower()
     if normalized in {"low", "normal", "critical"}:

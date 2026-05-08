@@ -38,7 +38,7 @@ class DictationEngine:
 
         tracker = get_error_tracker()
         hotwords = hotwords or []
-        state = SessionState.LISTENING
+        state: SessionState = SessionState.LISTENING
 
         try:
             pass1 = self.pass1_provider.transcribe_file(wav_path, hotwords=hotwords)

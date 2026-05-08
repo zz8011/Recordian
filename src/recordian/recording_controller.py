@@ -7,14 +7,14 @@ helper functions for audio cues and text commit.
 from __future__ import annotations
 
 import argparse
-import struct
+import subprocess
 import threading
 import time
 from collections.abc import Callable
 from dataclasses import asdict
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Any
+from typing import Any, cast
 
 from .audio_feedback import play_sound
 from .auto_lexicon import AutoLexicon
@@ -25,6 +25,7 @@ from .linux_commit import (
     send_hard_enter,
 )
 from .linux_dictate import (
+    RecordProcessHandle,
     choose_record_backend,
     create_provider,
     run_dictate_once,
@@ -33,10 +34,10 @@ from .linux_dictate import (
 )
 from .postprocess_pipeline import (
     PostprocessPipelineContext,
-    run_postprocess_pipeline,
     _apply_target_window,
     _extract_refine_postprocess_rule,
     _resolve_auto_hard_enter,
+    run_postprocess_pipeline,
 )
 from .realtime_asr import (
     _RealtimeASRWorkerHandle,
@@ -175,7 +176,9 @@ def build_ptt_hotkey_handlers(
             return base_hotwords
 
     # Initialize text refiner if enabled
-    refiner = None
+    from .providers.base_text_refiner import BaseTextRefiner
+
+    refiner: BaseTextRefiner | None = None
     refine_postprocess_rule = "none"
     if getattr(args, "enable_text_refine", False):
         from .preset_manager import PresetManager
@@ -374,7 +377,7 @@ def build_ptt_hotkey_handlers(
 
     def _start_recording(trigger_source: str = "hotkey") -> bool:
         now = time.monotonic()
-        last_trigger = float(_get_state("last_trigger"))
+        last_trigger = float(cast(float, _get_state("last_trigger")))
         if now - last_trigger < cooldown_s:
             return False
         _set_state("last_trigger", now)
@@ -474,9 +477,9 @@ def build_ptt_hotkey_handlers(
             return True
         except Exception:  # noqa: BLE001
             # 确保在异常路径停止音频采样线程
-            level_stop = _get_state("level_stop")
-            if isinstance(level_stop, threading.Event):
-                level_stop.set()
+            level_stop_val: object = _get_state("level_stop")
+            if isinstance(level_stop_val, threading.Event):
+                level_stop_val.set()
             if temp_dir is not None:
                 temp_dir.cleanup()
             _transition_to_idle()
@@ -493,12 +496,18 @@ def build_ptt_hotkey_handlers(
             owner_filter_enabled = bool(state.get("voice_owner_filter_enabled"))
             owner_seen = bool(state.get("voice_owner_seen"))
             try:
-                owner_last_score = float(state.get("voice_owner_last_score"))
+                owner_last_score = float(cast(float, state.get("voice_owner_last_score")))
             except Exception:
                 owner_last_score = -1.0
             realtime_asr_worker = state.get("realtime_asr_worker")
             if process is None or audio_path is None or temp_dir is None or started is None:
                 return False
+
+            # Narrow dict[str, object] values to expected types after None-guard.
+            _process = cast(RecordProcessHandle | subprocess.Popen[Any], process)
+            _started = cast(float, started)
+            _audio_path = cast(Path, audio_path)
+            _temp_dir = cast(TemporaryDirectory[str], temp_dir)
 
             state.update({
                 "process": None,
@@ -524,16 +533,16 @@ def build_ptt_hotkey_handlers(
             level_stop.set()
 
         try:
-            stop_record_process(process, recorder_backend=recorder_backend)
+            stop_record_process(_process, recorder_backend=recorder_backend)
         except Exception as exc:  # noqa: BLE001
-            temp_dir.cleanup()
+            _temp_dir.cleanup()
             _transition_to_idle()
             lock.release()
             on_error({"event": "error", "error": f"{type(exc).__name__}: {exc}"})
             return False
 
-        record_latency_ms = (time.perf_counter() - float(started)) * 1000
-        audio_path = Path(audio_path)
+        record_latency_ms = (time.perf_counter() - _started) * 1000
+        audio_path = Path(_audio_path)
         on_state({"event": "processing_started", "record_backend": recorder_backend, "audio_path": str(audio_path), "record_latency_ms": record_latency_ms})
 
         def _worker() -> None:
@@ -579,7 +588,7 @@ def build_ptt_hotkey_handlers(
                     )
                 )
             finally:
-                temp_dir.cleanup()
+                _temp_dir.cleanup()
                 _set_state("processing_thread", None)
                 _set_state("recording_state", RecordingState.IDLE)
                 lock.release()

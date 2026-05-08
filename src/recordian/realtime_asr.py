@@ -14,7 +14,6 @@ from dataclasses import dataclass
 from typing import Any
 
 from recordian.text_cleanup import (
-    _normalize_final_text,
     _optimistic_first_partial,
     _stable_prefix_delta,
 )
@@ -28,7 +27,6 @@ from .linux_commit import (
 )
 from .linux_dictate import open_monitor_stream_reader
 from .providers import provider_supports_realtime
-
 
 # ---------------------------------------------------------------------------
 # Handle returned by the worker starter

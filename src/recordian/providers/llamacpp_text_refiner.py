@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import concurrent.futures
 from pathlib import Path
+from typing import cast
 
 from .base_text_refiner import BaseTextRefiner
 
@@ -119,7 +120,9 @@ class LlamaCppTextRefiner(BaseTextRefiner):
 
     def _run_inference(self, prompt: str, text: str) -> dict:
         """执行推理（可被超时中断）"""
-        return self._llm(
+        if self._llm is None:
+            raise RuntimeError("llama model not loaded")
+        result = self._llm(
             prompt,
             max_tokens=min(self.max_new_tokens, len(text) * 2 + 50),  # 增加 token 限制
             temperature=0.1,  # 稍微增加随机性，避免过于死板
@@ -128,6 +131,7 @@ class LlamaCppTextRefiner(BaseTextRefiner):
             stop=["\n\n", "输入：", "<think>", "<|"],  # 优化停止词
             echo=False,
         )
+        return cast(dict, result)
 
     def _build_fewshot_prompt(self, text: str) -> str:
         """根据 prompt_template 动态构建 Few-shot prompt

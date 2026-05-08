@@ -4,6 +4,8 @@ from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+import numpy as np
+
 from .audio import chunk_samples, read_wav_mono_f32, write_wav_mono_f32
 from .config import AppConfig
 from .models import ASRResult, CommitResult, RealtimeRunResult, SessionContext, SessionState, StreamUpdate
@@ -40,7 +42,7 @@ class RealtimeDictationEngine:
         samples = read_wav_mono_f32(wav_path, sample_rate=self.sample_rate)
         chunks = chunk_samples(samples, sample_rate=self.sample_rate, chunk_ms=chunk_ms)
         return self.transcribe_chunks(
-            chunks,
+            [c.tolist() for c in chunks],
             hotwords=hotwords,
             force_high_precision=force_high_precision,
         )
@@ -103,7 +105,7 @@ class RealtimeDictationEngine:
 
         with TemporaryDirectory(prefix="recordian-pass2-") as temp_dir:
             wav_path = Path(temp_dir) / "pass2.wav"
-            write_wav_mono_f32(wav_path, samples, sample_rate=self.sample_rate)
+            write_wav_mono_f32(wav_path, np.array(samples, dtype=np.float32), sample_rate=self.sample_rate)
             executor = ThreadPoolExecutor(max_workers=1)
             try:
                 future = executor.submit(self.pass2_provider.transcribe_file, wav_path, hotwords=hotwords)

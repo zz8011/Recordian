@@ -13,7 +13,7 @@ import wave
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse, urlunparse
 from urllib.request import Request, urlopen
@@ -105,7 +105,7 @@ def _save_config_changes(
     changes: dict[str, object],
     *,
     apply_now: bool,
-    restart_callback: Callable[[], None] | None = None,
+    restart_callback: Callable[[], object] | None = None,
 ) -> tuple[SettingEffect, bool, list[str]]:
     current = ConfigManager.load(config_path)
     changed_keys = [key for key, value in changes.items() if current.get(key) != value]
@@ -489,7 +489,7 @@ class TrayApp:
                 self.state.detail = "Model warmup..."
             elif status == "ready":
                 self._warmup_done = True
-                latency_ms = float(event.get("latency_ms", 0.0) or 0.0)
+                latency_ms = cast(float, event.get("latency_ms", 0.0) or 0.0)
                 self.state.status = "idle"
                 self.state.detail = f"Warmup ready ({latency_ms:.0f}ms)"
         elif et == "recording_started":
@@ -533,7 +533,7 @@ class TrayApp:
                     self.state.detail = detail
                     self.overlay.set_state("processing", detail)
         elif et == "audio_level":
-            self.overlay.set_level(float(event.get("level", 0.0) or 0.0))
+            self.overlay.set_level(cast(float, event.get("level", 0.0) or 0.0))
         elif et == "processing_started":
             self.state.status = "processing"
             self.state.detail = "Processing..."
@@ -807,7 +807,9 @@ class TrayApp:
         config = ConfigManager.load(config_path)
         backend_proc = self.backend.proc
         backend_running = backend_proc is not None and backend_proc.poll() is None
-        backend_pid = backend_proc.pid if backend_running else None
+        if backend_running:
+            assert backend_proc is not None
+        backend_pid = backend_proc.pid if backend_running else None  # type: ignore[union-attr]
 
         def _worker() -> None:
             try:
@@ -1421,7 +1423,7 @@ class TrayApp:
             content.pack_start(button_box, False, False, 8)
 
             def _update_ui() -> None:
-                step = int(wizard_state.get("step", 0))
+                step = cast(int, wizard_state.get("step", 0))
                 samples = wizard_state.get("samples", [])
 
                 # Reference texts for each sample - designed to capture different voice characteristics
@@ -1466,12 +1468,12 @@ class TrayApp:
                     reference_frame.show()
                     reference_frame.show_all()
                     status_label.set_text("等待录制")
-                    progress_label.set_text(f"进度: {len(samples)}/3 样本")
+                    progress_label.set_text(f"进度: {len(cast(list, samples))}/3 样本")
                     btn_record.set_visible(True)
                     btn_record.set_label("开始录制")
                     btn_record.set_sensitive(not wizard_state.get("recording", False))
                     btn_next.set_label("下一步")
-                    btn_next.set_sensitive(len(samples) >= step)
+                    btn_next.set_sensitive(len(cast(list, samples)) >= step)
                 elif step == 4:
                     instruction_label.set_text(
                         "注册完成！\n\n"
@@ -1560,7 +1562,7 @@ class TrayApp:
 
                 try:
                     import numpy as np
-                    samples = np.concatenate(chunks_obj).astype(np.float32)
+                    samples = np.concatenate(cast(list, chunks_obj)).astype(np.float32)
 
                     if samples.size < 16000:  # Less than 1 second at 16kHz
                         status_label.set_text("录音太短，请至少录制1秒")
@@ -1597,7 +1599,7 @@ class TrayApp:
                         samples_list = []
                         wizard_state["samples"] = samples_list
                     samples_list.append(samples)
-                    step = int(wizard_state.get("step", 0))
+                    step = cast(int, wizard_state.get("step", 0))
                     status_label.set_text(f"样本 {step} 录制成功 ✓")
                     btn_record.set_label("开始录制")
                     # Reconnect start handler
@@ -1617,7 +1619,7 @@ class TrayApp:
                     wizard_state["record_handler_id"] = btn_record.connect("clicked", _start_recording)
 
             def _next_step(*_args: object) -> None:
-                step = int(wizard_state.get("step", 0))
+                step = cast(int, wizard_state.get("step", 0))
 
                 if step == 4:
                     # Complete
@@ -1637,20 +1639,20 @@ class TrayApp:
                 try:
                     import numpy as np
 
-                    from recordian.speaker_verify import enroll_speaker_profile
+                    from recordian.speaker_verify import enroll_speaker_profile  # type: ignore[attr-defined]
 
                     config = ConfigManager.load(self.config_path)
                     sample_rate = int(config.get("wake_sample_rate", 16000))
                     profile_path = Path(config.get("wake_owner_profile", "~/.config/recordian/owner_voice_profile.json")).expanduser()
 
                     samples = wizard_state.get("samples", [])
-                    if len(samples) < 3:
+                    if len(cast(list, samples)) < 3:
                         status_label.set_text("样本数量不足")
                         return
 
                     # Save samples as WAV files
                     sample_paths = []
-                    for i, sample in enumerate(samples):
+                    for i, sample in enumerate(cast(list, samples)):
                         sample_path = profile_path.parent / f"owner_sample_{i+1}.wav"
                         sample_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -1693,7 +1695,7 @@ class TrayApp:
             wizard_state["record_handler_id"] = btn_record.connect("clicked", _start_recording)
             btn_next.connect("clicked", _next_step)
             btn_cancel.connect("clicked", _cancel)
-            dialog.connect("delete-event", lambda *_: (_cancel(), False)[1])
+            dialog.connect("delete-event", lambda *_: (_cancel(), False)[1])  # type: ignore[arg-type,func-returns-value]
 
             _update_ui()
             dialog.show_all()
@@ -1761,7 +1763,7 @@ class TrayApp:
             except Exception:
                 Gdk = None
 
-            def _create_tab(name: str) -> Gtk.Box:
+            def _create_tab(name: str) -> Gtk.Box:  # type: ignore[name-defined]
                 page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
                 page.set_border_width(10)
                 scroll = Gtk.ScrolledWindow()
@@ -1770,7 +1772,7 @@ class TrayApp:
                 notebook.append_page(scroll, Gtk.Label(label=name))
                 return page
 
-            def _create_section(parent: Gtk.Box, title: str) -> Gtk.Grid:
+            def _create_section(parent: Gtk.Box, title: str) -> Gtk.Grid:  # type: ignore[name-defined]
                 frame = Gtk.Frame(label=title)
                 frame.set_margin_top(4)
                 frame.set_margin_bottom(6)
@@ -1783,7 +1785,7 @@ class TrayApp:
                 return grid
 
             def _add_field(
-                grid: Gtk.Grid,
+                grid: Gtk.Grid,  # type: ignore[name-defined]
                 row: int,
                 *,
                 key: str,
@@ -3183,21 +3185,21 @@ class TrayApp:
                         payload["wake_pre_vad_aggressiveness"] = 3
                     if payload["wake_pre_vad_frame_ms"] not in {10, 20, 30}:
                         payload["wake_pre_vad_frame_ms"] = 30
-                    payload["wake_no_speech_timeout_s"] = max(0.0, float(payload["wake_no_speech_timeout_s"]))
-                    payload["wake_speech_confirm_s"] = max(0.0, float(payload["wake_speech_confirm_s"]))
-                    payload["wake_pre_vad_enter_frames"] = max(1, int(payload["wake_pre_vad_enter_frames"]))
-                    payload["wake_pre_vad_hangover_ms"] = max(0, int(payload["wake_pre_vad_hangover_ms"]))
-                    payload["wake_pre_roll_ms"] = max(0, int(payload["wake_pre_roll_ms"]))
-                    payload["wake_decode_budget_per_cycle"] = max(1, int(payload["wake_decode_budget_per_cycle"]))
-                    payload["wake_decode_budget_per_sec"] = max(1.0, float(payload["wake_decode_budget_per_sec"]))
-                    payload["wake_semantic_probe_interval_s"] = max(0.1, float(payload["wake_semantic_probe_interval_s"]))
-                    payload["wake_semantic_window_s"] = max(0.4, float(payload["wake_semantic_window_s"]))
-                    payload["wake_semantic_end_silence_s"] = max(0.2, float(payload["wake_semantic_end_silence_s"]))
-                    payload["wake_semantic_min_chars"] = max(1, int(payload["wake_semantic_min_chars"]))
-                    payload["wake_semantic_timeout_ms"] = max(200, int(payload["wake_semantic_timeout_ms"]))
-                    payload["wake_owner_threshold"] = min(0.99, max(0.0, float(payload["wake_owner_threshold"])))
-                    payload["wake_owner_window_s"] = max(0.6, float(payload["wake_owner_window_s"]))
-                    payload["wake_owner_silence_extend_s"] = max(0.0, float(payload["wake_owner_silence_extend_s"]))
+                    payload["wake_no_speech_timeout_s"] = max(0.0, cast(float, payload["wake_no_speech_timeout_s"]))
+                    payload["wake_speech_confirm_s"] = max(0.0, cast(float, payload["wake_speech_confirm_s"]))
+                    payload["wake_pre_vad_enter_frames"] = max(1, cast(int, payload["wake_pre_vad_enter_frames"]))
+                    payload["wake_pre_vad_hangover_ms"] = max(0, cast(int, payload["wake_pre_vad_hangover_ms"]))
+                    payload["wake_pre_roll_ms"] = max(0, cast(int, payload["wake_pre_roll_ms"]))
+                    payload["wake_decode_budget_per_cycle"] = max(1, cast(int, payload["wake_decode_budget_per_cycle"]))
+                    payload["wake_decode_budget_per_sec"] = max(1.0, cast(float, payload["wake_decode_budget_per_sec"]))
+                    payload["wake_semantic_probe_interval_s"] = max(0.1, cast(float, payload["wake_semantic_probe_interval_s"]))
+                    payload["wake_semantic_window_s"] = max(0.4, cast(float, payload["wake_semantic_window_s"]))
+                    payload["wake_semantic_end_silence_s"] = max(0.2, cast(float, payload["wake_semantic_end_silence_s"]))
+                    payload["wake_semantic_min_chars"] = max(1, cast(int, payload["wake_semantic_min_chars"]))
+                    payload["wake_semantic_timeout_ms"] = max(200, cast(int, payload["wake_semantic_timeout_ms"]))
+                    payload["wake_owner_threshold"] = min(0.99, max(0.0, cast(float, payload["wake_owner_threshold"])))
+                    payload["wake_owner_window_s"] = max(0.6, cast(float, payload["wake_owner_window_s"]))
+                    payload["wake_owner_silence_extend_s"] = max(0.0, cast(float, payload["wake_owner_silence_extend_s"]))
                     effect, restarted, changed_keys = _save_config_changes(
                         self.config_path,
                         payload,
@@ -3276,6 +3278,7 @@ class TrayApp:
             icon_path,
             AppIndicator3.IndicatorCategory.APPLICATION_STATUS
         )
+        assert self.indicator is not None
         self.indicator.set_status(AppIndicator3.IndicatorStatus.ACTIVE)
         self.indicator.set_title("Recordian")
 
@@ -3375,6 +3378,7 @@ class TrayApp:
         menu.append(quit_item)
 
         menu.show_all()
+        assert self.indicator is not None
         self.indicator.set_menu(menu)
         self.icon = None  # Mark that we're using AppIndicator instead
 

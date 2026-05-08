@@ -4,6 +4,7 @@ import logging
 import os
 import sys
 import threading
+from types import ModuleType
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -24,7 +25,7 @@ class ErrorTracker:
         self.environment = environment
         self.release = release
         self._initialized = False
-        self._sentry_sdk = None
+        self._sentry_sdk: ModuleType | None = None
 
         if self.dsn:
             self._init_sentry()
@@ -46,7 +47,7 @@ class ErrorTracker:
                 integrations=[
                     ThreadingIntegration(propagate_hub=True),
                 ],
-                before_send=self._before_send,
+                before_send=self._before_send,  # type: ignore[arg-type]
             )
             self._initialized = True
             logger.info("Sentry error tracking initialized")

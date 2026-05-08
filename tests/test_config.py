@@ -229,6 +229,25 @@ class TestConfigManagerSave:
 
         assert config_path.exists()
 
+    def test_save_restricts_new_config_file_permissions(self, tmp_path: Path) -> None:
+        """保存新配置文件时仅允许 owner 读写，避免泄露密钥。"""
+        config_path = tmp_path / "config.json"
+        config = {"version": "1.0", "api_key": "secret-value"}
+
+        ConfigManager.save(config_path, config)
+
+        assert config_path.stat().st_mode & 0o777 == 0o600
+
+    def test_save_restricts_existing_config_file_permissions(self, tmp_path: Path) -> None:
+        """覆盖已有宽权限配置文件时也要收紧权限。"""
+        config_path = tmp_path / "config.json"
+        config_path.write_text('{"version": "1.0", "api_key": "old-secret"}')
+        config_path.chmod(0o644)
+
+        ConfigManager.save(config_path, {"version": "1.0", "api_key": "new-secret"})
+
+        assert config_path.stat().st_mode & 0o777 == 0o600
+
     def test_save_validates_config(self, tmp_path: Path) -> None:
         """测试保存时验证配置"""
         config_path = tmp_path / "config.json"

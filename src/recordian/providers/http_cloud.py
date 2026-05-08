@@ -7,6 +7,7 @@ import subprocess
 import time
 from pathlib import Path
 from shutil import which
+from typing import cast
 from urllib.parse import urlparse, urlunparse
 
 from ..models import ASRResult, coerce_asr_segments, coerce_asr_timestamps
@@ -115,7 +116,7 @@ class _HttpCloudRealtimeSession:
         if not self._session_id:
             raise RuntimeError("realtime_asr_missing_session_id")
         self._started_at = time.perf_counter()
-        return body
+        return cast(dict[str, object], body)
 
     def push_audio(self, payload: bytes) -> dict[str, object]:
         if not self._session_id:
@@ -128,7 +129,7 @@ class _HttpCloudRealtimeSession:
             timeout=self._timeout_s,
         )
         response.raise_for_status()
-        return response.json()
+        return cast(dict[str, object], response.json())
 
     def finish(self) -> ASRResult:
         if not self._session_id:

@@ -16,30 +16,15 @@ from __future__ import annotations
 # Re-exports for backward compatibility (e.g. tray_gui imports build_parser)
 # ---------------------------------------------------------------------------
 from .arg_parser import (  # noqa: F401
-    build_parser,
-    parse_hotkey_spec,
+    DEFAULT_CONFIG_PATH,  # noqa: F401
     _expand_key_name,
     _key_to_names,
     _parse_args_with_config,
     _save_runtime_config,
+    build_parser,
+    parse_hotkey_spec,
 )
-from .recording_controller import (  # noqa: F401
-    build_hotkey_handlers,
-    build_ptt_hotkey_handlers,
-    _commit_text,
-)
-from .arg_parser import DEFAULT_CONFIG_PATH  # noqa: F401
 from .linux_dictate import run_dictate_once  # noqa: F401
-from .realtime_asr import (  # noqa: F401
-    _RealtimeASRWorkerHandle,
-    _start_realtime_asr_worker,
-)
-from .text_cleanup import (  # noqa: F401
-    _normalize_final_text,
-    _optimistic_first_partial,
-    _stable_prefix_delta,
-)
-from .state_manager import RecordingState  # noqa: F401
 from .postprocess_pipeline import (  # noqa: F401
     _apply_refine_postprocess,
     _apply_target_window,
@@ -52,6 +37,21 @@ from .postprocess_pipeline import (  # noqa: F401
     _select_refine_protected_terms,
     _should_skip_owner_gated_asr,
     _text_contains_term,
+)
+from .realtime_asr import (  # noqa: F401
+    _RealtimeASRWorkerHandle,
+    _start_realtime_asr_worker,
+)
+from .recording_controller import (  # noqa: F401
+    _commit_text,
+    build_hotkey_handlers,
+    build_ptt_hotkey_handlers,
+)
+from .state_manager import RecordingState  # noqa: F401
+from .text_cleanup import (  # noqa: F401
+    _normalize_final_text,
+    _optimistic_first_partial,
+    _stable_prefix_delta,
 )
 from .wake_session_monitor import (  # noqa: F401
     _adaptive_vad_threshold,
@@ -343,7 +343,7 @@ def _main_impl() -> None:
             _emit({"event": "log", "message": "trigger_mode=oneshot 时不支持语音唤醒，已忽略"})
         trigger_pressed = {"active": False}
 
-        pressed: set[str] = set()
+        pressed: set[str] = set()  # type: ignore[no-redef]
 
         def _on_press(key: object):
             key_names = _key_to_names(key, keyboard)

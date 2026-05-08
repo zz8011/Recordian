@@ -11,6 +11,7 @@ import struct
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import cast
 from urllib.parse import urlparse, urlunparse
 
 import numpy as np
@@ -104,17 +105,17 @@ def _compute_websocket_accept(key: str) -> str:
 def _float_to_pcm16le(samples: np.ndarray) -> bytes:
     clipped = np.clip(samples, -1.0, 1.0)
     pcm = (clipped * 32767.0).astype("<i2", copy=False)
-    return pcm.tobytes()
+    return cast(bytes, pcm.tobytes())
 
 
-def _build_append_event(samples: np.ndarray) -> dict[str, str]:
+def _build_append_event(samples: np.ndarray) -> dict[str, object]:
     return {
         "type": "input_audio_buffer.append",
         "audio": base64.b64encode(_float_to_pcm16le(samples)).decode("ascii"),
     }
 
 
-def _build_session_update(model: str) -> dict[str, str]:
+def _build_session_update(model: str) -> dict[str, object]:
     return {"type": "session.update", "model": model}
 
 
@@ -206,9 +207,11 @@ class _SimpleWebSocketClient:
             request_lines.append(f"{header_name}: {header_value}")
         request = ("\r\n".join(request_lines) + "\r\n\r\n").encode("ascii")
 
+        assert self.writer is not None
         self.writer.write(request)
         await self.writer.drain()
 
+        assert self.reader is not None
         response = await asyncio.wait_for(
             self.reader.readuntil(b"\r\n\r\n"),
             timeout=self.connect_timeout_s,
@@ -243,7 +246,7 @@ class _SimpleWebSocketClient:
         while True:
             opcode, payload = await self._read_frame()
             if opcode == 0x1:
-                return json.loads(payload.decode("utf-8"))
+                return cast("dict[str, object]", json.loads(payload.decode("utf-8")))
             if opcode == 0x8:
                 code, reason = _decode_close_payload(payload)
                 raise ConnectionError(f"websocket closed by server ({code}): {reason}")

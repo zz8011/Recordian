@@ -20,11 +20,10 @@ from __future__ import annotations
 import enum
 import subprocess
 import threading
-from dataclasses import dataclass, field, fields
+from dataclasses import dataclass, fields
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
-
 
 # ---------------------------------------------------------------------------
 # Enums & small data classes
