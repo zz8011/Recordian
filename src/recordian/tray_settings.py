@@ -193,9 +193,10 @@ def open_settings_gtk(
         entries: dict[str, tuple[str, Any]] = {}
         status_label_ref: dict[str, Any] = {"widget": None}
         try:
-            from gi.repository import Gdk  # type: ignore
+            from gi.repository import Gdk, GLib  # type: ignore
         except Exception:
             Gdk = None
+            GLib = None
 
         def _create_tab(name: str) -> Gtk.Box:
             page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
@@ -558,26 +559,86 @@ def open_settings_gtk(
         row = _add_field(sec_refine, row, key="refine_api_base", label="云端 API Base", value=current.get("refine_api_base", ""))
         row = _add_field(sec_refine, row, key="refine_api_key", label="云端 API Key", value=current.get("refine_api_key", ""), secret=True)
 
-        # For cloud provider, fetch available models and show as dropdown
-        cloud_models: tuple[str, ...] = ()
-        if current_refine_provider == "cloud":
+        # Cloud model selection: combo + refresh button
+        model_label = Gtk.Label(label="云端 API 模型")
+        model_label.set_xalign(0.0)
+        model_label.set_yalign(0.0)
+        sec_refine.attach(model_label, 0, row, 1, 1)
+
+        model_combo = Gtk.ComboBoxText()
+        model_combo.set_hexpand(True)
+        current_model = str(current.get("refine_api_model", "")).strip()
+        model_combo.append_text(current_model if current_model else "")
+        if current_model:
+            model_combo.set_active(0)
+        else:
+            model_combo.append_text("")
+            model_combo.set_active(1)
+
+        refresh_btn = Gtk.Button(label="刷新模型列表")
+        refresh_status = Gtk.Label()
+        refresh_status.set_xalign(0.0)
+        refresh_status.set_opacity(0.75)
+
+        def _refresh_models(*_args: object) -> None:
             api_base = str(current.get("refine_api_base", "")).strip()
             api_key = str(current.get("refine_api_key", "")).strip()
-            if api_base:
-                try:
-                    cloud_models = tuple(fetch_model_list(api_base, api_key))
-                except Exception:
-                    pass
+            if not api_base:
+                refresh_status.set_text("请先填写 API Base")
+                return
+            refresh_status.set_text("正在获取模型列表...")
+            refresh_btn.set_sensitive(False)
 
-        row = _add_field(
-            sec_refine,
-            row,
-            key="refine_api_model",
-            label="云端 API 模型",
-            value=current.get("refine_api_model", ""),
-            kind="combo" if cloud_models else "entry",
-            options=cloud_models,
-        )
+            def _do_fetch() -> None:
+                try:
+                    models = fetch_model_list(api_base, api_key, timeout_s=8.0)
+                except Exception as exc:
+                    models = []
+                    error_msg = str(exc)
+                else:
+                    error_msg = ""
+
+                def _apply() -> None:
+                    model_combo.remove_all()
+                    if models:
+                        for m in models:
+                            model_combo.append_text(m)
+                        # Try to keep current selection if still available
+                        current = current_model
+                        if current in models:
+                            model_combo.set_active(models.index(current))
+                        else:
+                            model_combo.set_active(0)
+                        refresh_status.set_text(f"已获取 {len(models)} 个模型")
+                    else:
+                        model_combo.append_text(current_model if current_model else "")
+                        model_combo.set_active(0)
+                        refresh_status.set_text(f"获取失败: {error_msg or '无可用模型'}")
+                    refresh_btn.set_sensitive(True)
+
+                # Schedule on GTK main thread
+                if GLib is not None:
+                    GLib.idle_add(_apply)
+                else:
+                    _apply()
+
+            import threading
+            threading.Thread(target=_do_fetch, daemon=True).start()
+
+        refresh_btn.connect("clicked", _refresh_models)
+
+        model_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        model_box.set_hexpand(True)
+        model_box.pack_start(model_combo, True, True, 0)
+        model_box.pack_start(refresh_btn, False, False, 0)
+
+        model_vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        model_vbox.set_hexpand(True)
+        model_vbox.pack_start(model_box, True, True, 0)
+        model_vbox.pack_start(refresh_status, False, False, 0)
+        sec_refine.attach(model_vbox, 1, row, 1, 1)
+        entries["refine_api_model"] = ("combo", model_combo)
+        row += 1
 
         # Local/llamacpp provider fields
         row = _add_field(
