@@ -63,9 +63,6 @@ from .wake_session_monitor import (  # noqa: F401
     _pcm16le_to_f32,
     _pick_vad_sample_rate,
     _resample_audio_for_vad,
-    _semantic_text_has_content,
-    _semantic_text_signal_len,
-    _should_auto_stop_semantic_session,
     _update_speech_evidence,
     _vad_frame_bytes,
 )

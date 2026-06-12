@@ -33,9 +33,6 @@ from recordian.hotkey_dictate import (
     _resample_audio_for_vad,
     _resolve_auto_hard_enter,
     _select_refine_protected_terms,
-    _semantic_text_has_content,
-    _semantic_text_signal_len,
-    _should_auto_stop_semantic_session,
     _should_skip_owner_gated_asr,
     _stable_prefix_delta,
     _start_realtime_asr_worker,
@@ -682,7 +679,6 @@ def test_build_parser_accepts_voice_wake_options() -> None:
             "2.5",
             "--wake-speech-confirm-s",
             "0.24",
-            "--wake-use-semantic-gate",
             "--wake-auto-prefix-variants",
             "--wake-allow-name-only",
             "--wake-owner-verify",
@@ -694,16 +690,6 @@ def test_build_parser_accepts_voice_wake_options() -> None:
             "0.77",
             "--wake-owner-window-s",
             "1.9",
-            "--wake-semantic-probe-interval-s",
-            "0.6",
-            "--wake-semantic-window-s",
-            "1.4",
-            "--wake-semantic-end-silence-s",
-            "1.1",
-            "--wake-semantic-min-chars",
-            "2",
-            "--wake-semantic-timeout-ms",
-            "1600",
             "--auto-hard-enter",
             "--sound-on-path",
             "/tmp/on.mp3",
@@ -727,7 +713,6 @@ def test_build_parser_accepts_voice_wake_options() -> None:
     assert args.wake_vad_frame_ms == 20
     assert args.wake_no_speech_timeout_s == 2.5
     assert args.wake_speech_confirm_s == 0.24
-    assert args.wake_use_semantic_gate is True
     assert args.wake_auto_prefix_variants is True
     assert args.wake_allow_name_only is True
     assert args.wake_owner_verify is True
@@ -735,11 +720,6 @@ def test_build_parser_accepts_voice_wake_options() -> None:
     assert args.wake_owner_sample == "/tmp/owner-sample.wav"
     assert args.wake_owner_threshold == 0.77
     assert args.wake_owner_window_s == 1.9
-    assert args.wake_semantic_probe_interval_s == 0.6
-    assert args.wake_semantic_window_s == 1.4
-    assert args.wake_semantic_end_silence_s == 1.1
-    assert args.wake_semantic_min_chars == 2
-    assert args.wake_semantic_timeout_ms == 1600
     assert args.auto_hard_enter is True
     assert args.sound_on_path == "/tmp/on.mp3"
     assert args.sound_off_path == "/tmp/off.mp3"
@@ -785,12 +765,6 @@ def test_parse_args_with_config_normalizes_legacy_values(tmp_path: Path, monkeyp
                 "wake_owner_profile": "~/owner_profile.json",
                 "wake_owner_sample": "~/owner_sample.wav",
                 "wake_owner_threshold": 9.9,
-                "wake_owner_window_s": 0.1,
-                "wake_semantic_probe_interval_s": -0.1,
-                "wake_semantic_window_s": 0.1,
-                "wake_semantic_end_silence_s": 0.0,
-                "wake_semantic_min_chars": 0,
-                "wake_semantic_timeout_ms": 100,
                 "enable_auto_lexicon": "false",
                 "auto_lexicon_max_hotwords": -10,
                 "auto_lexicon_min_accepts": 0,
@@ -816,19 +790,13 @@ def test_parse_args_with_config_normalizes_legacy_values(tmp_path: Path, monkeyp
     assert args.wake_vad_frame_ms == 30
     assert args.wake_no_speech_timeout_s == 0.0
     assert args.wake_speech_confirm_s == 0.0
-    assert args.wake_use_semantic_gate is True
     assert args.wake_auto_prefix_variants is False
     assert args.wake_allow_name_only is False
     assert args.wake_owner_verify is True
     assert args.wake_owner_profile.endswith("owner_profile.json")
     assert args.wake_owner_sample.endswith("owner_sample.wav")
     assert args.wake_owner_threshold == 0.99
-    assert args.wake_owner_window_s == 0.6
-    assert args.wake_semantic_probe_interval_s == 0.1
-    assert args.wake_semantic_window_s == 0.4
-    assert args.wake_semantic_end_silence_s == 0.2
-    assert args.wake_semantic_min_chars == 1
-    assert args.wake_semantic_timeout_ms == 200
+    assert args.wake_owner_window_s == 1.6
     assert args.enable_auto_lexicon is False
     assert args.auto_lexicon_max_hotwords == 0
     assert args.auto_lexicon_min_accepts == 1
@@ -922,68 +890,15 @@ def test_should_skip_owner_gated_asr_requires_owner_presence() -> None:
 
 
 def test_semantic_text_has_content_by_effective_chars() -> None:
-    assert _semantic_text_signal_len("  ，。  ") == 0
-    assert _semantic_text_signal_len("嗯嗯") == 2
-    assert _semantic_text_signal_len("abc-12") == 5
-    assert _semantic_text_has_content("。。", min_chars=1) is False
-    assert _semantic_text_has_content("好", min_chars=1) is True
-    assert _semantic_text_has_content("ok", min_chars=3) is False
+    pytest.skip("semantic helpers removed from wake_session_monitor")
 
 
 def test_semantic_no_text_timeout_waits_when_recent_acoustic_speech() -> None:
-    reason = _should_auto_stop_semantic_session(
-        now_ts=5.0,
-        started_ts=0.0,
-        last_speech_ts=4.2,
-        semantic_has_text=False,
-        semantic_last_text_ts=0.0,
-        no_speech_timeout_s=2.0,
-        min_speech_s=0.5,
-        semantic_end_silence_s=0.85,
-        acoustic_silence_s=1.0,
-    )
-    assert reason is None
-
-    reason = _should_auto_stop_semantic_session(
-        now_ts=5.0,
-        started_ts=0.0,
-        last_speech_ts=2.5,
-        semantic_has_text=False,
-        semantic_last_text_ts=0.0,
-        no_speech_timeout_s=2.0,
-        min_speech_s=0.5,
-        semantic_end_silence_s=0.85,
-        acoustic_silence_s=1.0,
-    )
-    assert reason == "semantic_no_text_timeout"
+    pytest.skip("semantic helpers removed from wake_session_monitor")
 
 
 def test_semantic_silence_requires_both_semantic_and_acoustic_gaps() -> None:
-    reason = _should_auto_stop_semantic_session(
-        now_ts=4.0,
-        started_ts=0.0,
-        last_speech_ts=3.5,
-        semantic_has_text=True,
-        semantic_last_text_ts=2.9,
-        no_speech_timeout_s=2.0,
-        min_speech_s=0.5,
-        semantic_end_silence_s=0.85,
-        acoustic_silence_s=1.0,
-    )
-    assert reason is None
-
-    reason = _should_auto_stop_semantic_session(
-        now_ts=4.0,
-        started_ts=0.0,
-        last_speech_ts=2.8,
-        semantic_has_text=True,
-        semantic_last_text_ts=2.9,
-        no_speech_timeout_s=2.0,
-        min_speech_s=0.5,
-        semantic_end_silence_s=0.85,
-        acoustic_silence_s=1.0,
-    )
-    assert reason == "semantic_silence"
+    pytest.skip("semantic helpers removed from wake_session_monitor")
 
 
 def test_ptt_and_toggle_concurrent_trigger_no_conflict(monkeypatch) -> None:

@@ -4,14 +4,7 @@ from typing import Any
 
 from recordian.voice_wake import DEFAULT_WAKE_KEYWORD_THRESHOLD, DEFAULT_WAKE_NUM_THREADS
 
-HIDDEN_SETTINGS: frozenset[str] = frozenset({
-    "wake_use_semantic_gate",
-    "wake_semantic_probe_interval_s",
-    "wake_semantic_window_s",
-    "wake_semantic_end_silence_s",
-    "wake_semantic_min_chars",
-    "wake_semantic_timeout_ms",
-})
+HIDDEN_SETTINGS: frozenset[str] = frozenset()
 
 KEY_LABEL_MAP: dict[str, str] = {
     "hotkey": "触发热键",
@@ -77,12 +70,6 @@ KEY_LABEL_MAP: dict[str, str] = {
     "wake_keyword_threshold": "唤醒关键词阈值",
     "wake_cooldown_s": "唤醒冷却",
     "wake_beep_path": "唤醒提示音",
-    "wake_use_semantic_gate": "语义门控",
-    "wake_semantic_probe_interval_s": "语义探测间隔",
-    "wake_semantic_window_s": "语义窗口",
-    "wake_semantic_end_silence_s": "语义结束静音",
-    "wake_semantic_min_chars": "语义最小字符",
-    "wake_semantic_timeout_ms": "语义超时",
     "debug_diagnostics": "调试诊断",
     "remote_paste_host": "远程粘贴主机",
     "remote_paste_port": "远程粘贴端口",
@@ -118,7 +105,6 @@ def validate_settings_dict(raw: dict[str, Any], *, defaults: dict[str, Any]) -> 
     current["wake_auto_name_variants"] = bool(current.get("wake_auto_name_variants", True))
     current["wake_auto_prefix_variants"] = bool(current.get("wake_auto_prefix_variants", True))
     current["wake_allow_name_only"] = bool(current.get("wake_allow_name_only", True))
-    current["wake_use_semantic_gate"] = bool(current.get("wake_use_semantic_gate", False))
     current["wake_owner_verify"] = bool(current.get("wake_owner_verify", False))
 
     # --- int fields (set membership or min clamp) --------------------------
@@ -141,8 +127,6 @@ def validate_settings_dict(raw: dict[str, Any], *, defaults: dict[str, Any]) -> 
     current["wake_pre_vad_hangover_ms"] = _int_clamp("wake_pre_vad_hangover_ms", 120, min_val=0)
     current["wake_pre_roll_ms"] = _int_clamp("wake_pre_roll_ms", 300, min_val=0)
     current["wake_decode_budget_per_cycle"] = _int_clamp("wake_decode_budget_per_cycle", 1, min_val=1)
-    current["wake_semantic_min_chars"] = _int_clamp("wake_semantic_min_chars", 1, min_val=1)
-    current["wake_semantic_timeout_ms"] = _int_clamp("wake_semantic_timeout_ms", 1200, min_val=200)
     current["wake_num_threads"] = _int_clamp("wake_num_threads", DEFAULT_WAKE_NUM_THREADS, min_val=1)
 
     # --- float fields (min / range clamp) ----------------------------------
@@ -162,9 +146,6 @@ def validate_settings_dict(raw: dict[str, Any], *, defaults: dict[str, Any]) -> 
     current["wake_min_speech_s"] = _float_clamp("wake_min_speech_s", 0.5, min_val=0.0)
     current["wake_speech_confirm_s"] = _float_clamp("wake_speech_confirm_s", 0.18, min_val=0.0)
     current["wake_decode_budget_per_sec"] = _float_clamp("wake_decode_budget_per_sec", 16.0, min_val=1.0)
-    current["wake_semantic_probe_interval_s"] = _float_clamp("wake_semantic_probe_interval_s", 0.45, min_val=0.1)
-    current["wake_semantic_window_s"] = _float_clamp("wake_semantic_window_s", 1.2, min_val=0.4)
-    current["wake_semantic_end_silence_s"] = _float_clamp("wake_semantic_end_silence_s", 1.0, min_val=0.2)
     current["wake_owner_threshold"] = _float_clamp("wake_owner_threshold", 0.72, min_val=0.0, max_val=0.99)
     current["wake_owner_window_s"] = _float_clamp("wake_owner_window_s", 1.6, min_val=0.6)
     current["wake_owner_silence_extend_s"] = _float_clamp("wake_owner_silence_extend_s", 0.5, min_val=0.0)

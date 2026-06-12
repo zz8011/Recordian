@@ -92,19 +92,8 @@ class TestValidateSettingsDict:
 
 
 class TestHiddenSettings:
-    def test_exactly_six_items(self) -> None:
-        assert len(HIDDEN_SETTINGS) == 6
-
-    def test_contains_expected_keys(self) -> None:
-        expected = {
-            "wake_use_semantic_gate",
-            "wake_semantic_probe_interval_s",
-            "wake_semantic_window_s",
-            "wake_semantic_end_silence_s",
-            "wake_semantic_min_chars",
-            "wake_semantic_timeout_ms",
-        }
-        assert HIDDEN_SETTINGS == expected
+    def test_empty_after_semantic_removal(self):
+        assert len(HIDDEN_SETTINGS) == 0
 
 
 class TestKeyLabelMap:

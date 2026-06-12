@@ -4,13 +4,9 @@ import argparse
 import threading
 import time
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from dataclasses import dataclass
 from pathlib import Path
-from tempfile import TemporaryDirectory
 from typing import Any, cast
-
-from .audio import write_wav_mono_f32
 
 EventCallback = Callable[[dict[str, object]], None]
 StateGetter = Callable[[str], object]
@@ -114,81 +110,6 @@ def _owner_gate_level(level: float, *, owner_filter_enabled: bool, owner_active:
 def _display_audio_level(level: float) -> float:
     """Overlay animation should reflect microphone energy, not owner-gate state."""
     return min(1.0, max(0.0, float(level)))
-
-
-def _semantic_text_signal_len(text: str) -> int:
-    return sum(1 for ch in text if ch.isalnum() or ("\u4e00" <= ch <= "\u9fff"))
-
-
-def _semantic_text_has_content(text: str, *, min_chars: int) -> bool:
-    return _semantic_text_signal_len(text) >= max(1, int(min_chars))
-
-
-def _semantic_probe_text(
-    *,
-    provider: Any,
-    samples: list[float],
-    sample_rate: int,
-    hotwords: list[str],
-    timeout_ms: int,
-    normalize_final_text: Callable[[str], str] | None = None,
-) -> str:
-    import numpy as np
-
-    if not samples:
-        return ""
-    with TemporaryDirectory(prefix="recordian-semantic-probe-") as temp_dir:
-        wav_path = Path(temp_dir) / "probe.wav"
-        write_wav_mono_f32(wav_path, np.array(samples, dtype=np.float32), sample_rate=sample_rate)
-        with ThreadPoolExecutor(max_workers=1) as executor:
-            future = executor.submit(provider.transcribe_file, wav_path, hotwords=hotwords)
-            try:
-                result = future.result(timeout=max(0.2, timeout_ms / 1000.0))
-            except TimeoutError:
-                future.cancel()
-                return ""
-            except Exception:  # noqa: BLE001
-                return ""
-        text = getattr(result, "text", "")
-        if normalize_final_text is not None:
-            return normalize_final_text(str(text))
-        return str(text).strip()
-
-
-def _should_auto_stop_semantic_session(
-    *,
-    now_ts: float,
-    started_ts: float,
-    last_speech_ts: float,
-    semantic_has_text: bool,
-    semantic_last_text_ts: float,
-    no_speech_timeout_s: float,
-    min_speech_s: float,
-    semantic_end_silence_s: float,
-    acoustic_silence_s: float,
-) -> str | None:
-    """Return semantic auto-stop reason, or None when the session should continue."""
-    now = float(now_ts)
-    started = float(started_ts)
-    last_speech = float(last_speech_ts)
-    no_speech_timeout = max(0.0, float(no_speech_timeout_s))
-    min_speech = max(0.0, float(min_speech_s))
-    semantic_end_silence = max(0.2, float(semantic_end_silence_s))
-    acoustic_silence = max(0.0, float(acoustic_silence_s))
-
-    if not semantic_has_text:
-        inactivity_base = max(started, last_speech)
-        if no_speech_timeout > 0 and now - inactivity_base >= no_speech_timeout:
-            return "semantic_no_text_timeout"
-        return None
-
-    if now - started < min_speech:
-        return None
-    if now - float(semantic_last_text_ts) < semantic_end_silence:
-        return None
-    if now - last_speech < acoustic_silence:
-        return None
-    return "semantic_silence"
 
 
 def _should_extend_last_speech_timestamp(
@@ -315,32 +236,6 @@ def start_wake_session_monitor(context: WakeSessionMonitorContext) -> threading.
             except Exception:
                 wake_speech_confirm_s = 0.18
             speech_evidence_s = 0.0
-            semantic_enabled = bool(context.get_state("voice_semantic_enabled"))
-            try:
-                semantic_probe_interval_s = max(0.1, float(getattr(context.args, "wake_semantic_probe_interval_s", 0.45)))
-            except Exception:
-                semantic_probe_interval_s = 0.45
-            try:
-                semantic_window_s = max(0.4, float(getattr(context.args, "wake_semantic_window_s", 1.2)))
-            except Exception:
-                semantic_window_s = 1.2
-            try:
-                semantic_end_silence_s = max(0.2, float(getattr(context.args, "wake_semantic_end_silence_s", 1.0)))
-            except Exception:
-                semantic_end_silence_s = 1.0
-            try:
-                semantic_min_chars = max(1, int(getattr(context.args, "wake_semantic_min_chars", 1)))
-            except Exception:
-                semantic_min_chars = 1
-            try:
-                semantic_timeout_ms = max(200, int(getattr(context.args, "wake_semantic_timeout_ms", 1200)))
-            except Exception:
-                semantic_timeout_ms = 1200
-            semantic_ring_s = max(semantic_window_s * 1.5, 2.0)
-            semantic_max_samples = max(1, int(sample_rate * semantic_ring_s))
-            semantic_window_samples = max(1, int(sample_rate * semantic_window_s))
-            semantic_buffer: list[float] = []
-            semantic_lock = threading.Lock()
             owner_filter_enabled = bool(context.get_state("voice_owner_filter_enabled"))
             owner_threshold = min(0.99, max(0.0, float(getattr(context.args, "wake_owner_threshold", 0.72))))
             owner_window_s = max(0.6, float(getattr(context.args, "wake_owner_window_s", 1.6)))
@@ -462,69 +357,6 @@ def start_wake_session_monitor(context: WakeSessionMonitorContext) -> threading.
             context.set_state("voice_owner_seen", False)
             context.set_state("voice_owner_last_score", -1.0)
 
-            def _append_semantic_frame(frame: Any) -> None:
-                if not semantic_enabled:
-                    return
-                samples = [float(x) for x in np.asarray(frame, dtype=np.float32).reshape(-1)]
-                if not samples:
-                    return
-                with semantic_lock:
-                    semantic_buffer.extend(samples)
-                    overflow = len(semantic_buffer) - semantic_max_samples
-                    if overflow > 0:
-                        del semantic_buffer[:overflow]
-
-            def _snapshot_semantic_samples() -> list[float]:
-                with semantic_lock:
-                    if not semantic_buffer:
-                        return []
-                    return semantic_buffer[-semantic_window_samples:].copy()
-
-            def _semantic_probe_worker() -> None:
-                if not semantic_enabled:
-                    return
-                if context.args.debug_diagnostics:
-                    context.on_state(
-                        {
-                            "event": "log",
-                            "message": (
-                                "diag semantic_gate enabled"
-                                f" interval_s={semantic_probe_interval_s:.2f}"
-                                f" window_s={semantic_window_s:.2f}"
-                                f" end_silence_s={semantic_end_silence_s:.2f}"
-                                f" min_chars={semantic_min_chars}"
-                            ),
-                        }
-                    )
-                while not context.stop_event.wait(semantic_probe_interval_s):
-                    if not bool(context.get_state("voice_session_active")):
-                        continue
-                    if bool(context.get_state("voice_auto_stopping")):
-                        continue
-                    if owner_filter_enabled and not bool(context.get_state("voice_owner_active")):
-                        continue
-                    probe_samples = _snapshot_semantic_samples()
-                    if len(probe_samples) < max(3200, int(sample_rate * 0.25)):
-                        continue
-                    text = _semantic_probe_text(
-                        provider=context.provider,
-                        samples=probe_samples,
-                        sample_rate=sample_rate,
-                        hotwords=context.resolve_hotwords(),
-                        timeout_ms=semantic_timeout_ms,
-                        normalize_final_text=context.normalize_final_text,
-                    )
-                    now_probe = time.monotonic()
-                    if _semantic_text_has_content(text, min_chars=semantic_min_chars):
-                        context.set_state("voice_semantic_has_text", True)
-                        context.set_state("voice_semantic_last_text_ts", now_probe)
-                        context.set_state("voice_semantic_last_text", text)
-                        context.set_state("voice_speech_detected", True)
-                        context.set_state("voice_last_speech_ts", now_probe)
-
-            if semantic_enabled:
-                threading.Thread(target=_semantic_probe_worker, daemon=True).start()
-
             def _emit_auto_stop(reason: str, *, now_ts: float) -> bool:
                 if bool(context.get_state("voice_auto_stopping")):
                     return False
@@ -559,29 +391,6 @@ def start_wake_session_monitor(context: WakeSessionMonitorContext) -> threading.
                     return False
                 speech_detected = bool(context.get_state("voice_speech_detected"))
                 started_ts = cast(float, context.get_state("voice_started_ts"))
-                if semantic_enabled:
-                    no_speech_timeout_s = max(0.0, float(getattr(context.args, "wake_no_speech_timeout_s", 2.0)))
-                    min_speech_s = max(0.0, float(getattr(context.args, "wake_min_speech_s", 0.5)))
-                    acoustic_silence_s = _effective_wake_auto_stop_silence_s(
-                        float(getattr(context.args, "wake_auto_stop_silence_s", 1.5))
-                    )
-                    semantic_has_text = bool(context.get_state("voice_semantic_has_text"))
-                    semantic_last_ts = cast(float, context.get_state("voice_semantic_last_text_ts"))
-                    last_speech_ts = cast(float, context.get_state("voice_last_speech_ts"))
-                    semantic_reason = _should_auto_stop_semantic_session(
-                        now_ts=now_ts,
-                        started_ts=started_ts,
-                        last_speech_ts=last_speech_ts,
-                        semantic_has_text=semantic_has_text,
-                        semantic_last_text_ts=semantic_last_ts,
-                        no_speech_timeout_s=no_speech_timeout_s,
-                        min_speech_s=min_speech_s,
-                        semantic_end_silence_s=semantic_end_silence_s,
-                        acoustic_silence_s=acoustic_silence_s,
-                    )
-                    if semantic_reason is not None:
-                        return _emit_auto_stop(semantic_reason, now_ts=now_ts)
-                    return False
                 if not speech_detected:
                     no_speech_timeout_s = max(0.0, float(getattr(context.args, "wake_no_speech_timeout_s", 2.0)))
                     if no_speech_timeout_s > 0 and now_ts - started_ts >= no_speech_timeout_s:
@@ -617,7 +426,6 @@ def start_wake_session_monitor(context: WakeSessionMonitorContext) -> threading.
                 if mono_frame.size == 0:
                     return
                 rms = float(np.sqrt(np.mean(mono_frame ** 2)))
-                _append_semantic_frame(mono_frame)
 
                 if rms < noise_floor * 1.8:
                     noise_floor = noise_floor * 0.98 + rms * 0.02
@@ -779,9 +587,7 @@ def start_wake_session_monitor(context: WakeSessionMonitorContext) -> threading.
                         confirm_s=wake_speech_confirm_s,
                     )
 
-                    speech_started = bool(context.get_state("voice_speech_detected")) or bool(
-                        context.get_state("voice_semantic_has_text")
-                    )
+                    speech_started = bool(context.get_state("voice_speech_detected"))
                     soft_keepalive = False
                     if speech_started and not speech_detected_raw and not owner_gate_rejected:
                         soft_keepalive = _is_soft_keepalive_speech_frame(

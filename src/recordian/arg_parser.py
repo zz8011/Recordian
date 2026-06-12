@@ -323,42 +323,6 @@ def build_parser() -> argparse.ArgumentParser:
         default=1.6,
         help="Audio window length (seconds) used for owner voiceprint verification",
     )
-    parser.add_argument(
-        "--wake-use-semantic-gate",
-        action=argparse.BooleanOptionalAction,
-        default=False,
-        help="Use lightweight semantic probe (text presence) as side-channel for wake session start/end",
-    )
-    parser.add_argument(
-        "--wake-semantic-probe-interval-s",
-        type=float,
-        default=0.45,
-        help="Semantic probe interval in seconds",
-    )
-    parser.add_argument(
-        "--wake-semantic-window-s",
-        type=float,
-        default=1.2,
-        help="Recent audio window length in seconds for each semantic probe",
-    )
-    parser.add_argument(
-        "--wake-semantic-end-silence-s",
-        type=float,
-        default=1.5,
-        help="Auto-stop if semantic probe sees no text growth for this duration",
-    )
-    parser.add_argument(
-        "--wake-semantic-min-chars",
-        type=int,
-        default=1,
-        help="Minimum effective chars to consider semantic speech detected",
-    )
-    parser.add_argument(
-        "--wake-semantic-timeout-ms",
-        type=int,
-        default=1200,
-        help="Timeout for each semantic probe ASR call",
-    )
     parser.add_argument("--sound-on-path", default=str(_DEFAULT_SOUND_ON), help="Global cue sound when recording starts")
     parser.add_argument("--sound-off-path", default=str(_DEFAULT_SOUND_OFF), help="Global cue sound when recording ends")
     parser.add_argument("--wake-beep-path", default="", help="Deprecated legacy cue path, kept for compatibility")
@@ -517,27 +481,6 @@ def _parse_args_with_config(parser: argparse.ArgumentParser) -> argparse.Namespa
         args.wake_owner_window_s = max(0.6, float(getattr(args, "wake_owner_window_s", 1.6)))
     except Exception:
         args.wake_owner_window_s = 1.6
-    args.wake_use_semantic_gate = _coerce_bool(getattr(args, "wake_use_semantic_gate", False), default=False)
-    try:
-        args.wake_semantic_probe_interval_s = max(0.1, float(getattr(args, "wake_semantic_probe_interval_s", 0.45)))
-    except Exception:
-        args.wake_semantic_probe_interval_s = 0.45
-    try:
-        args.wake_semantic_window_s = max(0.4, float(getattr(args, "wake_semantic_window_s", 1.2)))
-    except Exception:
-        args.wake_semantic_window_s = 1.2
-    try:
-        args.wake_semantic_end_silence_s = max(0.2, float(getattr(args, "wake_semantic_end_silence_s", 1.5)))
-    except Exception:
-        args.wake_semantic_end_silence_s = 1.5
-    try:
-        args.wake_semantic_min_chars = max(1, int(getattr(args, "wake_semantic_min_chars", 1)))
-    except Exception:
-        args.wake_semantic_min_chars = 1
-    try:
-        args.wake_semantic_timeout_ms = max(200, int(getattr(args, "wake_semantic_timeout_ms", 1200)))
-    except Exception:
-        args.wake_semantic_timeout_ms = 1200
     args.enable_auto_lexicon = _coerce_bool(getattr(args, "enable_auto_lexicon", True), default=True)
     try:
         args.auto_lexicon_max_hotwords = max(0, int(getattr(args, "auto_lexicon_max_hotwords", 40)))
@@ -649,12 +592,6 @@ def _save_runtime_config(args: argparse.Namespace) -> None:
         "wake_owner_threshold": getattr(args, "wake_owner_threshold", 0.72),
         "wake_owner_window_s": getattr(args, "wake_owner_window_s", 1.6),
         "wake_owner_silence_extend_s": max(0.0, min(5.0, float(getattr(args, "wake_owner_silence_extend_s", 0.5)))),
-        "wake_use_semantic_gate": getattr(args, "wake_use_semantic_gate", False),
-        "wake_semantic_probe_interval_s": getattr(args, "wake_semantic_probe_interval_s", 0.45),
-        "wake_semantic_window_s": getattr(args, "wake_semantic_window_s", 1.2),
-        "wake_semantic_end_silence_s": getattr(args, "wake_semantic_end_silence_s", 1.5),
-        "wake_semantic_min_chars": getattr(args, "wake_semantic_min_chars", 1),
-        "wake_semantic_timeout_ms": getattr(args, "wake_semantic_timeout_ms", 1200),
         "wake_provider": getattr(args, "wake_provider", "cpu"),
         "sound_on_path": getattr(args, "sound_on_path", str(_DEFAULT_SOUND_ON)),
         "sound_off_path": getattr(args, "sound_off_path", str(_DEFAULT_SOUND_OFF)),
