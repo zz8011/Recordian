@@ -204,14 +204,17 @@ def build_ptt_hotkey_handlers(
 
         if refine_provider == "cloud":
             from .providers import CloudLLMRefiner
-            api_key = getattr(args, "refine_api_key", "")
+            api_key = str(getattr(args, "refine_api_key", "")).strip()
             if not api_key:
                 raise RuntimeError("使用 cloud provider 需要设置 --refine-api-key")
+            api_model = str(getattr(args, "refine_api_model", "")).strip()
+            if not api_model:
+                raise RuntimeError("使用 cloud provider 需要设置 --refine-api-model")
 
             refiner = CloudLLMRefiner(
                 api_base=getattr(args, "refine_api_base", "https://api.minimaxi.com/anthropic"),
                 api_key=api_key,
-                model=getattr(args, "refine_api_model", "claude-3-5-sonnet-20241022"),
+                model=api_model,
                 max_tokens=getattr(args, "refine_max_tokens", 512),
                 temperature=0.1,
                 prompt_template=custom_prompt if custom_prompt else None,

@@ -1163,6 +1163,60 @@ def test_ptt_handlers_survive_refiner_warmup_failure(monkeypatch) -> None:
     )
 
 
+def test_ptt_handlers_reject_cloud_refiner_without_model(monkeypatch) -> None:
+    events: list[dict[str, object]] = []
+
+    class _FakeProvider:
+        provider_name = "http-cloud"
+
+        def transcribe_file(self, audio_path: Path, hotwords: list[str]) -> SimpleNamespace:  # noqa: ANN001
+            return SimpleNamespace(text="你好")
+
+    class _FakeCommitter:
+        backend_name = "stdout"
+        target_window_id = None
+
+        def commit(self, text: str) -> SimpleNamespace:
+            return SimpleNamespace(backend="stdout", committed=True, detail="printed")
+
+    class _PresetManager:
+        def load_preset(self, name: str) -> str:
+            return "原文：{text}"
+
+    monkeypatch.setattr("recordian.recording_controller.ensure_ffmpeg_available", lambda: "/usr/bin/ffmpeg")
+    monkeypatch.setattr("recordian.recording_controller.choose_record_backend", lambda requested, ffmpeg_bin: "ffmpeg-pulse")
+    monkeypatch.setattr("recordian.recording_controller.resolve_committer", lambda backend: _FakeCommitter())
+    monkeypatch.setattr("recordian.recording_controller.create_provider", lambda args: _FakeProvider())
+    monkeypatch.setattr("recordian.preset_manager.PresetManager", _PresetManager)
+
+    args = argparse.Namespace(
+        cooldown_ms=0,
+        record_backend="ffmpeg-pulse",
+        commit_backend="stdout",
+        enable_auto_lexicon=False,
+        debug_diagnostics=False,
+        enable_text_refine=True,
+        refine_prompt="",
+        refine_preset="default",
+        refine_provider="cloud",
+        refine_api_key="token",
+        refine_api_base="http://127.0.0.1:8018/v1",
+        refine_api_model="",
+        refine_max_tokens=128,
+        enable_thinking=False,
+        warmup=False,
+    )
+
+    with pytest.raises(RuntimeError, match="refine-api-model"):
+        build_ptt_hotkey_handlers(
+            args=args,
+            on_result=events.append,
+            on_error=events.append,
+            on_busy=events.append,
+            on_state=events.append,
+        )
+
+
 def test_ptt_handlers_fall_back_to_raw_text_when_refiner_fails(monkeypatch) -> None:
     events: list[dict[str, object]] = []
 

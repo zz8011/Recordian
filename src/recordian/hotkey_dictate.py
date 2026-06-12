@@ -122,7 +122,7 @@ def _main_impl() -> None:
     import time
     from pathlib import Path
 
-    from recordian.notify import Notification, resolve_notifier
+    from recordian.linux_notify import Notification, resolve_notifier
     from recordian.voice_wake import (
         VoiceWakeService,
         make_wake_model_config,
