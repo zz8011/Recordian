@@ -1,4 +1,6 @@
 from pathlib import Path
+import re
+from typing import Any
 
 from recordian.backend_manager import parse_backend_event_line
 from recordian.config import ConfigManager
@@ -306,3 +308,131 @@ def test_save_config_changes_restarts_only_for_restart_required_settings(tmp_pat
     assert restarted is True
     assert changed == ["enable_voice_wake"]
     assert restart_calls == ["restart"]
+
+
+def test_remote_paste_has_own_tab() -> None:
+    """R7: 远程粘贴应有独立的 Tab 页，而不是混在高级 Tab 中。"""
+    src = Path(__file__).parent.parent / "src" / "recordian" / "tray_gui.py"
+    code = src.read_text(encoding="utf-8")
+    assert 'tab_remote = _create_tab("远程粘贴")' in code
+    assert 'sec_remote = _create_section(tab_remote, "远程粘贴")' in code
+
+
+def test_semantic_gate_hidden() -> None:
+    """R4: semantic gate 的 6 个字段不应在 UI 中创建（_add_field 调用中不可见）。"""
+    src = Path(__file__).parent.parent / "src" / "recordian" / "tray_gui.py"
+    code = src.read_text(encoding="utf-8")
+    hidden = {
+        "wake_use_semantic_gate",
+        "wake_semantic_probe_interval_s",
+        "wake_semantic_window_s",
+        "wake_semantic_end_silence_s",
+        "wake_semantic_min_chars",
+        "wake_semantic_timeout_ms",
+    }
+    for field in hidden:
+        # 这些字段可以出现在 save payload 或注释中，但不能出现在 _add_field 调用里
+        pattern = re.compile(rf'_add_field\([^)]*key\s*=\s*"{re.escape(field)}"')
+        assert not pattern.search(code), f"{field} 不应出现在 _add_field 调用中"
+    # 同时确认 save payload 中仍保留这些字段（向后兼容）
+    for field in hidden:
+        assert field in code, f"{field} 应在 save payload 中保留"
+
+
+def test_get_cached_config_returns_cache_on_second_call(tmp_path: Path, monkeypatch) -> None:
+    """R1: ConfigManager.load 只应在 mtime 变化时调用一次"""
+    import argparse
+    from unittest.mock import MagicMock
+
+    from recordian.tray_gui import TrayApp
+
+    config_path = tmp_path / "hotkey.json"
+    ConfigManager.save(config_path, {"enable_text_refine": True})
+
+    args = argparse.Namespace(config_path=str(config_path), no_auto_start=True)
+    app = TrayApp(args)
+
+    load_calls: list[object] = []
+    original_load = ConfigManager.load
+
+    def _mock_load(path: Path) -> dict[str, Any]:
+        load_calls.append(path)
+        result: dict[str, Any] = original_load(path)
+        return result
+
+    monkeypatch.setattr(ConfigManager, "load", _mock_load)
+
+    # 第一次调用应触发 load
+    cfg1 = app._get_cached_config()
+    assert cfg1.get("enable_text_refine") is True
+    assert len(load_calls) == 1
+
+    # 第二次调用（mtime 未变）应直接返回缓存
+    cfg2 = app._get_cached_config()
+    assert cfg2 is cfg1
+    assert len(load_calls) == 1
+
+    # 修改文件后 mtime 变化，应再次触发 load
+    ConfigManager.save(config_path, {"enable_text_refine": False})
+    cfg3 = app._get_cached_config()
+    assert cfg3.get("enable_text_refine") is False
+    assert len(load_calls) == 2
+
+
+def test_toggle_lock_prevents_double_save(tmp_path: Path, monkeypatch) -> None:
+    """R2: toggle 锁应阻止连续两次调用都触发 save"""
+    import argparse
+    from unittest.mock import MagicMock
+
+    from recordian.tray_gui import TrayApp
+
+    config_path = tmp_path / "hotkey.json"
+    ConfigManager.save(config_path, {"enable_text_refine": True})
+
+    args = argparse.Namespace(config_path=str(config_path), no_auto_start=True)
+    app = TrayApp(args)
+
+    save_calls: list[Any] = []
+    original_save = _save_config_changes
+
+    def _mock_save(*args, **kwargs):
+        save_calls.append((args, kwargs))
+        return original_save(*args, **kwargs)
+
+    monkeypatch.setattr("recordian.tray_gui._save_config_changes", _mock_save)
+
+    # 第一次 toggle（值变化 False -> True 已经是 True，所以是 no-op）
+    # 等等，当前是 True，toggle True 是 no-op，不会触发 save
+    # 改为 toggle False 触发一次 save
+    app.toggle_text_refine(False)
+    assert len(save_calls) == 1
+
+    # 再次 toggle False（值已经是 False），不应触发 save
+    app.toggle_text_refine(False)
+    assert len(save_calls) == 1
+
+
+def test_toggle_noop_when_value_matches(tmp_path: Path, monkeypatch) -> None:
+    """R2: 配置值已匹配时 toggle 不应触发 save"""
+    import argparse
+    from unittest.mock import MagicMock
+
+    from recordian.tray_gui import TrayApp
+
+    config_path = tmp_path / "hotkey.json"
+    ConfigManager.save(config_path, {"enable_text_refine": True})
+
+    args = argparse.Namespace(config_path=str(config_path), no_auto_start=True)
+    app = TrayApp(args)
+
+    save_calls: list[Any] = []
+
+    def _mock_save(*args, **kwargs):
+        save_calls.append((args, kwargs))
+        return MagicMock(value="immediate"), False, []
+
+    monkeypatch.setattr("recordian.tray_gui._save_config_changes", _mock_save)
+
+    # 当前 enable_text_refine=True，toggle True 应为 no-op
+    app.toggle_text_refine(True)
+    assert len(save_calls) == 0

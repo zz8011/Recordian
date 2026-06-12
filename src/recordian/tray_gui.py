@@ -24,6 +24,7 @@ from recordian.config import ConfigManager
 from recordian.preset_manager import PresetManager
 from recordian.runtime_config import normalize_commit_backend, normalize_notify_backend, normalize_runtime_config
 from recordian.setting_effects import SettingEffect, combined_setting_effect, effect_label, effect_status_message
+from recordian.tray_settings_utils import KEY_LABEL_MAP
 from recordian.voice_wake import DEFAULT_WAKE_KEYWORD_THRESHOLD, DEFAULT_WAKE_NUM_THREADS
 from recordian.waveform_renderer import WaveformRenderer
 
@@ -318,6 +319,7 @@ class UiState:
     detail: str = "Idle"
     backend_running: bool = False
     last_run: RecentRunObservation = field(default_factory=RecentRunObservation)
+    last_run_timestamp: float = 0.0
 
 
 def _extract_recent_run_observation(result: object) -> tuple[RecentRunObservation, dict[str, object]]:
@@ -353,6 +355,10 @@ def _format_recent_run_log_suffix(observation: RecentRunObservation) -> str:
 
 def _status_summary_label(state: UiState) -> str:
     observation = state.last_run
+    if observation.text:
+        ago = int(time.time() - state.last_run_timestamp)
+        text = _truncate(observation.text, 24)
+        return f"{ago}s ago: {text}"
     if observation.total_ms > 0:
         label = f"时间: {observation.total_ms:.0f} ms"
     else:
@@ -443,6 +449,24 @@ class TrayApp:
         self._appindicator_preset_items: dict[str, Any] = {}
         self._appindicator_preset_names: list[str] = []
         self._preset_menu_last_sync_ts = 0.0
+        self._config_cache: dict[str, Any] | None = None
+        self._config_cache_mtime: float = 0.0
+        self._toggle_lock = threading.Lock()
+
+    def _get_cached_config(self) -> dict[str, Any]:
+        try:
+            mtime = self.config_path.stat().st_mtime
+        except Exception:
+            mtime = 0.0
+        if self._config_cache is not None and mtime == self._config_cache_mtime:
+            return self._config_cache
+        self._config_cache = ConfigManager.load(self.config_path)
+        self._config_cache_mtime = mtime
+        return self._config_cache
+
+    def _invalidate_config_cache(self) -> None:
+        self._config_cache = None
+        self._config_cache_mtime = 0.0
 
     def _on_backend_state_change(self, running: bool, status: str, detail: str) -> None:
         """线程安全的状态更新回调"""
@@ -544,6 +568,7 @@ class TrayApp:
             result = event.get("result")
             observation, commit_info = _extract_recent_run_observation(result)
             self.state.last_run = observation
+            self.state.last_run_timestamp = time.time()
             self.state.status = "idle"
             commit_backend = str(commit_info.get("backend", ""))
             commit_detail = str(commit_info.get("detail", ""))
@@ -645,24 +670,29 @@ class TrayApp:
 
     def toggle_text_refine(self, enabled: bool) -> None:
         """切换文本精炼；关闭时等同于快速模式。"""
-        mode_text = "已启用文本精炼" if enabled else "已切换到快速模式"
-        effect, restarted, _ = _save_config_changes(
-            self.config_path,
-            {"enable_text_refine": enabled},
-            apply_now=True,
-            restart_callback=lambda: self.root.after(0, self.backend.restart),
-        )
-        self.events.put({"event": "log", "message": f"{mode_text}（{effect_label(effect)}）"})
+        with self._toggle_lock:
+            current = self._get_cached_config()
+            if current.get("enable_text_refine") == enabled:
+                return  # no-op
+            mode_text = "已启用文本精炼" if enabled else "已切换到快速模式"
+            effect, restarted, _ = _save_config_changes(
+                self.config_path,
+                {"enable_text_refine": enabled},
+                apply_now=True,
+                restart_callback=lambda: self.root.after(0, self.backend.restart),
+            )
+            self._invalidate_config_cache()
+            self.events.put({"event": "log", "message": f"{mode_text}（{effect_label(effect)}）"})
 
-        # 显示通知反馈
-        try:
-            from .linux_notify import notify
+            # 显示通知反馈
+            try:
+                from .linux_notify import notify
 
-            notify(effect_status_message(effect, restarted=restarted), title=f"Recordian: {mode_text}")
-        except Exception:  # noqa: BLE001
-            pass  # 通知失败不影响功能
+                notify(effect_status_message(effect, restarted=restarted), title=f"Recordian: {mode_text}")
+            except Exception:  # noqa: BLE001
+                pass  # 通知失败不影响功能
 
-        self._update_tray_menu()
+            self._update_tray_menu()
 
     def toggle_quick_mode(self, enabled: bool) -> None:
         """兼容旧调用；快速模式开启时会关闭文本精炼。"""
@@ -670,54 +700,77 @@ class TrayApp:
 
     def toggle_voice_wake(self, enabled: bool) -> None:
         """切换语音唤醒模式"""
-        mode_text = "已开启语音唤醒" if enabled else "已关闭语音唤醒"
-        effect, _restarted, _ = _save_config_changes(
-            self.config_path,
-            {"enable_voice_wake": enabled},
-            apply_now=True,
-            restart_callback=lambda: self.root.after(0, self.backend.restart),
-        )
-        self.events.put({"event": "log", "message": f"{mode_text}（{effect_label(effect)}）"})
-        self._update_tray_menu()
+        with self._toggle_lock:
+            current = self._get_cached_config()
+            if current.get("enable_voice_wake") == enabled:
+                return  # no-op
+            mode_text = "已开启语音唤醒" if enabled else "已关闭语音唤醒"
+            effect, restarted, _ = _save_config_changes(
+                self.config_path,
+                {"enable_voice_wake": enabled},
+                apply_now=True,
+                restart_callback=lambda: self.root.after(0, self.backend.restart),
+            )
+            self._invalidate_config_cache()
+            self.events.put({"event": "log", "message": f"{mode_text}（{effect_label(effect)}）"})
+
+            try:
+                from .linux_notify import notify
+
+                notify(effect_status_message(effect, restarted=restarted), title=f"Recordian: {mode_text}")
+            except Exception:  # noqa: BLE001
+                pass
+
+            self._update_tray_menu()
 
     def toggle_auto_hard_enter(self, enabled: bool) -> None:
         """切换自动硬回车"""
-        mode_text = "已开启自动硬回车" if enabled else "已关闭自动硬回车"
-        effect, restarted, _ = _save_config_changes(
-            self.config_path,
-            {"auto_hard_enter": bool(enabled)},
-            apply_now=True,
-            restart_callback=lambda: self.root.after(0, self.backend.restart),
-        )
-        self.events.put({"event": "log", "message": f"{mode_text}（{effect_label(effect)}）"})
+        with self._toggle_lock:
+            current = self._get_cached_config()
+            if current.get("auto_hard_enter") == enabled:
+                return  # no-op
+            mode_text = "已开启自动硬回车" if enabled else "已关闭自动硬回车"
+            effect, restarted, _ = _save_config_changes(
+                self.config_path,
+                {"auto_hard_enter": bool(enabled)},
+                apply_now=True,
+                restart_callback=lambda: self.root.after(0, self.backend.restart),
+            )
+            self._invalidate_config_cache()
+            self.events.put({"event": "log", "message": f"{mode_text}（{effect_label(effect)}）"})
 
-        try:
-            from .linux_notify import notify
+            try:
+                from .linux_notify import notify
 
-            notify(effect_status_message(effect, restarted=restarted), title=f"Recordian: {mode_text}")
-        except Exception:  # noqa: BLE001
-            pass
+                notify(effect_status_message(effect, restarted=restarted), title=f"Recordian: {mode_text}")
+            except Exception:  # noqa: BLE001
+                pass
 
-        self._update_tray_menu()
+            self._update_tray_menu()
 
     def toggle_streaming_commit(self, enabled: bool) -> None:
         mode_text = "已开启流式上屏" if enabled else "已关闭流式上屏"
-        effect, restarted, _ = _save_config_changes(
-            self.config_path,
-            {"enable_streaming_commit": bool(enabled)},
-            apply_now=True,
-            restart_callback=lambda: self.root.after(0, self.backend.restart),
-        )
-        self.events.put({"event": "log", "message": f"{mode_text}（{effect_label(effect)}）"})
+        with self._toggle_lock:
+            current = self._get_cached_config()
+            if current.get("enable_streaming_commit") == enabled:
+                return  # no-op
+            effect, restarted, _ = _save_config_changes(
+                self.config_path,
+                {"enable_streaming_commit": bool(enabled)},
+                apply_now=True,
+                restart_callback=lambda: self.root.after(0, self.backend.restart),
+            )
+            self._invalidate_config_cache()
+            self.events.put({"event": "log", "message": f"{mode_text}（{effect_label(effect)}）"})
 
-        try:
-            from .linux_notify import notify
+            try:
+                from .linux_notify import notify
 
-            notify(effect_status_message(effect, restarted=restarted), title=f"Recordian: {mode_text}")
-        except Exception:  # noqa: BLE001
-            pass
+                notify(effect_status_message(effect, restarted=restarted), title=f"Recordian: {mode_text}")
+            except Exception:  # noqa: BLE001
+                pass
 
-        self._update_tray_menu()
+            self._update_tray_menu()
 
     def copy_last_text(self) -> None:
         """复制最后识别的文本到剪贴板"""
@@ -857,7 +910,7 @@ class TrayApp:
 
     def switch_preset(self, preset_name: str) -> None:
         """切换文字优化 preset"""
-        effect, _restarted, _ = _save_config_changes(
+        effect, restarted, _ = _save_config_changes(
             self.config_path,
             {"refine_preset": preset_name},
             apply_now=True,
@@ -945,6 +998,8 @@ class TrayApp:
 
 
     def open_settings(self) -> None:
+        from recordian.tray_settings_utils import validate_settings_dict
+
         current = _load_hotkey_default_config(include_sound_defaults=True)
         current.update(
             normalize_runtime_config(
@@ -958,6 +1013,7 @@ class TrayApp:
             include_sound_defaults=True,
             allow_auto_fallback_commit=False,
         )
+        current = validate_settings_dict(current, defaults=_load_hotkey_default_config(include_sound_defaults=True))
         current_record_backend = str(current.get("record_backend", "auto"))
         current_record_format = str(current.get("record_format", "ogg"))
         current_refine_provider = str(current.get("refine_provider", "local"))
@@ -967,133 +1023,6 @@ class TrayApp:
         )
         current_enable_thinking = current.get("enable_thinking", current.get("refine_enable_thinking", False))
         current_notify_backend = normalize_notify_backend(current.get("notify_backend", "auto"))
-        current["auto_hard_enter"] = bool(current.get("auto_hard_enter", False))
-        current["enable_streaming_commit"] = bool(current.get("enable_streaming_commit", False))
-        current["wake_use_webrtcvad"] = bool(current.get("wake_use_webrtcvad", True))
-        try:
-            wake_vad_aggr = int(current.get("wake_vad_aggressiveness", 2))
-        except Exception:
-            wake_vad_aggr = 2
-        if wake_vad_aggr not in {0, 1, 2, 3}:
-            wake_vad_aggr = 2
-        current["wake_vad_aggressiveness"] = wake_vad_aggr
-        try:
-            wake_vad_frame_ms = int(current.get("wake_vad_frame_ms", 30))
-        except Exception:
-            wake_vad_frame_ms = 30
-        if wake_vad_frame_ms not in {10, 20, 30}:
-            wake_vad_frame_ms = 30
-        current["wake_vad_frame_ms"] = wake_vad_frame_ms
-        try:
-            wake_no_speech_timeout_s = float(current.get("wake_no_speech_timeout_s", 2.0))
-        except Exception:
-            wake_no_speech_timeout_s = 2.0
-        current["wake_no_speech_timeout_s"] = max(0.0, wake_no_speech_timeout_s)
-        try:
-            wake_auto_stop_silence_s = float(current.get("wake_auto_stop_silence_s", 1.0))
-        except Exception:
-            wake_auto_stop_silence_s = 1.0
-        current["wake_auto_stop_silence_s"] = max(0.0, wake_auto_stop_silence_s)
-        try:
-            wake_min_speech_s = float(current.get("wake_min_speech_s", 0.5))
-        except Exception:
-            wake_min_speech_s = 0.5
-        current["wake_min_speech_s"] = max(0.0, wake_min_speech_s)
-        try:
-            wake_speech_confirm_s = float(current.get("wake_speech_confirm_s", 0.18))
-        except Exception:
-            wake_speech_confirm_s = 0.18
-        current["wake_speech_confirm_s"] = max(0.0, wake_speech_confirm_s)
-        current["wake_stats"] = bool(current.get("wake_stats", False))
-        current["wake_pre_vad"] = bool(current.get("wake_pre_vad", True))
-        try:
-            wake_pre_vad_aggr = int(current.get("wake_pre_vad_aggressiveness", 3))
-        except Exception:
-            wake_pre_vad_aggr = 3
-        if wake_pre_vad_aggr not in {0, 1, 2, 3}:
-            wake_pre_vad_aggr = 3
-        current["wake_pre_vad_aggressiveness"] = wake_pre_vad_aggr
-        try:
-            wake_pre_vad_frame_ms = int(current.get("wake_pre_vad_frame_ms", 30))
-        except Exception:
-            wake_pre_vad_frame_ms = 30
-        if wake_pre_vad_frame_ms not in {10, 20, 30}:
-            wake_pre_vad_frame_ms = 30
-        current["wake_pre_vad_frame_ms"] = wake_pre_vad_frame_ms
-        try:
-            wake_pre_vad_enter_frames = int(current.get("wake_pre_vad_enter_frames", 4))
-        except Exception:
-            wake_pre_vad_enter_frames = 4
-        current["wake_pre_vad_enter_frames"] = max(1, wake_pre_vad_enter_frames)
-        try:
-            wake_pre_vad_hangover_ms = int(current.get("wake_pre_vad_hangover_ms", 120))
-        except Exception:
-            wake_pre_vad_hangover_ms = 120
-        current["wake_pre_vad_hangover_ms"] = max(0, wake_pre_vad_hangover_ms)
-        try:
-            wake_pre_roll_ms = int(current.get("wake_pre_roll_ms", 300))
-        except Exception:
-            wake_pre_roll_ms = 300
-        current["wake_pre_roll_ms"] = max(0, wake_pre_roll_ms)
-        try:
-            wake_decode_budget_per_cycle = int(current.get("wake_decode_budget_per_cycle", 1))
-        except Exception:
-            wake_decode_budget_per_cycle = 1
-        current["wake_decode_budget_per_cycle"] = max(1, wake_decode_budget_per_cycle)
-        try:
-            wake_decode_budget_per_sec = float(current.get("wake_decode_budget_per_sec", 16.0))
-        except Exception:
-            wake_decode_budget_per_sec = 16.0
-        current["wake_decode_budget_per_sec"] = max(1.0, wake_decode_budget_per_sec)
-        current["wake_auto_name_variants"] = bool(current.get("wake_auto_name_variants", True))
-        current["wake_auto_prefix_variants"] = bool(current.get("wake_auto_prefix_variants", True))
-        current["wake_allow_name_only"] = bool(current.get("wake_allow_name_only", True))
-        current["wake_use_semantic_gate"] = bool(current.get("wake_use_semantic_gate", False))
-        try:
-            wake_semantic_probe_interval_s = float(current.get("wake_semantic_probe_interval_s", 0.45))
-        except Exception:
-            wake_semantic_probe_interval_s = 0.45
-        current["wake_semantic_probe_interval_s"] = max(0.1, wake_semantic_probe_interval_s)
-        try:
-            wake_semantic_window_s = float(current.get("wake_semantic_window_s", 1.2))
-        except Exception:
-            wake_semantic_window_s = 1.2
-        current["wake_semantic_window_s"] = max(0.4, wake_semantic_window_s)
-        try:
-            wake_semantic_end_silence_s = float(current.get("wake_semantic_end_silence_s", 1.0))
-        except Exception:
-            wake_semantic_end_silence_s = 1.0
-        current["wake_semantic_end_silence_s"] = max(0.2, wake_semantic_end_silence_s)
-        try:
-            wake_semantic_min_chars = int(current.get("wake_semantic_min_chars", 1))
-        except Exception:
-            wake_semantic_min_chars = 1
-        current["wake_semantic_min_chars"] = max(1, wake_semantic_min_chars)
-        try:
-            wake_semantic_timeout_ms = int(current.get("wake_semantic_timeout_ms", 1200))
-        except Exception:
-            wake_semantic_timeout_ms = 1200
-        current["wake_semantic_timeout_ms"] = max(200, wake_semantic_timeout_ms)
-        current["wake_owner_verify"] = bool(current.get("wake_owner_verify", False))
-        current["wake_owner_profile"] = str(
-            current.get("wake_owner_profile", "~/.config/recordian/owner_voice_profile.json")
-        ).strip() or "~/.config/recordian/owner_voice_profile.json"
-        current["wake_owner_sample"] = str(current.get("wake_owner_sample", "")).strip()
-        try:
-            wake_owner_threshold = float(current.get("wake_owner_threshold", 0.72))
-        except Exception:
-            wake_owner_threshold = 0.72
-        current["wake_owner_threshold"] = min(0.99, max(0.0, wake_owner_threshold))
-        try:
-            wake_owner_window_s = float(current.get("wake_owner_window_s", 1.6))
-        except Exception:
-            wake_owner_window_s = 1.6
-        current["wake_owner_window_s"] = max(0.6, wake_owner_window_s)
-        try:
-            wake_owner_silence_extend_s = float(current.get("wake_owner_silence_extend_s", 0.5))
-        except Exception:
-            wake_owner_silence_extend_s = 0.5
-        current["wake_owner_silence_extend_s"] = max(0.0, wake_owner_silence_extend_s)
 
         if not (hasattr(self, "_glib") and hasattr(self, "_gtk")):
             self.events.put({"event": "log", "message": "GTK 未初始化，无法打开原生设置窗口"})
@@ -1862,6 +1791,24 @@ class TrayApp:
                         widget.set_active(active_idx)
                     grid.attach(widget, 1, row, 1, 1)
                     entries[key] = ("combo", widget)
+                elif kind == "file":
+                    row_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+                    row_box.set_hexpand(True)
+                    entry = Gtk.Entry()
+                    entry.set_text(str(value))
+                    entry.set_hexpand(True)
+                    chooser = Gtk.FileChooserButton(title="选择文件")
+                    current_path = str(value).strip()
+                    if current_path:
+                        try:
+                            chooser.set_filename(str(Path(current_path).expanduser()))
+                        except Exception:
+                            pass
+                    chooser.connect("file-set", lambda w: entry.set_text(w.get_filename() or ""))
+                    row_box.pack_start(entry, True, True, 0)
+                    row_box.pack_start(chooser, False, False, 0)
+                    grid.attach(row_box, 1, row, 1, 1)
+                    entries[key] = ("entry", entry)
                 else:
                     widget = Gtk.Entry()
                     widget.set_text(str(value))
@@ -1923,6 +1870,7 @@ class TrayApp:
             tab_asr = _create_tab("ASR")
             tab_refine = _create_tab("文本精炼")
             tab_presets = _create_tab("预设管理")
+            tab_remote = _create_tab("远程粘贴")
             tab_wake = _create_tab("语音唤醒")
             tab_advanced = _create_tab("高级")
 
@@ -2151,7 +2099,7 @@ class TrayApp:
             row = _add_field(sec_refine, row, key="refine_api_key", label="云端 API Key", value=current.get("refine_api_key", ""), secret=True)
             _add_field(sec_refine, row, key="refine_api_model", label="云端 API 模型", value=current.get("refine_api_model", ""))
 
-            sec_remote = _create_section(tab_advanced, "远程粘贴")
+            sec_remote = _create_section(tab_remote, "远程粘贴")
             row = 0
             row = _add_field(
                 sec_remote,
@@ -2423,6 +2371,38 @@ class TrayApp:
             row = _add_field(
                 sec_wake_main,
                 row,
+                key="wake_owner_threshold",
+                label="主人声纹阈值",
+                value=current.get("wake_owner_threshold", 0.72),
+                hint="0~1，越高越严格（建议 0.68~0.80）",
+            )
+            row = _add_field(
+                sec_wake_main,
+                row,
+                key="wake_owner_window_s",
+                label="声纹分析窗口 (s)",
+                value=current.get("wake_owner_window_s", 1.6),
+                hint="唤醒后回看最近音频时长",
+            )
+            row = _add_field(
+                sec_wake_main,
+                row,
+                key="wake_owner_silence_extend_s",
+                label="主人静音延长 (s)",
+                value=current.get("wake_owner_silence_extend_s", 0.5),
+                hint="识别为主人时延长静音阈值，避免停顿被打断",
+            )
+            row = _add_field(
+                sec_wake_main,
+                row,
+                key="wake_owner_profile",
+                label="主人声纹特征文件",
+                value=current.get("wake_owner_profile", "~/.config/recordian/owner_voice_profile.json"),
+                hint="JSON 文件路径，可备份/迁移",
+            )
+            row = _add_field(
+                sec_wake_main,
+                row,
                 key="wake_cooldown_s",
                 label="唤醒冷却时间 (s)",
                 value=current.get("wake_cooldown_s", 3.0),
@@ -2484,6 +2464,7 @@ class TrayApp:
                 key="sound_on_path",
                 label="开始音效路径",
                 value=current.get("sound_on_path", ""),
+                kind="file",
                 hint="录音启动时播放（支持 mp3/wav）",
             )
             _add_field(
@@ -2492,57 +2473,23 @@ class TrayApp:
                 key="sound_off_path",
                 label="结束音效路径",
                 value=current.get("sound_off_path", ""),
+                kind="file",
                 hint="录音结束时播放（支持 mp3/wav）",
             )
 
             wake_model_dir = Path(__file__).parent.parent.parent / "models" / "sherpa-onnx-kws-zipformer-wenetspeech-3.3M-2024-01-01"
+            # Fields hidden from UI but preserved in save payload for backward compatibility
+            _HIDDEN_WAKE_FIELDS = {
+                "wake_use_semantic_gate",
+                "wake_semantic_probe_interval_s",
+                "wake_semantic_window_s",
+                "wake_semantic_end_silence_s",
+                "wake_semantic_min_chars",
+                "wake_semantic_timeout_ms",
+            }
+
             sec_wake_model = _create_section(tab_wake, "模型与阈值")
             row = 0
-            row = _add_field(
-                sec_wake_model,
-                row,
-                key="wake_encoder",
-                label="Encoder ONNX",
-                value=current.get("wake_encoder", str(wake_model_dir / "encoder-epoch-12-avg-2-chunk-16-left-64.int8.onnx")),
-            )
-            row = _add_field(
-                sec_wake_model,
-                row,
-                key="wake_decoder",
-                label="Decoder ONNX",
-                value=current.get("wake_decoder", str(wake_model_dir / "decoder-epoch-12-avg-2-chunk-16-left-64.int8.onnx")),
-            )
-            row = _add_field(
-                sec_wake_model,
-                row,
-                key="wake_joiner",
-                label="Joiner ONNX",
-                value=current.get("wake_joiner", str(wake_model_dir / "joiner-epoch-12-avg-2-chunk-16-left-64.int8.onnx")),
-            )
-            row = _add_field(
-                sec_wake_model,
-                row,
-                key="wake_tokens",
-                label="Tokens 文件",
-                value=current.get("wake_tokens", str(wake_model_dir / "tokens.txt")),
-            )
-            row = _add_field(
-                sec_wake_model,
-                row,
-                key="wake_keywords_file",
-                label="关键词文件（可选）",
-                value=current.get("wake_keywords_file", ""),
-                hint="留空自动由前缀+名字生成",
-            )
-            row = _add_field(
-                sec_wake_model,
-                row,
-                key="wake_tokens_type",
-                label="Tokens 类型",
-                value=current.get("wake_tokens_type", "ppinyin"),
-                kind="combo",
-                options=("ppinyin", "cjkchar", "bpe", "fpinyin"),
-            )
             row = _add_field(
                 sec_wake_model,
                 row,
@@ -2559,62 +2506,75 @@ class TrayApp:
                 label="线程数",
                 value=current.get("wake_num_threads", DEFAULT_WAKE_NUM_THREADS),
             )
-            row = _add_field(
-                sec_wake_model,
-                row,
-                key="wake_sample_rate",
-                label="采样率",
-                value=current.get("wake_sample_rate", 16000),
-            )
-            row = _add_field(
+            _add_field(
                 sec_wake_model,
                 row,
                 key="wake_keyword_score",
                 label="关键词分数",
                 value=current.get("wake_keyword_score", 1.5),
             )
+
+            sec_wake_advanced = _create_section(tab_wake, "高级调优")
+            row = 0
             row = _add_field(
-                sec_wake_model,
+                sec_wake_advanced,
                 row,
-                key="wake_owner_threshold",
-                label="主人声纹阈值",
-                value=current.get("wake_owner_threshold", 0.72),
-                hint="0~1，越高越严格（建议 0.68~0.80）",
+                key="wake_encoder",
+                label="Encoder ONNX",
+                value=current.get("wake_encoder", str(wake_model_dir / "encoder-epoch-12-avg-2-chunk-16-left-64.int8.onnx")),
             )
             row = _add_field(
-                sec_wake_model,
+                sec_wake_advanced,
                 row,
-                key="wake_owner_window_s",
-                label="声纹分析窗口 (s)",
-                value=current.get("wake_owner_window_s", 1.6),
-                hint="唤醒后回看最近音频时长",
+                key="wake_decoder",
+                label="Decoder ONNX",
+                value=current.get("wake_decoder", str(wake_model_dir / "decoder-epoch-12-avg-2-chunk-16-left-64.int8.onnx")),
             )
             row = _add_field(
-                sec_wake_model,
+                sec_wake_advanced,
                 row,
-                key="wake_owner_silence_extend_s",
-                label="主人静音延长 (s)",
-                value=current.get("wake_owner_silence_extend_s", 0.5),
-                hint="识别为主人时延长静音阈值，避免停顿被打断",
+                key="wake_joiner",
+                label="Joiner ONNX",
+                value=current.get("wake_joiner", str(wake_model_dir / "joiner-epoch-12-avg-2-chunk-16-left-64.int8.onnx")),
             )
             row = _add_field(
-                sec_wake_model,
+                sec_wake_advanced,
                 row,
-                key="wake_owner_profile",
-                label="主人声纹特征文件",
-                value=current.get("wake_owner_profile", "~/.config/recordian/owner_voice_profile.json"),
-                hint="JSON 文件路径，可备份/迁移",
+                key="wake_tokens",
+                label="Tokens 文件",
+                value=current.get("wake_tokens", str(wake_model_dir / "tokens.txt")),
             )
-            _add_field(
-                sec_wake_model,
+            row = _add_field(
+                sec_wake_advanced,
+                row,
+                key="wake_tokens_type",
+                label="Tokens 类型",
+                value=current.get("wake_tokens_type", "ppinyin"),
+                kind="combo",
+                options=("ppinyin", "cjkchar", "bpe", "fpinyin"),
+            )
+            row = _add_field(
+                sec_wake_advanced,
+                row,
+                key="wake_keywords_file",
+                label="关键词文件（可选）",
+                value=current.get("wake_keywords_file", ""),
+                hint="留空自动由前缀+名字生成",
+            )
+            row = _add_field(
+                sec_wake_advanced,
+                row,
+                key="wake_sample_rate",
+                label="采样率",
+                value=current.get("wake_sample_rate", 16000),
+            )
+            row = _add_field(
+                sec_wake_advanced,
                 row,
                 key="wake_keyword_threshold",
                 label="关键词阈值",
                 value=current.get("wake_keyword_threshold", DEFAULT_WAKE_KEYWORD_THRESHOLD),
             )
-
-            sec_wake_advanced = _create_section(tab_wake, "高级调优")
-            row = 0
             row = _add_field(
                 sec_wake_advanced,
                 row,
@@ -2721,58 +2681,13 @@ class TrayApp:
                 kind="bool",
                 default_bool=True,
             )
-            row = _add_field(
+            _add_field(
                 sec_wake_advanced,
                 row,
                 key="wake_speech_confirm_s",
                 label="开口确认时长 (s)",
                 value=current.get("wake_speech_confirm_s", 0.18),
                 hint="累计语音证据达到该时长，判定已开口",
-            )
-            row = _add_field(
-                sec_wake_advanced,
-                row,
-                key="wake_use_semantic_gate",
-                label="启用语义门控",
-                value=current.get("wake_use_semantic_gate", False),
-                kind="bool",
-                default_bool=False,
-                hint="通过轻量语义探测辅助判断开始/结束",
-            )
-            row = _add_field(
-                sec_wake_advanced,
-                row,
-                key="wake_semantic_probe_interval_s",
-                label="语义探测间隔 (s)",
-                value=current.get("wake_semantic_probe_interval_s", 0.45),
-            )
-            row = _add_field(
-                sec_wake_advanced,
-                row,
-                key="wake_semantic_window_s",
-                label="语义探测窗口 (s)",
-                value=current.get("wake_semantic_window_s", 1.2),
-            )
-            row = _add_field(
-                sec_wake_advanced,
-                row,
-                key="wake_semantic_end_silence_s",
-                label="语义静音结束 (s)",
-                value=current.get("wake_semantic_end_silence_s", 1.0),
-            )
-            row = _add_field(
-                sec_wake_advanced,
-                row,
-                key="wake_semantic_min_chars",
-                label="语义最小字符数",
-                value=current.get("wake_semantic_min_chars", 1),
-            )
-            _add_field(
-                sec_wake_advanced,
-                row,
-                key="wake_semantic_timeout_ms",
-                label="语义探测超时 (ms)",
-                value=current.get("wake_semantic_timeout_ms", 1200),
             )
 
             status_label = Gtk.Label(label="已载入当前配置。保存后会按设置类型立即生效、下次录音生效，或在必要时重启后端。")
@@ -3106,27 +3021,13 @@ class TrayApp:
                         "wake_auto_name_variants": bool(_get_value("wake_auto_name_variants")),
                         "wake_auto_prefix_variants": bool(_get_value("wake_auto_prefix_variants")),
                         "wake_allow_name_only": bool(_get_value("wake_allow_name_only")),
-                        "wake_use_semantic_gate": bool(_get_value("wake_use_semantic_gate")),
-                        "wake_semantic_probe_interval_s": _parse_float_field(
-                            "wake_semantic_probe_interval_s",
-                            float(current.get("wake_semantic_probe_interval_s", 0.45)),
-                        ),
-                        "wake_semantic_window_s": _parse_float_field(
-                            "wake_semantic_window_s",
-                            float(current.get("wake_semantic_window_s", 1.2)),
-                        ),
-                        "wake_semantic_end_silence_s": _parse_float_field(
-                            "wake_semantic_end_silence_s",
-                            float(current.get("wake_semantic_end_silence_s", 1.0)),
-                        ),
-                        "wake_semantic_min_chars": _parse_int_field(
-                            "wake_semantic_min_chars",
-                            int(current.get("wake_semantic_min_chars", 1)),
-                        ),
-                        "wake_semantic_timeout_ms": _parse_int_field(
-                            "wake_semantic_timeout_ms",
-                            int(current.get("wake_semantic_timeout_ms", 1200)),
-                        ),
+                        # Hidden semantic gate settings — preserved from latest config, not shown in UI
+                        "wake_use_semantic_gate": bool(latest_config.get("wake_use_semantic_gate", False)),
+                        "wake_semantic_probe_interval_s": float(cast(Any, latest_config.get("wake_semantic_probe_interval_s", 0.45))),
+                        "wake_semantic_window_s": float(cast(Any, latest_config.get("wake_semantic_window_s", 1.2))),
+                        "wake_semantic_end_silence_s": float(cast(Any, latest_config.get("wake_semantic_end_silence_s", 1.0))),
+                        "wake_semantic_min_chars": int(cast(Any, latest_config.get("wake_semantic_min_chars", 1))),
+                        "wake_semantic_timeout_ms": int(cast(Any, latest_config.get("wake_semantic_timeout_ms", 1200))),
                         "wake_owner_verify": bool(_get_value("wake_owner_verify")),
                         "wake_owner_sample": str(_get_value("wake_owner_sample")).strip(),
                         "wake_owner_profile": str(_get_value("wake_owner_profile")).strip()
@@ -3192,11 +3093,6 @@ class TrayApp:
                     payload["wake_pre_roll_ms"] = max(0, cast(int, payload["wake_pre_roll_ms"]))
                     payload["wake_decode_budget_per_cycle"] = max(1, cast(int, payload["wake_decode_budget_per_cycle"]))
                     payload["wake_decode_budget_per_sec"] = max(1.0, cast(float, payload["wake_decode_budget_per_sec"]))
-                    payload["wake_semantic_probe_interval_s"] = max(0.1, cast(float, payload["wake_semantic_probe_interval_s"]))
-                    payload["wake_semantic_window_s"] = max(0.4, cast(float, payload["wake_semantic_window_s"]))
-                    payload["wake_semantic_end_silence_s"] = max(0.2, cast(float, payload["wake_semantic_end_silence_s"]))
-                    payload["wake_semantic_min_chars"] = max(1, cast(int, payload["wake_semantic_min_chars"]))
-                    payload["wake_semantic_timeout_ms"] = max(200, cast(int, payload["wake_semantic_timeout_ms"]))
                     payload["wake_owner_threshold"] = min(0.99, max(0.0, cast(float, payload["wake_owner_threshold"])))
                     payload["wake_owner_window_s"] = max(0.6, cast(float, payload["wake_owner_window_s"]))
                     payload["wake_owner_silence_extend_s"] = max(0.0, cast(float, payload["wake_owner_silence_extend_s"]))
@@ -3213,7 +3109,11 @@ class TrayApp:
                     status_label.set_text(f"保存失败：{exc}")
                     return
 
-                status_label.set_text(f"{effect_status_message(effect, restarted=restarted)} ({self.config_path})")
+                self._invalidate_config_cache()
+                changed_labels = ", ".join(KEY_LABEL_MAP.get(k, k) for k in changed_keys)
+                status_label.set_text(
+                    f"已保存并重启后端（变更: {changed_labels}）" if restarted else f"{effect_status_message(effect, restarted=restarted)} ({self.config_path})"
+                )
                 self._update_tray_menu()
 
             btn_save = Gtk.Button(label="仅保存")
@@ -3298,17 +3198,19 @@ class TrayApp:
         start_item = Gtk.MenuItem(label="启动后端")
         start_item.connect("activate", lambda _: self.root.after(0, self.backend.start))
         menu.append(start_item)
+        self._appindicator_start_item = start_item
 
         # 停止后端
         stop_item = Gtk.MenuItem(label="停止后端")
         stop_item.connect("activate", lambda _: self.root.after(0, self.backend.stop))
         menu.append(stop_item)
+        self._appindicator_stop_item = stop_item
 
         menu.append(Gtk.SeparatorMenuItem())
 
         # Text refine toggle
-        text_refine_item = Gtk.CheckMenuItem(label="启用文本精炼")
-        config = ConfigManager.load(self.config_path)
+        text_refine_item = Gtk.CheckMenuItem(label="文本精炼（关闭=快速模式）")
+        config = self._get_cached_config()
         text_refine_enabled = bool(config.get("enable_text_refine", True))
         text_refine_item.set_active(text_refine_enabled)
         text_refine_item.connect("toggled", lambda item: self.root.after(0, lambda: self.toggle_text_refine(item.get_active())))
@@ -3415,7 +3317,7 @@ class TrayApp:
                     copy_text_item = getattr(self, '_appindicator_copy_text_item', None)
                     if copy_text_item is not None:
                         copy_text_item.set_sensitive(bool(self.state.last_run.text))
-                    cfg = ConfigManager.load(self.config_path)
+                    cfg = self._get_cached_config()
                     text_refine_item = getattr(self, "_appindicator_text_refine_item", None)
                     if text_refine_item is not None:
                         text_refine_item.set_active(bool(cfg.get("enable_text_refine", True)))
@@ -3428,6 +3330,13 @@ class TrayApp:
                     streaming_commit_item = getattr(self, "_appindicator_streaming_commit_item", None)
                     if streaming_commit_item is not None:
                         streaming_commit_item.set_active(bool(cfg.get("enable_streaming_commit", False)))
+                    # R6: start/stop button sensitivity
+                    start_item = getattr(self, "_appindicator_start_item", None)
+                    if start_item is not None:
+                        start_item.set_sensitive(not self.state.backend_running)
+                    stop_item = getattr(self, "_appindicator_stop_item", None)
+                    if stop_item is not None:
+                        stop_item.set_sensitive(self.state.backend_running)
                     self._sync_appindicator_preset_submenu()
                     try:
                         indicator.set_icon(icon_path)
