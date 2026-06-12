@@ -9,6 +9,7 @@ from recordian.config import ConfigManager
 from recordian.preset_manager import PresetManager
 from recordian.runtime_config import normalize_runtime_config
 from recordian.setting_effects import SettingEffect, combined_setting_effect, effect_label, effect_status_message
+from recordian.refine_model_discovery import fetch_model_list
 from recordian.tray_settings_utils import KEY_LABEL_MAP
 from recordian.tray_utils import save_config_changes
 from recordian.voice_wake import DEFAULT_WAKE_KEYWORD_THRESHOLD, DEFAULT_WAKE_NUM_THREADS
@@ -546,12 +547,39 @@ def open_settings_gtk(
         current_preset_value_label = Gtk.Label(label=_get_current_refine_preset_name())
         current_preset_value_label.set_xalign(0.0)
         current_preset_box.pack_start(current_preset_value_label, False, False, 0)
-        current_preset_hint = Gtk.Label(label="切换请到“预设管理”页，或直接使用托盘菜单。")
+        current_preset_hint = Gtk.Label(label="切换请到「预设管理」页，或直接使用托盘菜单。")
         current_preset_hint.set_xalign(0.0)
         current_preset_hint.set_opacity(0.75)
         current_preset_box.pack_start(current_preset_hint, False, False, 0)
         sec_refine.attach(current_preset_box, 1, row, 1, 1)
         row += 1
+
+        # Cloud provider fields: API base, key, and model dropdown
+        row = _add_field(sec_refine, row, key="refine_api_base", label="云端 API Base", value=current.get("refine_api_base", ""))
+        row = _add_field(sec_refine, row, key="refine_api_key", label="云端 API Key", value=current.get("refine_api_key", ""), secret=True)
+
+        # For cloud provider, fetch available models and show as dropdown
+        cloud_models: tuple[str, ...] = ()
+        if current_refine_provider == "cloud":
+            api_base = str(current.get("refine_api_base", "")).strip()
+            api_key = str(current.get("refine_api_key", "")).strip()
+            if api_base:
+                try:
+                    cloud_models = tuple(fetch_model_list(api_base, api_key))
+                except Exception:
+                    pass
+
+        row = _add_field(
+            sec_refine,
+            row,
+            key="refine_api_model",
+            label="云端 API 模型",
+            value=current.get("refine_api_model", ""),
+            kind="combo" if cloud_models else "entry",
+            options=cloud_models,
+        )
+
+        # Local/llamacpp provider fields
         row = _add_field(
             sec_refine,
             row,
@@ -598,9 +626,6 @@ def open_settings_gtk(
             kind="bool",
             default_bool=False,
         )
-        row = _add_field(sec_refine, row, key="refine_api_base", label="云端 API Base", value=current.get("refine_api_base", ""))
-        row = _add_field(sec_refine, row, key="refine_api_key", label="云端 API Key", value=current.get("refine_api_key", ""), secret=True)
-        _add_field(sec_refine, row, key="refine_api_model", label="云端 API 模型", value=current.get("refine_api_model", ""))
 
         sec_remote = _create_section(tab_remote, "远程粘贴")
         row = 0
