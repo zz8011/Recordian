@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 from .base_text_refiner import BaseTextRefiner
 
 
@@ -32,8 +34,8 @@ class Qwen3TextRefiner(BaseTextRefiner):
         self.device = device
         self.dtype = dtype
         self.max_new_tokens = max_new_tokens
-        self._model = None
-        self._tokenizer = None
+        self._model: Any | None = None
+        self._tokenizer: Any | None = None
 
     @property
     def provider_name(self) -> str:
@@ -92,13 +94,16 @@ class Qwen3TextRefiner(BaseTextRefiner):
         Returns:
             精炼后的文本
         """
-        self._lazy_load()
-
         if not text.strip():
             return ""
 
-        prompt = self._build_prompt(text)
-        messages = [{"role": "user", "content": prompt}]
+        self._lazy_load()
+
+        messages = self._build_messages(text)
+        tokenizer = self._tokenizer
+        model = self._model
+        if tokenizer is None or model is None:
+            raise RuntimeError("Qwen3TextRefiner model is not loaded")
 
         # 根据 enable_thinking 参数控制是否启用思考模式
         chat_template_kwargs = {
@@ -108,19 +113,19 @@ class Qwen3TextRefiner(BaseTextRefiner):
 
         # 如果 tokenizer 支持 enable_thinking 参数，则传递
         try:
-            text_input = self._tokenizer.apply_chat_template(
+            text_input = tokenizer.apply_chat_template(
                 messages,
                 enable_thinking=self.enable_thinking,
                 **chat_template_kwargs,
             )
         except TypeError:
             # 如果不支持 enable_thinking 参数，使用默认方式
-            text_input = self._tokenizer.apply_chat_template(
+            text_input = tokenizer.apply_chat_template(
                 messages,
                 **chat_template_kwargs,
             )
 
-        model_inputs = self._tokenizer([text_input], return_tensors="pt").to(self.device)
+        model_inputs = tokenizer([text_input], return_tensors="pt").to(self.device)
 
         import torch
 
@@ -129,15 +134,15 @@ class Qwen3TextRefiner(BaseTextRefiner):
         generate_kwargs = {
             "max_new_tokens": self.max_new_tokens,
             "do_sample": False,  # 使用 greedy decoding，更快更稳定
-            "pad_token_id": self._tokenizer.pad_token_id,
-            "eos_token_id": self._tokenizer.eos_token_id,
+            "pad_token_id": tokenizer.pad_token_id,
+            "eos_token_id": tokenizer.eos_token_id,
         }
 
         # 注意：不使用 stop_strings，因为会导致输出为空
         # thinking 模式通过 apply_chat_template 的 enable_thinking 参数控制
 
         with torch.no_grad():
-            generated_ids = self._model.generate(
+            generated_ids = model.generate(
                 model_inputs.input_ids,
                 attention_mask=model_inputs.attention_mask,
                 **generate_kwargs,
@@ -148,7 +153,7 @@ class Qwen3TextRefiner(BaseTextRefiner):
             for input_ids, output_ids in zip(model_inputs.input_ids, generated_ids, strict=False)
         ]
 
-        response = self._tokenizer.batch_decode(generated_ids, skip_special_tokens=True)[0]
+        response = tokenizer.batch_decode(generated_ids, skip_special_tokens=True)[0]
         return self._remove_think_tags(response)
 
     def refine_stream(self, text: str):
@@ -160,13 +165,16 @@ class Qwen3TextRefiner(BaseTextRefiner):
         Yields:
             str: 每次生成的新文本片段
         """
-        self._lazy_load()
-
         if not text.strip():
             return
 
-        prompt = self._build_prompt(text)
-        messages = [{"role": "user", "content": prompt}]
+        self._lazy_load()
+
+        messages = self._build_messages(text)
+        tokenizer = self._tokenizer
+        model = self._model
+        if tokenizer is None or model is None:
+            raise RuntimeError("Qwen3TextRefiner model is not loaded")
 
         # 根据 enable_thinking 参数控制是否启用思考模式
         chat_template_kwargs = {
@@ -176,19 +184,19 @@ class Qwen3TextRefiner(BaseTextRefiner):
 
         # 如果 tokenizer 支持 enable_thinking 参数，则传递
         try:
-            text_input = self._tokenizer.apply_chat_template(
+            text_input = tokenizer.apply_chat_template(
                 messages,
                 enable_thinking=self.enable_thinking,
                 **chat_template_kwargs,
             )
         except TypeError:
             # 如果不支持 enable_thinking 参数，使用默认方式
-            text_input = self._tokenizer.apply_chat_template(
+            text_input = tokenizer.apply_chat_template(
                 messages,
                 **chat_template_kwargs,
             )
 
-        model_inputs = self._tokenizer([text_input], return_tensors="pt").to(self.device)
+        model_inputs = tokenizer([text_input], return_tensors="pt").to(self.device)
 
         import threading
 
@@ -196,7 +204,7 @@ class Qwen3TextRefiner(BaseTextRefiner):
 
         # 创建流式输出器
         streamer = TextIteratorStreamer(
-            self._tokenizer,
+            tokenizer,
             skip_prompt=True,
             skip_special_tokens=True,
         )
@@ -208,13 +216,13 @@ class Qwen3TextRefiner(BaseTextRefiner):
             "max_new_tokens": self.max_new_tokens,
             "temperature": self.temperature,
             "do_sample": True if self.temperature > 0 else False,
-            "pad_token_id": self._tokenizer.pad_token_id,
-            "eos_token_id": self._tokenizer.eos_token_id,
+            "pad_token_id": tokenizer.pad_token_id,
+            "eos_token_id": tokenizer.eos_token_id,
             "streamer": streamer,
         }
 
         # 在后台线程中运行生成
-        thread = threading.Thread(target=self._model.generate, kwargs=generate_kwargs)
+        thread = threading.Thread(target=model.generate, kwargs=generate_kwargs)
         thread.start()
 
         # 始终过滤 <think> 标签，只输出最终结果
@@ -261,20 +269,24 @@ class Qwen3TextRefiner(BaseTextRefiner):
 
         thread.join()
 
-    def _build_prompt(self, text: str) -> str:
-        """构建文本精炼 prompt。"""
+    # --- Prompt -----------------------------------------------------------
+
+    _DEFAULT_SYSTEM_PROMPT = (
+        "整理以下语音识别文本：\n"
+        "- 去除重复词语和句子\n"
+        "- 去除语气助词（嗯、啊、呃、那个、这个、然后等）\n"
+        "- 添加正确标点符号\n"
+        "- 保持原意，通顺易读\n"
+        "- 直接输出整理后的结果，不要输出思考过程，不要使用 <think> 标签"
+    )
+
+    def _build_messages(self, text: str) -> list[dict[str, str]]:
+        """构建 system/user 分离的消息列表（防止 prompt 注入）。"""
         if self.prompt_template:
-            # 使用自定义模板，{text} 会被替换为实际文本
-            return self.prompt_template.format(text=text)
+            user_content = self.prompt_template.replace("{text}", text)
+            return [{"role": "user", "content": user_content}]
 
-        # 默认 prompt
-        return f"""整理以下语音识别文本：
-- 去除重复词语和句子
-- 去除语气助词（嗯、啊、呃、那个、这个、然后等）
-- 添加正确标点符号
-- 保持原意，通顺易读
-- 直接输出整理后的结果，不要输出思考过程，不要使用 <think> 标签
-
-原文：{text}
-
-整理后："""
+        return [
+            {"role": "system", "content": self._DEFAULT_SYSTEM_PROMPT},
+            {"role": "user", "content": f"原文：{text}\n\n整理后："},
+        ]

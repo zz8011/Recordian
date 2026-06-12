@@ -226,7 +226,76 @@ def test_run_postprocess_pipeline_captures_refine_samples_jsonl(tmp_path: Path, 
     assert payload["refine_applied"] is True
     assert payload["refine_changed"] is True
     assert payload["refine_model"] == "mock-refiner"
+    assert payload["refine_enabled"] is False
+    assert payload["refiner_ready"] is True
     assert any("diag refine_sample_captured=" in str(event.get("message", "")) for event in state_events)
+
+
+def test_run_postprocess_pipeline_logs_when_refine_enabled_without_refiner(tmp_path: Path, monkeypatch) -> None:
+    audio_path, state_events, result_events, error_events = _base_context(tmp_path)
+    capture_path = tmp_path / "refine-samples.jsonl"
+
+    class _Provider:
+        def transcribe_file(self, audio_path: Path, hotwords: list[str]):  # noqa: ANN001
+            return SimpleNamespace(text="嗯 测试 测试")
+
+    class _Committer:
+        backend_name = "stdout"
+        target_window_id = None
+
+        def commit(self, text: str) -> SimpleNamespace:
+            return SimpleNamespace(backend="stdout", committed=True, detail=f"committed:{text}")
+
+    monkeypatch.setattr(
+        "recordian.postprocess_pipeline.read_wav_mono_f32",
+        lambda path: np.array([0.3, -0.2, 0.2], dtype=np.float32),
+    )
+    monkeypatch.setattr(
+        "recordian.postprocess_pipeline.send_remote_paste_from_args",
+        lambda args, text, *, log=None: {"enabled": False},
+    )
+
+    context = PostprocessPipelineContext(
+        args=argparse.Namespace(
+            config_path="",
+            auto_hard_enter=False,
+            debug_diagnostics=False,
+            enable_text_refine=True,
+            enable_streaming_refine=False,
+            capture_refine_samples=True,
+            capture_refine_samples_path=str(capture_path),
+            refine_preset="intent",
+            refine_provider="cloud",
+            enable_streaming_commit=False,
+            enable_remote_paste=False,
+        ),
+        audio_path=audio_path,
+        record_backend="ffmpeg-pulse",
+        record_latency_ms=222.0,
+        owner_filter_enabled=False,
+        owner_seen=False,
+        owner_last_score=-1.0,
+        state={},
+        provider=_Provider(),
+        refiner=None,
+        committer=_Committer(),
+        auto_lexicon=None,
+        refine_postprocess_rule="none",
+        normalize_final_text=lambda text: str(text).strip(),
+        resolve_hotwords=lambda: [],
+        on_state=state_events.append,
+        on_result=result_events.append,
+        on_error=error_events.append,
+    )
+
+    run_postprocess_pipeline(context)
+
+    assert not error_events
+    assert any("text_refine_enabled_but_unavailable" in str(event.get("message", "")) for event in state_events)
+    payload = json.loads(capture_path.read_text(encoding="utf-8").strip())
+    assert payload["refine_applied"] is False
+    assert payload["refine_enabled"] is True
+    assert payload["refiner_ready"] is False
 
 
 def test_run_postprocess_pipeline_reuses_prefetched_asr_text_and_commit(tmp_path: Path, monkeypatch) -> None:

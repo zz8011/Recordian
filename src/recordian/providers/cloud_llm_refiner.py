@@ -108,35 +108,94 @@ class CloudLLMRefiner(BaseTextRefiner):
         if output:
             yield output
 
-    def _refine_anthropic(self, text: str) -> str:
-        """使用 Anthropic API 格式"""
-        prompt = self._build_prompt(text)
+    # ------------------------------------------------------------------
+    # Shared helpers — eliminate duplication across provider methods
+    # ------------------------------------------------------------------
 
+    def _ensure_requests(self):
+        """Lazily import *requests*, raising a user-friendly error if missing."""
         try:
             import requests
         except ModuleNotFoundError as exc:
             raise RuntimeError(
                 "requests 未安装。请执行: pip install requests"
             ) from exc
+        return requests
 
-        # 调用 Anthropic-compatible API
-        headers = {
+    def _raise_on_error(self, response) -> None:
+        """Raise RuntimeError when the API response is non-200."""
+        if response.status_code != 200:
+            raise RuntimeError(
+                f"API 调用失败: {response.status_code} {response.text}"
+            )
+
+    # --- Anthropic --------------------------------------------------------
+
+    def _build_anthropic_headers(self) -> dict:
+        """Anthropic-compatible API 请求头"""
+        return {
             "Content-Type": "application/json",
             "x-api-key": self.api_key,
             "anthropic-version": "2023-06-01",
         }
 
-        payload = {
+    # --- Prompt -----------------------------------------------------------
+
+    _DEFAULT_SYSTEM_PROMPT = (
+        "整理以下语音识别文本：\n"
+        "- 去除重复词语和句子\n"
+        "- 去除语气助词（嗯、啊、呃、那个、这个、然后等）\n"
+        "- 添加正确标点符号\n"
+        "- 保持原意，通顺易读\n"
+        "- 直接输出结果，不要思考过程"
+    )
+
+    def _build_messages(self, text: str) -> list[dict[str, str]]:
+        """构建 system/user 分离的消息列表（防止 prompt 注入）。
+
+        将指令放入 system 角色确保模型优先遵循，用户文本放入 user
+        角色，避免恶意文本篡改指令。
+        """
+        if self.prompt_template:
+            # 使用 .replace() 代替 .format() 防止格式字符串攻击
+            user_content = self.prompt_template.replace("{text}", text)
+            return [{"role": "user", "content": user_content}]
+
+        return [
+            {"role": "system", "content": self._DEFAULT_SYSTEM_PROMPT},
+            {"role": "user", "content": f"原文：{text}\n\n整理后："},
+        ]
+
+    def _build_anthropic_payload(self, messages: list[dict[str, str]]) -> dict:
+        """Anthropic-compatible API 请求体"""
+        return {
             "model": self.model,
             "max_tokens": self.max_tokens,
             "temperature": self.temperature,
-            "messages": [
-                {
-                    "role": "user",
-                    "content": prompt,
-                }
-            ],
+            "messages": messages,
         }
+
+    @staticmethod
+    def _parse_anthropic_response(result: dict) -> str:
+        """从 Anthropic API 响应中提取文本"""
+        content = result.get("content", [])
+
+        # 查找 type="text" 的内容
+        if content and isinstance(content, list):
+            for item in content:
+                if isinstance(item, dict) and item.get("type") == "text":
+                    text = item.get("text", "")
+                    return text.strip() if isinstance(text, str) else ""
+        return ""
+
+    def _refine_anthropic(self, text: str) -> str:
+        """使用 Anthropic API 格式"""
+        messages = self._build_messages(text)
+        requests = self._ensure_requests()
+
+        # 调用 Anthropic-compatible API
+        headers = self._build_anthropic_headers()
+        payload = self._build_anthropic_payload(messages)
 
         response = requests.post(
             f"{self.api_base}/v1/messages",
@@ -144,58 +203,60 @@ class CloudLLMRefiner(BaseTextRefiner):
             json=payload,
             timeout=self.timeout,
         )
+        self._raise_on_error(response)
 
-        if response.status_code != 200:
-            raise RuntimeError(
-                f"API 调用失败: {response.status_code} {response.text}"
-            )
-
-        result = response.json()
-        content = result.get("content", [])
-
-        # 查找 type="text" 的内容
-        output = ""
-        if content and isinstance(content, list):
-            for item in content:
-                if isinstance(item, dict) and item.get("type") == "text":
-                    output = item.get("text", "").strip()
-                    break
-
+        output = self._parse_anthropic_response(response.json())
         return self._sanitize_output(output)
 
-    def _refine_openai(self, text: str) -> str:
-        """使用 OpenAI API 格式（Groq, DeepSeek 等）"""
-        prompt = self._build_prompt(text)
+    # --- OpenAI -----------------------------------------------------------
 
-        try:
-            import requests
-        except ModuleNotFoundError as exc:
-            raise RuntimeError(
-                "requests 未安装。请执行: pip install requests"
-            ) from exc
-
-        # 调用 OpenAI-compatible API
-        headers = {
+    def _build_openai_headers(self) -> dict:
+        """OpenAI-compatible API 请求头（Groq, DeepSeek 等）"""
+        return {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {self.api_key}",
         }
 
-        payload = {
+    def _build_openai_payload(
+        self, messages: list[dict[str, str]], *, stream: bool = False
+    ) -> dict:
+        """OpenAI-compatible API 请求体"""
+        payload: dict = {
             "model": self.model,
             "max_tokens": self.max_tokens,
             "temperature": self.temperature,
-            "messages": [
-                {
-                    "role": "user",
-                    "content": prompt,
-                }
-            ],
+            "messages": messages,
             # vLLM/GPUStack serving Qwen3.5 defaults to reasoning mode unless
             # chat_template_kwargs.enable_thinking is explicitly disabled.
             "chat_template_kwargs": {
                 "enable_thinking": bool(self.enable_thinking),
             },
         }
+        if stream:
+            payload["stream"] = True
+        return payload
+
+    @staticmethod
+    def _parse_openai_response(result: dict) -> str:
+        """从 OpenAI API 响应中提取文本"""
+        choices = result.get("choices", [])
+        if choices and isinstance(choices, list):
+            choice = choices[0]
+            if isinstance(choice, dict):
+                message = choice.get("message", {})
+                if isinstance(message, dict):
+                    content = message.get("content", "")
+                    return content.strip() if isinstance(content, str) else ""
+        return ""
+
+    def _refine_openai(self, text: str) -> str:
+        """使用 OpenAI API 格式（Groq, DeepSeek 等）"""
+        messages = self._build_messages(text)
+        requests = self._ensure_requests()
+
+        # 调用 OpenAI-compatible API
+        headers = self._build_openai_headers()
+        payload = self._build_openai_payload(messages)
 
         response = requests.post(
             f"{self.api_base}/chat/completions",
@@ -203,52 +264,17 @@ class CloudLLMRefiner(BaseTextRefiner):
             json=payload,
             timeout=self.timeout,
         )
+        self._raise_on_error(response)
 
-        if response.status_code != 200:
-            raise RuntimeError(
-                f"API 调用失败: {response.status_code} {response.text}"
-            )
-
-        result = response.json()
-        choices = result.get("choices", [])
-
-        output = ""
-        if choices and len(choices) > 0:
-            message = choices[0].get("message", {})
-            output = message.get("content", "").strip()
-
+        output = self._parse_openai_response(response.json())
         return self._sanitize_output(output)
 
     def _refine_stream_openai(self, text: str):
-        prompt = self._build_prompt(text)
+        messages = self._build_messages(text)
+        requests = self._ensure_requests()
 
-        try:
-            import requests
-        except ModuleNotFoundError as exc:
-            raise RuntimeError(
-                "requests 未安装。请执行: pip install requests"
-            ) from exc
-
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {self.api_key}",
-        }
-
-        payload = {
-            "model": self.model,
-            "max_tokens": self.max_tokens,
-            "temperature": self.temperature,
-            "stream": True,
-            "messages": [
-                {
-                    "role": "user",
-                    "content": prompt,
-                }
-            ],
-            "chat_template_kwargs": {
-                "enable_thinking": bool(self.enable_thinking),
-            },
-        }
+        headers = self._build_openai_headers()
+        payload = self._build_openai_payload(messages, stream=True)
 
         response = requests.post(
             f"{self.api_base}/chat/completions",
@@ -257,11 +283,7 @@ class CloudLLMRefiner(BaseTextRefiner):
             timeout=self.timeout,
             stream=True,
         )
-
-        if response.status_code != 200:
-            raise RuntimeError(
-                f"API 调用失败: {response.status_code} {response.text}"
-            )
+        self._raise_on_error(response)
 
         for raw_line in response.iter_lines(decode_unicode=False):
             if not raw_line:
@@ -288,39 +310,48 @@ class CloudLLMRefiner(BaseTextRefiner):
             if choice.get("finish_reason") is not None:
                 break
 
-    def _refine_ollama(self, text: str) -> str:
-        """使用 Ollama 原生 API 格式"""
-        prompt = self._build_prompt(text)
+    # --- Ollama -----------------------------------------------------------
 
-        try:
-            import requests
-        except ModuleNotFoundError as exc:
-            raise RuntimeError(
-                "requests 未安装。请执行: pip install requests"
-            ) from exc
-
-        # 调用 Ollama 原生 API
-        headers = {
+    def _build_ollama_headers(self) -> dict:
+        """Ollama 原生 API 请求头"""
+        return {
             "Content-Type": "application/json",
         }
 
-        payload = {
+    def _build_ollama_payload(
+        self, messages: list[dict[str, str]], *, stream: bool = False
+    ) -> dict:
+        """Ollama 原生 API 请求体"""
+        return {
             "model": self.model,
-            "messages": [
-                {
-                    "role": "user",
-                    "content": prompt,
-                }
-            ],
-            "stream": False,
+            "messages": messages,
+            "stream": stream,
             # Qwen3.5 reasoning models on Ollama may put output in `thinking`
             # unless `think` is explicitly disabled.
             "think": bool(self.enable_thinking),
             "options": {
                 "num_predict": self.max_tokens,
                 "temperature": self.temperature,
-            }
+            },
         }
+
+    @staticmethod
+    def _parse_ollama_response(result: dict) -> str:
+        """从 Ollama API 响应中提取文本"""
+        message = result.get("message", {})
+        if isinstance(message, dict):
+            content = message.get("content", "")
+            return content.strip() if isinstance(content, str) else ""
+        return ""
+
+    def _refine_ollama(self, text: str) -> str:
+        """使用 Ollama 原生 API 格式"""
+        messages = self._build_messages(text)
+        requests = self._ensure_requests()
+
+        # 调用 Ollama 原生 API
+        headers = self._build_ollama_headers()
+        payload = self._build_ollama_payload(messages)
 
         response = requests.post(
             f"{self.api_base}/api/chat",
@@ -328,47 +359,17 @@ class CloudLLMRefiner(BaseTextRefiner):
             json=payload,
             timeout=self.timeout,
         )
+        self._raise_on_error(response)
 
-        if response.status_code != 200:
-            raise RuntimeError(
-                f"API 调用失败: {response.status_code} {response.text}"
-            )
-
-        result = response.json()
-        message = result.get("message", {})
-        output = message.get("content", "").strip()
-
+        output = self._parse_ollama_response(response.json())
         return self._sanitize_output(output)
 
     def _refine_stream_ollama(self, text: str):
-        prompt = self._build_prompt(text)
+        messages = self._build_messages(text)
+        requests = self._ensure_requests()
 
-        try:
-            import requests
-        except ModuleNotFoundError as exc:
-            raise RuntimeError(
-                "requests 未安装。请执行: pip install requests"
-            ) from exc
-
-        headers = {
-            "Content-Type": "application/json",
-        }
-
-        payload = {
-            "model": self.model,
-            "messages": [
-                {
-                    "role": "user",
-                    "content": prompt,
-                }
-            ],
-            "stream": True,
-            "think": bool(self.enable_thinking),
-            "options": {
-                "num_predict": self.max_tokens,
-                "temperature": self.temperature,
-            }
-        }
+        headers = self._build_ollama_headers()
+        payload = self._build_ollama_payload(messages, stream=True)
 
         response = requests.post(
             f"{self.api_base}/api/chat",
@@ -377,11 +378,7 @@ class CloudLLMRefiner(BaseTextRefiner):
             timeout=self.timeout,
             stream=True,
         )
-
-        if response.status_code != 200:
-            raise RuntimeError(
-                f"API 调用失败: {response.status_code} {response.text}"
-            )
+        self._raise_on_error(response)
 
         for raw_line in response.iter_lines(decode_unicode=False):
             if not raw_line:
@@ -396,19 +393,6 @@ class CloudLLMRefiner(BaseTextRefiner):
             if bool(event.get("done")):
                 break
 
-    def _build_prompt(self, text: str) -> str:
-        """构建文本精炼 prompt"""
-        if self.prompt_template:
-            return self.prompt_template.format(text=text)
+    # --- Legacy -----------------------------------------------------------
 
-        # 默认 prompt
-        return f"""整理以下语音识别文本：
-- 去除重复词语和句子
-- 去除语气助词（嗯、啊、呃、那个、这个、然后等）
-- 添加正确标点符号
-- 保持原意，通顺易读
-- 直接输出结果，不要思考过程
-
-原文：{text}
-
-整理后："""
+    # _build_prompt 已移除，由 _build_messages 替代（system/user 角色分离）

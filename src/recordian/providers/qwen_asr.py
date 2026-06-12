@@ -144,6 +144,7 @@ class QwenASRProvider(ASRProvider):
 
     def transcribe_file(self, wav_path: Path, *, hotwords: list[str]) -> ASRResult:
         self._lazy_load()
+        assert self._model is not None, "model should be loaded after _lazy_load"
 
         if not wav_path.exists():
             raise FileNotFoundError(wav_path)

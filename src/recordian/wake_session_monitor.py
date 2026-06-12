@@ -8,7 +8,7 @@ from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from dataclasses import dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Any
+from typing import Any, cast
 
 from .audio import write_wav_mono_f32
 
@@ -133,11 +133,13 @@ def _semantic_probe_text(
     timeout_ms: int,
     normalize_final_text: Callable[[str], str] | None = None,
 ) -> str:
+    import numpy as np
+
     if not samples:
         return ""
     with TemporaryDirectory(prefix="recordian-semantic-probe-") as temp_dir:
         wav_path = Path(temp_dir) / "probe.wav"
-        write_wav_mono_f32(wav_path, samples, sample_rate=sample_rate)
+        write_wav_mono_f32(wav_path, np.array(samples, dtype=np.float32), sample_rate=sample_rate)
         with ThreadPoolExecutor(max_workers=1) as executor:
             future = executor.submit(provider.transcribe_file, wav_path, hotwords=hotwords)
             try:
@@ -528,11 +530,11 @@ def start_wake_session_monitor(context: WakeSessionMonitorContext) -> threading.
                     return False
                 context.set_state("voice_auto_stopping", True)
                 try:
-                    last_speech_ts = float(context.get_state("voice_last_speech_ts"))
+                    last_speech_ts = cast(float, context.get_state("voice_last_speech_ts"))
                 except Exception:
                     last_speech_ts = 0.0
                 try:
-                    started_ts = float(context.get_state("voice_started_ts"))
+                    started_ts = cast(float, context.get_state("voice_started_ts"))
                 except Exception:
                     started_ts = 0.0
                 context.on_state(
@@ -556,7 +558,7 @@ def start_wake_session_monitor(context: WakeSessionMonitorContext) -> threading.
                 if bool(context.get_state("voice_auto_stopping")):
                     return False
                 speech_detected = bool(context.get_state("voice_speech_detected"))
-                started_ts = float(context.get_state("voice_started_ts"))
+                started_ts = cast(float, context.get_state("voice_started_ts"))
                 if semantic_enabled:
                     no_speech_timeout_s = max(0.0, float(getattr(context.args, "wake_no_speech_timeout_s", 2.0)))
                     min_speech_s = max(0.0, float(getattr(context.args, "wake_min_speech_s", 0.5)))
@@ -564,8 +566,8 @@ def start_wake_session_monitor(context: WakeSessionMonitorContext) -> threading.
                         float(getattr(context.args, "wake_auto_stop_silence_s", 1.5))
                     )
                     semantic_has_text = bool(context.get_state("voice_semantic_has_text"))
-                    semantic_last_ts = float(context.get_state("voice_semantic_last_text_ts"))
-                    last_speech_ts = float(context.get_state("voice_last_speech_ts"))
+                    semantic_last_ts = cast(float, context.get_state("voice_semantic_last_text_ts"))
+                    last_speech_ts = cast(float, context.get_state("voice_last_speech_ts"))
                     semantic_reason = _should_auto_stop_semantic_session(
                         now_ts=now_ts,
                         started_ts=started_ts,
@@ -585,7 +587,7 @@ def start_wake_session_monitor(context: WakeSessionMonitorContext) -> threading.
                     if no_speech_timeout_s > 0 and now_ts - started_ts >= no_speech_timeout_s:
                         return _emit_auto_stop("no_speech_timeout", now_ts=now_ts)
                     return False
-                last_speech_ts = float(context.get_state("voice_last_speech_ts"))
+                last_speech_ts = cast(float, context.get_state("voice_last_speech_ts"))
                 if now_ts - started_ts < max(0.0, float(getattr(context.args, "wake_min_speech_s", 0.5))):
                     return False
 

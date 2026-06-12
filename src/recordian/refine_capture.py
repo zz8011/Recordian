@@ -24,6 +24,8 @@ def append_refine_sample(
     refine_preset: str,
     refine_provider: str,
     refine_model: str,
+    refine_enabled: bool | None = None,
+    refiner_ready: bool | None = None,
     record_backend: str,
     transcribe_latency_ms: float,
     refine_latency_ms: float,
@@ -48,6 +50,10 @@ def append_refine_sample(
             "detail": str(commit_info.get("detail", "")),
         },
     }
+    if refine_enabled is not None:
+        payload["refine_enabled"] = bool(refine_enabled)
+    if refiner_ready is not None:
+        payload["refiner_ready"] = bool(refiner_ready)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with output_path.open("a", encoding="utf-8") as handle:

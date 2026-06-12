@@ -13,6 +13,10 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from shutil import which
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    import numpy as np
 
 EventCallback = Callable[[dict[str, object]], None]
 
@@ -654,7 +658,7 @@ class VoiceWakeService:
                 owner_verify_enabled = False
                 self._emit({"message": f"voice_wake_owner_verify_disabled: {type(exc).__name__}: {exc}"})
 
-        owner_audio_chunks = None
+        owner_audio_chunks: deque[np.ndarray] | None = None
         owner_audio_samples = 0
         owner_max_samples = max(samples_per_read, int(self.model.sample_rate * owner_window_s))
         if owner_verify_enabled:
@@ -686,7 +690,7 @@ class VoiceWakeService:
         pre_vad_frame_bytes = pre_vad_frame_samples * 2
         pre_vad_pcm_buffer = bytearray()
         pre_roll_samples = max(samples_per_read, int(self.model.sample_rate * pre_roll_s))
-        pre_roll_chunks: deque[object] = deque()
+        pre_roll_chunks: deque[np.ndarray] = deque()
         pre_roll_total_samples = 0
         speech_run_frames = 0
         gate_hangover_deadline = 0.0

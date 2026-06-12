@@ -468,16 +468,20 @@ def _capture_refine_sample(
     output_path = resolve_refine_capture_path(
         getattr(args, "capture_refine_samples_path", "")
     )
+    refine_enabled = bool(getattr(args, "enable_text_refine", False))
+    refiner_ready = refiner is not None
     append_refine_sample(
         output_path=output_path,
         audio_path=audio_path,
         raw_asr_text=raw_text,
         final_text=final_text,
-        refine_applied=refiner is not None and bool(str(raw_text).strip()),
+        refine_applied=refiner_ready and bool(str(raw_text).strip()),
         refine_changed=str(raw_text).strip() != str(final_text).strip(),
         refine_preset=str(getattr(args, "refine_preset", "default")).strip() or "default",
         refine_provider=str(getattr(args, "refine_provider", "")).strip(),
         refine_model=str(getattr(refiner, "model_name", "") or getattr(refiner, "model", "")).strip(),
+        refine_enabled=refine_enabled,
+        refiner_ready=refiner_ready,
         record_backend=record_backend,
         transcribe_latency_ms=transcribe_latency_ms,
         refine_latency_ms=refine_latency_ms,
@@ -836,6 +840,13 @@ def run_postprocess_pipeline(context: PostprocessPipelineContext) -> None:
                                 ),
                             }
                         )
+                elif bool(getattr(context.args, "enable_text_refine", False)) and text.strip():
+                    context.on_state(
+                        {
+                            "event": "log",
+                            "message": "text_refine_enabled_but_unavailable: refiner_not_initialized",
+                        }
+                    )
 
                 if routing.commit_local and context.prefetched_commit_info is not None:
                     commit_info = dict(context.prefetched_commit_info)

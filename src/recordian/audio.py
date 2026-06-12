@@ -29,7 +29,8 @@ def read_wav_mono_f32(path: Path, *, sample_rate: int = 16000) -> np.ndarray:
         return pcm.astype(np.float32) / 32768.0
 
     pcm = pcm.reshape(-1, channels)
-    return pcm.mean(axis=1).astype(np.float32) / 32768.0
+    mono: np.ndarray = pcm.mean(axis=1).astype(np.float32) / 32768.0
+    return mono
 
 
 def chunk_samples(

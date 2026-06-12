@@ -7,6 +7,7 @@ import subprocess
 import sys
 import threading
 import time
+from collections.abc import Sequence
 from ctypes.util import find_library
 from dataclasses import dataclass
 from shutil import which
@@ -139,7 +140,7 @@ def _resolve_hard_enter_committer(committer: TextCommitter) -> TextCommitter:
         for entry in committers:
             if not isinstance(entry, tuple) or not entry:
                 continue
-            candidate = entry[0]
+            candidate: TextCommitter = entry[0]
             backend = str(getattr(candidate, "backend_name", "")).strip().lower()
             if backend == "wtype" or backend.startswith("xdotool"):
                 return candidate
@@ -299,7 +300,7 @@ class CommitterWithFallback(TextCommitter):
 
     def __init__(
         self,
-        committers: list[tuple[TextCommitter, str]],
+        committers: Sequence[tuple[TextCommitter, str]],
         notify_on_fallback: bool = True,
         max_timeout_per_attempt: float = 2.0,
     ) -> None:
@@ -329,12 +330,14 @@ class CommitterWithFallback(TextCommitter):
                     )
                     if self.notify_on_fallback:
                         try:
-                            from .linux_notify import resolve_notifier
+                            from .linux_notify import Notification, resolve_notifier
                             notifier = resolve_notifier("auto")
                             notifier.notify(
-                                title="Recordian 输入降级",
-                                message=f"使用备用方式: {description}",
-                                urgency="low",
+                                Notification(
+                                    title="Recordian 输入降级",
+                                    body=f"使用备用方式: {description}",
+                                    urgency="low",
+                                )
                             )
                         except Exception as e:
                             logger.debug(f"Failed to send fallback notification: {e}")
@@ -363,12 +366,14 @@ class CommitterWithFallback(TextCommitter):
 
         if self.notify_on_fallback:
             try:
-                from .linux_notify import resolve_notifier
+                from .linux_notify import Notification, resolve_notifier
                 notifier = resolve_notifier("auto")
                 notifier.notify(
-                    title="Recordian 输入失败",
-                    message="所有输入方式均失败，请检查系统配置",
-                    urgency="critical",
+                    Notification(
+                        title="Recordian 输入失败",
+                        body="所有输入方式均失败，请检查系统配置",
+                        urgency="critical",
+                    )
                 )
             except Exception as e:
                 logger.debug(f"Failed to send error notification: {e}")
@@ -447,7 +452,7 @@ def resolve_committer(backend: str, *, target_window_id: int | None = None) -> T
 
         # Build committer list for fallback mode
         if normalized == "auto-fallback":
-            committers = []
+            committers: list[tuple[TextCommitter, str]] = []
             timeout_ms = _parse_clipboard_timeout_ms(os.environ.get("RECORDIAN_CLIPBOARD_TIMEOUT_MS"))
 
             # Try xdotool-clipboard first (best for CJK and Electron)

@@ -1,17 +1,20 @@
+import inspect
 from pathlib import Path
+from typing import Any
 
 from recordian.backend_manager import parse_backend_event_line
 from recordian.config import ConfigManager
 from recordian.tray_gui import (
     RecentRunObservation,
+    TrayApp,
     UiState,
     _blend_hex,
     _collect_recent_runtime_rows,
     _derive_openai_models_endpoint,
-    _extract_recent_run_observation,
-    _format_recent_run_log_suffix,
     _export_auto_lexicon_db,
+    _extract_recent_run_observation,
     _format_diagnostic_report,
+    _format_recent_run_log_suffix,
     _hex_with_alpha,
     _import_auto_lexicon_db,
     _load_hotkey_default_config,
@@ -306,3 +309,170 @@ def test_save_config_changes_restarts_only_for_restart_required_settings(tmp_pat
     assert restarted is True
     assert changed == ["enable_voice_wake"]
     assert restart_calls == ["restart"]
+
+
+def test_get_cached_config_returns_cache_on_second_call(tmp_path: Path, monkeypatch) -> None:
+    """R1: ConfigManager.load 只应在 mtime 变化时调用一次"""
+    import argparse
+
+    from recordian.tray_gui import TrayApp
+
+    config_path = tmp_path / "hotkey.json"
+    ConfigManager.save(config_path, {"enable_text_refine": True})
+
+    args = argparse.Namespace(config_path=str(config_path), no_auto_start=True)
+    app = TrayApp(args)
+
+    load_calls: list[object] = []
+    original_load = ConfigManager.load
+
+    def _mock_load(path: Path) -> dict[str, Any]:
+        load_calls.append(path)
+        result: dict[str, Any] = original_load(path)
+        return result
+
+    monkeypatch.setattr(ConfigManager, "load", _mock_load)
+
+    # 第一次调用应触发 load
+    cfg1 = app._get_cached_config()
+    assert cfg1.get("enable_text_refine") is True
+    assert len(load_calls) == 1
+
+    # 第二次调用（mtime 未变）应直接返回缓存
+    cfg2 = app._get_cached_config()
+    assert cfg2 is cfg1
+    assert len(load_calls) == 1
+
+    # 修改文件后 mtime 变化，应再次触发 load
+    ConfigManager.save(config_path, {"enable_text_refine": False})
+    cfg3 = app._get_cached_config()
+    assert cfg3.get("enable_text_refine") is False
+    assert len(load_calls) == 2
+
+
+def test_toggle_lock_prevents_double_save(tmp_path: Path, monkeypatch) -> None:
+    """R2: toggle 锁应阻止连续两次调用都触发 save"""
+    import argparse
+
+    from recordian.tray_gui import TrayApp
+
+    config_path = tmp_path / "hotkey.json"
+    ConfigManager.save(config_path, {"enable_text_refine": True})
+
+    args = argparse.Namespace(config_path=str(config_path), no_auto_start=True)
+    app = TrayApp(args)
+
+    save_calls: list[Any] = []
+    original_save = _save_config_changes
+
+    def _mock_save(*args, **kwargs):
+        save_calls.append((args, kwargs))
+        return original_save(*args, **kwargs)
+
+    monkeypatch.setattr("recordian.tray_gui._save_config_changes", _mock_save)
+
+    # 第一次 toggle（值变化 False -> True 已经是 True，所以是 no-op）
+    # 等等，当前是 True，toggle True 是 no-op，不会触发 save
+    # 改为 toggle False 触发一次 save
+    app.toggle_text_refine(False)
+    assert len(save_calls) == 1
+
+    # 再次 toggle False（值已经是 False），不应触发 save
+    app.toggle_text_refine(False)
+    assert len(save_calls) == 1
+
+
+def test_toggle_noop_when_value_matches(tmp_path: Path, monkeypatch) -> None:
+    """R2: 配置值已匹配时 toggle 不应触发 save"""
+    import argparse
+    from unittest.mock import MagicMock
+
+    from recordian.tray_gui import TrayApp
+
+    config_path = tmp_path / "hotkey.json"
+    ConfigManager.save(config_path, {"enable_text_refine": True})
+
+    args = argparse.Namespace(config_path=str(config_path), no_auto_start=True)
+    app = TrayApp(args)
+
+    save_calls: list[Any] = []
+
+    def _mock_save(*args, **kwargs):
+        save_calls.append((args, kwargs))
+        return MagicMock(value="immediate"), False, []
+
+    monkeypatch.setattr("recordian.tray_gui._save_config_changes", _mock_save)
+
+    # 当前 enable_text_refine=True，toggle True 应为 no-op
+    app.toggle_text_refine(True)
+    assert len(save_calls) == 0
+
+
+def test_toggle_voice_wake_sends_notification(tmp_path: Path, monkeypatch) -> None:
+    """R3: toggle_voice_wake 应发送桌面通知"""
+    import argparse
+
+    from recordian.tray_gui import TrayApp
+
+    config_path = tmp_path / "hotkey.json"
+    ConfigManager.save(config_path, {"enable_voice_wake": False})
+
+    args = argparse.Namespace(config_path=str(config_path), no_auto_start=True)
+    app = TrayApp(args)
+
+    notify_calls: list[tuple[str, str]] = []
+
+    def _mock_notify(msg: str, title: str = "") -> None:
+        notify_calls.append((msg, title))
+
+    monkeypatch.setattr("recordian.linux_notify.notify", _mock_notify)
+
+    app.toggle_voice_wake(True)
+    assert len(notify_calls) == 1
+    assert "Recordian: 已开启语音唤醒" in notify_calls[0][1]
+
+
+def test_sound_path_fields_use_file_chooser() -> None:
+    """R8: 音效路径字段应有文件选择器"""
+    import inspect
+
+    from recordian.tray_gui import TrayApp
+
+    source = inspect.getsource(TrayApp)
+    # 验证代码中有 FileChooserButton
+    assert "FileChooserButton" in source
+    assert "sound_on_path" in source
+    assert "sound_off_path" in source
+
+
+def test_status_summary_shows_text_when_available() -> None:
+    """R10: 有识别文本时状态栏显示文本摘要"""
+    state = UiState(
+        last_run=RecentRunObservation(
+            record_ms=100.0,
+            transcribe_ms=200.0,
+            text="你好世界这是一段测试",
+        )
+    )
+    label = _status_summary_label(state)
+    assert "你好世界" in label
+
+
+def test_status_summary_shows_time_when_no_text() -> None:
+    """R10: 无识别文本时状态栏显示时间"""
+    state = UiState(
+        last_run=RecentRunObservation(
+            record_ms=121.0,
+            transcribe_ms=200.0,
+            detected_language="zh",
+            asr_path="prefetched",
+        )
+    )
+    label = _status_summary_label(state)
+    assert "时间" in label
+
+
+def test_tray_menu_has_quick_mode_label() -> None:
+    """R12: 托盘菜单文本精炼项应包含'快速模式'标签"""
+    source = inspect.getsource(TrayApp._start_appindicator)
+    assert "快速模式" in source
