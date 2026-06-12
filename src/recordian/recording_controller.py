@@ -555,7 +555,8 @@ def build_ptt_hotkey_handlers(
                 realtime_transcribe_latency_ms = 0.0
                 realtime_commit_info: dict[str, object] | None = None
                 if isinstance(realtime_asr_worker, _RealtimeASRWorkerHandle):
-                    realtime_asr_worker.thread.join(timeout=5.0)
+                    asr_timeout_s = float(getattr(args, "asr_timeout_s", 30.0))
+                    realtime_asr_worker.thread.join(timeout=asr_timeout_s)
                     if realtime_asr_worker.error:
                         on_state({"event": "log", "message": f"realtime_asr_failed: {realtime_asr_worker.error}"})
                     else:
