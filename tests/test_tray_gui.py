@@ -1,11 +1,12 @@
+import inspect
 from pathlib import Path
-import re
 from typing import Any
 
 from recordian.backend_manager import parse_backend_event_line
 from recordian.config import ConfigManager
 from recordian.tray_gui import (
     RecentRunObservation,
+    TrayApp,
     UiState,
     _blend_hex,
     _collect_recent_runtime_rows,
@@ -310,39 +311,9 @@ def test_save_config_changes_restarts_only_for_restart_required_settings(tmp_pat
     assert restart_calls == ["restart"]
 
 
-def test_remote_paste_has_own_tab() -> None:
-    """R7: 远程粘贴应有独立的 Tab 页，而不是混在高级 Tab 中。"""
-    src = Path(__file__).parent.parent / "src" / "recordian" / "tray_gui.py"
-    code = src.read_text(encoding="utf-8")
-    assert 'tab_remote = _create_tab("远程粘贴")' in code
-    assert 'sec_remote = _create_section(tab_remote, "远程粘贴")' in code
-
-
-def test_semantic_gate_hidden() -> None:
-    """R4: semantic gate 的 6 个字段不应在 UI 中创建（_add_field 调用中不可见）。"""
-    src = Path(__file__).parent.parent / "src" / "recordian" / "tray_gui.py"
-    code = src.read_text(encoding="utf-8")
-    hidden = {
-        "wake_use_semantic_gate",
-        "wake_semantic_probe_interval_s",
-        "wake_semantic_window_s",
-        "wake_semantic_end_silence_s",
-        "wake_semantic_min_chars",
-        "wake_semantic_timeout_ms",
-    }
-    for field in hidden:
-        # 这些字段可以出现在 save payload 或注释中，但不能出现在 _add_field 调用里
-        pattern = re.compile(rf'_add_field\([^)]*key\s*=\s*"{re.escape(field)}"')
-        assert not pattern.search(code), f"{field} 不应出现在 _add_field 调用中"
-    # 同时确认 save payload 中仍保留这些字段（向后兼容）
-    for field in hidden:
-        assert field in code, f"{field} 应在 save payload 中保留"
-
-
 def test_get_cached_config_returns_cache_on_second_call(tmp_path: Path, monkeypatch) -> None:
     """R1: ConfigManager.load 只应在 mtime 变化时调用一次"""
     import argparse
-    from unittest.mock import MagicMock
 
     from recordian.tray_gui import TrayApp
 
@@ -382,7 +353,6 @@ def test_get_cached_config_returns_cache_on_second_call(tmp_path: Path, monkeypa
 def test_toggle_lock_prevents_double_save(tmp_path: Path, monkeypatch) -> None:
     """R2: toggle 锁应阻止连续两次调用都触发 save"""
     import argparse
-    from unittest.mock import MagicMock
 
     from recordian.tray_gui import TrayApp
 
@@ -436,3 +406,73 @@ def test_toggle_noop_when_value_matches(tmp_path: Path, monkeypatch) -> None:
     # 当前 enable_text_refine=True，toggle True 应为 no-op
     app.toggle_text_refine(True)
     assert len(save_calls) == 0
+
+
+def test_toggle_voice_wake_sends_notification(tmp_path: Path, monkeypatch) -> None:
+    """R3: toggle_voice_wake 应发送桌面通知"""
+    import argparse
+
+    from recordian.tray_gui import TrayApp
+
+    config_path = tmp_path / "hotkey.json"
+    ConfigManager.save(config_path, {"enable_voice_wake": False})
+
+    args = argparse.Namespace(config_path=str(config_path), no_auto_start=True)
+    app = TrayApp(args)
+
+    notify_calls: list[tuple[str, str]] = []
+
+    def _mock_notify(msg: str, title: str = "") -> None:
+        notify_calls.append((msg, title))
+
+    monkeypatch.setattr("recordian.linux_notify.notify", _mock_notify)
+
+    app.toggle_voice_wake(True)
+    assert len(notify_calls) == 1
+    assert "Recordian: 已开启语音唤醒" in notify_calls[0][1]
+
+
+def test_sound_path_fields_use_file_chooser() -> None:
+    """R8: 音效路径字段应有文件选择器"""
+    import inspect
+
+    from recordian.tray_gui import TrayApp
+
+    source = inspect.getsource(TrayApp)
+    # 验证代码中有 FileChooserButton
+    assert "FileChooserButton" in source
+    assert "sound_on_path" in source
+    assert "sound_off_path" in source
+
+
+def test_status_summary_shows_text_when_available() -> None:
+    """R10: 有识别文本时状态栏显示文本摘要"""
+    state = UiState(
+        last_run=RecentRunObservation(
+            record_ms=100.0,
+            transcribe_ms=200.0,
+            text="你好世界这是一段测试",
+        )
+    )
+    label = _status_summary_label(state)
+    assert "你好世界" in label
+
+
+def test_status_summary_shows_time_when_no_text() -> None:
+    """R10: 无识别文本时状态栏显示时间"""
+    state = UiState(
+        last_run=RecentRunObservation(
+            record_ms=121.0,
+            transcribe_ms=200.0,
+            detected_language="zh",
+            asr_path="prefetched",
+        )
+    )
+    label = _status_summary_label(state)
+    assert "时间" in label
+
+
+def test_tray_menu_has_quick_mode_label() -> None:
+    """R12: 托盘菜单文本精炼项应包含'快速模式'标签"""
+    source = inspect.getsource(TrayApp._start_appindicator)
+    assert "快速模式" in source

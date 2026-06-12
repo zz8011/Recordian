@@ -356,9 +356,7 @@ def _format_recent_run_log_suffix(observation: RecentRunObservation) -> str:
 def _status_summary_label(state: UiState) -> str:
     observation = state.last_run
     if observation.text:
-        ago = int(time.time() - state.last_run_timestamp)
-        text = _truncate(observation.text, 24)
-        return f"{ago}s ago: {text}"
+        return _truncate(observation.text, 32)
     if observation.total_ms > 0:
         label = f"时间: {observation.total_ms:.0f} ms"
     else:
@@ -2458,24 +2456,45 @@ class TrayApp:
                 value=current.get("wake_no_speech_timeout_s", 2.0),
                 hint="超时自动结束本次录音",
             )
-            row = _add_field(
-                sec_wake_main,
-                row,
-                key="sound_on_path",
-                label="开始音效路径",
-                value=current.get("sound_on_path", ""),
-                kind="file",
-                hint="录音启动时播放（支持 mp3/wav）",
-            )
-            _add_field(
-                sec_wake_main,
-                row,
-                key="sound_off_path",
-                label="结束音效路径",
-                value=current.get("sound_off_path", ""),
-                kind="file",
-                hint="录音结束时播放（支持 mp3/wav）",
-            )
+            sound_on_label = Gtk.Label(label="开始音效路径")
+            sound_on_label.set_xalign(0.0)
+            sec_wake_main.attach(sound_on_label, 0, row, 1, 1)
+
+            sound_on_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+            sound_on_entry = Gtk.Entry()
+            sound_on_entry.set_text(str(current.get("sound_on_path", "")))
+            sound_on_entry.set_hexpand(True)
+            sound_on_entry.set_placeholder_text("支持 mp3/wav")
+            sound_on_chooser = Gtk.FileChooserButton(title="选择开始音效")
+            sound_on_val = str(current.get("sound_on_path", "")).strip()
+            if sound_on_val and Path(sound_on_val).expanduser().exists():
+                sound_on_chooser.set_filename(str(Path(sound_on_val).expanduser()))
+            sound_on_chooser.connect("file-set", lambda w: sound_on_entry.set_text(w.get_filename() or ""))
+            sound_on_box.pack_start(sound_on_entry, True, True, 0)
+            sound_on_box.pack_start(sound_on_chooser, False, False, 0)
+            sec_wake_main.attach(sound_on_box, 1, row, 1, 1)
+            entries["sound_on_path"] = ("entry", sound_on_entry)
+            row += 1
+
+            sound_off_label = Gtk.Label(label="结束音效路径")
+            sound_off_label.set_xalign(0.0)
+            sec_wake_main.attach(sound_off_label, 0, row, 1, 1)
+
+            sound_off_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+            sound_off_entry = Gtk.Entry()
+            sound_off_entry.set_text(str(current.get("sound_off_path", "")))
+            sound_off_entry.set_hexpand(True)
+            sound_off_entry.set_placeholder_text("支持 mp3/wav")
+            sound_off_chooser = Gtk.FileChooserButton(title="选择结束音效")
+            sound_off_val = str(current.get("sound_off_path", "")).strip()
+            if sound_off_val and Path(sound_off_val).expanduser().exists():
+                sound_off_chooser.set_filename(str(Path(sound_off_val).expanduser()))
+            sound_off_chooser.connect("file-set", lambda w: sound_off_entry.set_text(w.get_filename() or ""))
+            sound_off_box.pack_start(sound_off_entry, True, True, 0)
+            sound_off_box.pack_start(sound_off_chooser, False, False, 0)
+            sec_wake_main.attach(sound_off_box, 1, row, 1, 1)
+            entries["sound_off_path"] = ("entry", sound_off_entry)
+            row += 1
 
             wake_model_dir = Path(__file__).parent.parent.parent / "models" / "sherpa-onnx-kws-zipformer-wenetspeech-3.3M-2024-01-01"
             # Fields hidden from UI but preserved in save payload for backward compatibility
@@ -3209,7 +3228,7 @@ class TrayApp:
         menu.append(Gtk.SeparatorMenuItem())
 
         # Text refine toggle
-        text_refine_item = Gtk.CheckMenuItem(label="文本精炼（关闭=快速模式）")
+        text_refine_item = Gtk.CheckMenuItem(label="文本精炼（关闭 = 快速模式）")
         config = self._get_cached_config()
         text_refine_enabled = bool(config.get("enable_text_refine", True))
         text_refine_item.set_active(text_refine_enabled)
