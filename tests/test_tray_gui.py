@@ -369,7 +369,7 @@ def test_toggle_lock_prevents_double_save(tmp_path: Path, monkeypatch) -> None:
         save_calls.append((args, kwargs))
         return original_save(*args, **kwargs)
 
-    monkeypatch.setattr("recordian.tray_gui._save_config_changes", _mock_save)
+    monkeypatch.setattr("recordian.tray_app.save_config_changes", _mock_save)
 
     # 第一次 toggle（值变化 False -> True 已经是 True，所以是 no-op）
     # 等等，当前是 True，toggle True 是 no-op，不会触发 save
@@ -401,7 +401,7 @@ def test_toggle_noop_when_value_matches(tmp_path: Path, monkeypatch) -> None:
         save_calls.append((args, kwargs))
         return MagicMock(value="immediate"), False, []
 
-    monkeypatch.setattr("recordian.tray_gui._save_config_changes", _mock_save)
+    monkeypatch.setattr("recordian.tray_app.save_config_changes", _mock_save)
 
     # 当前 enable_text_refine=True，toggle True 应为 no-op
     app.toggle_text_refine(True)
@@ -436,9 +436,9 @@ def test_sound_path_fields_use_file_chooser() -> None:
     """R8: 音效路径字段应有文件选择器"""
     import inspect
 
-    from recordian.tray_gui import TrayApp
+    from recordian.tray_settings import open_settings_gtk
 
-    source = inspect.getsource(TrayApp)
+    source = inspect.getsource(open_settings_gtk)
     # 验证代码中有 FileChooserButton
     assert "FileChooserButton" in source
     assert "sound_on_path" in source
@@ -474,5 +474,7 @@ def test_status_summary_shows_time_when_no_text() -> None:
 
 def test_tray_menu_has_quick_mode_label() -> None:
     """R12: 托盘菜单文本精炼项应包含'快速模式'标签"""
-    source = inspect.getsource(TrayApp._start_appindicator)
+    import inspect
+    from recordian.tray_menu import build_appindicator_menu
+    source = inspect.getsource(build_appindicator_menu)
     assert "快速模式" in source
