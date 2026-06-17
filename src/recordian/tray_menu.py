@@ -1,13 +1,11 @@
 from __future__ import annotations
 
-import sys
-import threading
 from pathlib import Path
 from typing import Any
 
 from recordian.config import ConfigManager
 from recordian.preset_manager import PresetManager
-from recordian.tray_utils import hex_with_alpha, truncate
+from recordian.tray_utils import truncate
 
 
 def get_logo_path(status: str) -> Path:

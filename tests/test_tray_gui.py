@@ -154,7 +154,6 @@ def test_collect_recent_runtime_rows_surfaces_last_observation() -> None:
 
 def test_tray_gui_no_mktemp() -> None:
     """tray_gui.py 不应使用不安全的 tempfile.mktemp()"""
-    import inspect
 
     from recordian import tray_gui
     source = inspect.getsource(tray_gui)
@@ -163,7 +162,6 @@ def test_tray_gui_no_mktemp() -> None:
 
 def test_tray_app_no_legacy_quick_menu_debug_print() -> None:
     """TrayApp 不应残留旧 quick menu 调试语句"""
-    import inspect
 
     from recordian.tray_gui import TrayApp
     source = inspect.getsource(TrayApp)
@@ -315,7 +313,6 @@ def test_get_cached_config_returns_cache_on_second_call(tmp_path: Path, monkeypa
     """R1: ConfigManager.load 只应在 mtime 变化时调用一次"""
     import argparse
 
-    from recordian.tray_gui import TrayApp
 
     config_path = tmp_path / "hotkey.json"
     ConfigManager.save(config_path, {"enable_text_refine": True})
@@ -354,7 +351,6 @@ def test_toggle_lock_prevents_double_save(tmp_path: Path, monkeypatch) -> None:
     """R2: toggle 锁应阻止连续两次调用都触发 save"""
     import argparse
 
-    from recordian.tray_gui import TrayApp
 
     config_path = tmp_path / "hotkey.json"
     ConfigManager.save(config_path, {"enable_text_refine": True})
@@ -387,7 +383,6 @@ def test_toggle_noop_when_value_matches(tmp_path: Path, monkeypatch) -> None:
     import argparse
     from unittest.mock import MagicMock
 
-    from recordian.tray_gui import TrayApp
 
     config_path = tmp_path / "hotkey.json"
     ConfigManager.save(config_path, {"enable_text_refine": True})
@@ -412,7 +407,6 @@ def test_toggle_voice_wake_sends_notification(tmp_path: Path, monkeypatch) -> No
     """R3: toggle_voice_wake 应发送桌面通知"""
     import argparse
 
-    from recordian.tray_gui import TrayApp
 
     config_path = tmp_path / "hotkey.json"
     ConfigManager.save(config_path, {"enable_voice_wake": False})
@@ -434,7 +428,6 @@ def test_toggle_voice_wake_sends_notification(tmp_path: Path, monkeypatch) -> No
 
 def test_sound_path_fields_use_file_chooser() -> None:
     """R8: 音效路径字段应有文件选择器"""
-    import inspect
 
     from recordian.tray_settings import open_settings_gtk
 
@@ -474,7 +467,6 @@ def test_status_summary_shows_time_when_no_text() -> None:
 
 def test_tray_menu_has_quick_mode_label() -> None:
     """R12: 托盘菜单文本精炼项应包含'快速模式'标签"""
-    import inspect
     from recordian.tray_menu import build_appindicator_menu
     source = inspect.getsource(build_appindicator_menu)
     assert "快速模式" in source

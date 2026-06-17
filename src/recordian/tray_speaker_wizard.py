@@ -4,7 +4,7 @@ import logging
 import threading
 import wave
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, cast
 
 from recordian.config import ConfigManager
 from recordian.setting_effects import effect_status_message

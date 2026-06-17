@@ -2,9 +2,10 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Iterator
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from threading import Thread
-from typing import Any, Iterator
+from typing import Any
 
 import pytest
 

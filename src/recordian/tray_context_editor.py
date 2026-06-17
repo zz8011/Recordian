@@ -1,9 +1,8 @@
 from __future__ import annotations
 
 import logging
-import wave
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from recordian.config import ConfigManager
 from recordian.setting_effects import effect_status_message

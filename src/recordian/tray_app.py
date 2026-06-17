@@ -15,40 +15,30 @@ from recordian.audio_feedback import play_sound
 from recordian.backend_manager import BackendManager
 from recordian.config import ConfigManager
 from recordian.runtime_config import normalize_commit_backend, normalize_notify_backend, normalize_runtime_config
-from recordian.setting_effects import SettingEffect, combined_setting_effect, effect_label, effect_status_message
-from recordian.tray_settings_utils import KEY_LABEL_MAP
-from recordian.tray_utils import (
-    blend_hex,
-    build_gtk_hotkey_spec,
-    export_auto_lexicon_db,
-    hex_with_alpha,
-    import_auto_lexicon_db,
-    next_event_poll_delay_ms,
-    normalize_hotkey_token,
-    overlay_hide_delay_seconds,
-    parse_bool,
-    save_config_changes,
-    truncate,
+from recordian.setting_effects import effect_label, effect_status_message
+from recordian.tray_context_editor import open_context_editor
+from recordian.tray_diagnostics import (
+    collect_runtime_diagnostics,
+    format_diagnostic_report,
 )
-from recordian.waveform_renderer import WaveformRenderer
-
 from recordian.tray_menu import (
     build_appindicator_menu,
     collect_recent_runtime_rows,
     get_logo_path,
     list_tray_refine_presets,
     refresh_appindicator_preset_submenu,
-    status_summary_label,
     sync_appindicator_preset_submenu,
     update_tray_menu,
 )
-from recordian.tray_diagnostics import (
-    collect_runtime_diagnostics,
-    format_diagnostic_report,
-)
-from recordian.tray_context_editor import open_context_editor
-from recordian.tray_speaker_wizard import open_speaker_enrollment_wizard
 from recordian.tray_settings import load_hotkey_default_config, open_settings_gtk
+from recordian.tray_speaker_wizard import open_speaker_enrollment_wizard
+from recordian.tray_utils import (
+    next_event_poll_delay_ms,
+    overlay_hide_delay_seconds,
+    save_config_changes,
+    truncate,
+)
+from recordian.waveform_renderer import WaveformRenderer
 
 logger = logging.getLogger(__name__)
 

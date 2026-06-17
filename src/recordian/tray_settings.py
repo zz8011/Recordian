@@ -1,15 +1,14 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any, cast
 
 from recordian.config import ConfigManager
 from recordian.preset_manager import PresetManager
-from recordian.runtime_config import normalize_runtime_config
-from recordian.setting_effects import SettingEffect, combined_setting_effect, effect_label, effect_status_message
 from recordian.refine_model_discovery import fetch_model_list
+from recordian.runtime_config import normalize_runtime_config
+from recordian.setting_effects import combined_setting_effect, effect_label, effect_status_message
 from recordian.tray_settings_utils import KEY_LABEL_MAP
 from recordian.tray_utils import save_config_changes
 from recordian.voice_wake import DEFAULT_WAKE_KEYWORD_THRESHOLD, DEFAULT_WAKE_NUM_THREADS
