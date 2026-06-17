@@ -1,5 +1,8 @@
 import inspect
+import queue
+import threading
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 from recordian.backend_manager import parse_backend_event_line
@@ -28,6 +31,36 @@ from recordian.tray_gui import (
     collect_runtime_diagnostics,
 )
 from recordian.waveform_renderer import WaveformRenderer
+
+
+class _HeadlessRoot:
+    def after(self, _delay: int, callback=None):  # noqa: ANN001
+        if callback is not None:
+            callback()
+        return "after-id"
+
+
+class _HeadlessBackend:
+    def __init__(self) -> None:
+        self.restart_calls = 0
+
+    def restart(self) -> None:
+        self.restart_calls += 1
+
+
+def _make_headless_tray_app(config_path: Path) -> TrayApp:
+    app = TrayApp.__new__(TrayApp)
+    app.args = SimpleNamespace(config_path=str(config_path), no_auto_start=True)
+    app.config_path = config_path
+    app.state = UiState()
+    app.events = queue.Queue()
+    app.root = _HeadlessRoot()
+    app.backend = _HeadlessBackend()
+    app._config_cache = None
+    app._config_cache_mtime = 0.0
+    app._toggle_lock = threading.Lock()
+    app._update_tray_menu = lambda: None
+    return app
 
 
 def test_parse_backend_event_line_json_only() -> None:
@@ -311,14 +344,11 @@ def test_save_config_changes_restarts_only_for_restart_required_settings(tmp_pat
 
 def test_get_cached_config_returns_cache_on_second_call(tmp_path: Path, monkeypatch) -> None:
     """R1: ConfigManager.load 只应在 mtime 变化时调用一次"""
-    import argparse
-
 
     config_path = tmp_path / "hotkey.json"
     ConfigManager.save(config_path, {"enable_text_refine": True})
 
-    args = argparse.Namespace(config_path=str(config_path), no_auto_start=True)
-    app = TrayApp(args)
+    app = _make_headless_tray_app(config_path)
 
     load_calls: list[object] = []
     original_load = ConfigManager.load
@@ -349,14 +379,11 @@ def test_get_cached_config_returns_cache_on_second_call(tmp_path: Path, monkeypa
 
 def test_toggle_lock_prevents_double_save(tmp_path: Path, monkeypatch) -> None:
     """R2: toggle 锁应阻止连续两次调用都触发 save"""
-    import argparse
-
 
     config_path = tmp_path / "hotkey.json"
     ConfigManager.save(config_path, {"enable_text_refine": True})
 
-    args = argparse.Namespace(config_path=str(config_path), no_auto_start=True)
-    app = TrayApp(args)
+    app = _make_headless_tray_app(config_path)
 
     save_calls: list[Any] = []
     original_save = _save_config_changes
@@ -380,15 +407,13 @@ def test_toggle_lock_prevents_double_save(tmp_path: Path, monkeypatch) -> None:
 
 def test_toggle_noop_when_value_matches(tmp_path: Path, monkeypatch) -> None:
     """R2: 配置值已匹配时 toggle 不应触发 save"""
-    import argparse
     from unittest.mock import MagicMock
 
 
     config_path = tmp_path / "hotkey.json"
     ConfigManager.save(config_path, {"enable_text_refine": True})
 
-    args = argparse.Namespace(config_path=str(config_path), no_auto_start=True)
-    app = TrayApp(args)
+    app = _make_headless_tray_app(config_path)
 
     save_calls: list[Any] = []
 
@@ -405,14 +430,11 @@ def test_toggle_noop_when_value_matches(tmp_path: Path, monkeypatch) -> None:
 
 def test_toggle_voice_wake_sends_notification(tmp_path: Path, monkeypatch) -> None:
     """R3: toggle_voice_wake 应发送桌面通知"""
-    import argparse
-
 
     config_path = tmp_path / "hotkey.json"
     ConfigManager.save(config_path, {"enable_voice_wake": False})
 
-    args = argparse.Namespace(config_path=str(config_path), no_auto_start=True)
-    app = TrayApp(args)
+    app = _make_headless_tray_app(config_path)
 
     notify_calls: list[tuple[str, str]] = []
 
