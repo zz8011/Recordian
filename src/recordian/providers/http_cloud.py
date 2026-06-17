@@ -194,6 +194,7 @@ class HttpCloudProvider(ASRProvider):
         realtime_chunk_size_sec: float = 0.5,
         realtime_unfixed_chunk_num: int = 4,
         realtime_unfixed_token_num: int = 5,
+        max_new_tokens: int | None = None,
     ) -> None:
         self.endpoint = endpoint
         self.api_key = api_key
@@ -205,6 +206,7 @@ class HttpCloudProvider(ASRProvider):
         self.realtime_chunk_size_sec = max(0.1, float(realtime_chunk_size_sec))
         self.realtime_unfixed_chunk_num = max(0, int(realtime_unfixed_chunk_num))
         self.realtime_unfixed_token_num = max(0, int(realtime_unfixed_token_num))
+        self.max_new_tokens = max(1, int(max_new_tokens)) if max_new_tokens is not None else None
         self._resolved_openai_model_name: str | None = None
         self._resolved_realtime_model_name: str | None = None
 
@@ -574,12 +576,14 @@ class HttpCloudProvider(ASRProvider):
             )
         else:
             normalized_hotwords = ASRContextComposer(self.context).normalize_hotwords(hotwords)
-            payload = {
+            payload: dict[str, object] = {
                 "audio_base64": base64.b64encode(audio_data).decode("utf-8"),
                 "hotwords": normalized_hotwords,
                 "context": self.context or None,
                 "language": self.language or None,
             }
+            if self.max_new_tokens is not None:
+                payload["max_new_tokens"] = self.max_new_tokens
             response = requests.post(
                 self.endpoint,
                 json=payload,

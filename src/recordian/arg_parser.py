@@ -545,7 +545,7 @@ def _save_runtime_config(args: argparse.Namespace) -> None:
         "asr_provider": getattr(args, "asr_provider", "qwen-asr"),
         "qwen_model": getattr(args, "qwen_model", ""),
         "qwen_language": getattr(args, "qwen_language", "Chinese"),
-        "qwen_max_new_tokens": getattr(args, "qwen_max_new_tokens", 1024),
+        "qwen_max_new_tokens": getattr(args, "qwen_max_new_tokens", 8192),
         "asr_context": getattr(args, "asr_context", ""),
         "asr_context_preset": getattr(args, "asr_context_preset", ""),
         "enable_text_refine": getattr(args, "enable_text_refine", False),

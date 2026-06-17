@@ -462,7 +462,7 @@ def open_settings_gtk(
             kind="combo",
             options=("Chinese", "English", "auto"),
         )
-        row = _add_field(sec_asr, row, key="qwen_max_new_tokens", label="Qwen Max Tokens", value=current.get("qwen_max_new_tokens", 1024))
+        row = _add_field(sec_asr, row, key="qwen_max_new_tokens", label="Qwen Max Tokens", value=current.get("qwen_max_new_tokens", 8192))
         row = _add_field(
             sec_asr,
             row,
@@ -1531,7 +1531,7 @@ def open_settings_gtk(
                     "asr_provider": str(_get_value("asr_provider")).strip() or str(current.get("asr_provider", "qwen-asr")),
                     "qwen_model": str(_get_value("qwen_model")).strip(),
                     "qwen_language": str(_get_value("qwen_language")).strip() or str(current.get("qwen_language", "Chinese")),
-                    "qwen_max_new_tokens": _parse_int_field("qwen_max_new_tokens", int(current.get("qwen_max_new_tokens", 1024))),
+                    "qwen_max_new_tokens": _parse_int_field("qwen_max_new_tokens", int(current.get("qwen_max_new_tokens", 8192))),
                     "asr_context_preset": str(_get_value("asr_context_preset")).strip(),
                     "asr_context": str(_get_value("asr_context")).strip(),
                     "asr_endpoint": str(_get_value("asr_endpoint")).strip() or str(

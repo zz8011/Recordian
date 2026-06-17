@@ -221,7 +221,7 @@ def add_dictate_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--qwen-max-new-tokens",
         type=int,
-        default=1024,
+        default=8192,
         help="Max tokens for Qwen3-ASR generation. Higher = handles longer utterances.",
     )
     parser.add_argument(
@@ -410,6 +410,7 @@ def create_provider(args: argparse.Namespace) -> ASRProvider:
             language=language,
             context=asr_context,
             realtime_endpoint=str(getattr(args, "asr_realtime_endpoint", "")).strip(),
+            max_new_tokens=int(getattr(args, "qwen_max_new_tokens", 8192)),
         )
 
     # Default to Qwen ASR provider

@@ -23,7 +23,6 @@ import base64
 import logging
 import os
 import tempfile
-from pathlib import Path
 
 from flask import Flask, jsonify, request
 
@@ -68,11 +67,11 @@ def _compose_context(*, context: object, hotwords: object) -> str:
     return f"{base_context}\n{hotword_hint}"
 
 
-def load_asr_model(model_path: str, device: str = "cuda:0") -> None:
+def load_asr_model(model_path: str, device: str = "cuda:0", *, max_new_tokens: int = 8192) -> None:
     """加载 ASR 模型到内存"""
     global asr_model, model_name
 
-    logger.info(f"Loading ASR model: {model_path}")
+    logger.info(f"Loading ASR model: {model_path} (max_new_tokens={max_new_tokens})")
 
     try:
         import torch
@@ -86,6 +85,7 @@ def load_asr_model(model_path: str, device: str = "cuda:0") -> None:
         model_path,
         dtype=torch.bfloat16,
         device_map=device,
+        max_new_tokens=max_new_tokens,
     )
     model_name = model_path
     logger.info(f"ASR model loaded: {model_path}")
@@ -138,6 +138,16 @@ def transcribe():
         raw_language = data.get("language")
         language = str(raw_language).strip() or None if raw_language is not None else None
 
+        # 可选：客户端可单请求指定最大生成 token 数
+        requested_max_new_tokens = data.get("max_new_tokens")
+        if requested_max_new_tokens is not None:
+            try:
+                requested_max_new_tokens = int(requested_max_new_tokens)
+                if requested_max_new_tokens < 1:
+                    requested_max_new_tokens = None
+            except (TypeError, ValueError):
+                requested_max_new_tokens = None
+
         # 解码音频
         try:
             audio_data = base64.b64decode(audio_base64)
@@ -149,14 +159,21 @@ def transcribe():
             f.write(audio_data)
             temp_path = f.name
 
+        # 临时应用单请求的 max_new_tokens（不污染全局模型配置）
+        original_max_new_tokens = None
+        if requested_max_new_tokens is not None and hasattr(asr_model, "max_new_tokens"):
+            original_max_new_tokens = asr_model.max_new_tokens
+            asr_model.max_new_tokens = requested_max_new_tokens
+
         try:
             # 识别
             logger.info(
-                "Transcribing audio: %s bytes hotwords=%s context_len=%s language=%s",
+                "Transcribing audio: %s bytes hotwords=%s context_len=%s language=%s max_new_tokens=%s",
                 len(audio_data),
                 hotwords,
                 len(context),
                 language or "auto",
+                requested_max_new_tokens or getattr(asr_model, "max_new_tokens", "default"),
             )
             results = asr_model.transcribe(
                 audio=temp_path,
@@ -177,9 +194,11 @@ def transcribe():
                 "applied_hotwords": hotwords,
                 "applied_context": context,
                 "requested_language": language,
+                "max_new_tokens": getattr(asr_model, "max_new_tokens", None),
             })
-
         finally:
+            if original_max_new_tokens is not None:
+                asr_model.max_new_tokens = original_max_new_tokens
             # 清理临时文件
             try:
                 os.unlink(temp_path)
@@ -214,11 +233,17 @@ def main():
         default="cuda:0",
         help="Device to use (default: cuda:0)",
     )
+    parser.add_argument(
+        "--max-new-tokens",
+        type=int,
+        default=8192,
+        help="Maximum ASR generation tokens per request (default: 8192)",
+    )
 
     args = parser.parse_args()
 
     # 加载模型
-    load_asr_model(args.model, args.device)
+    load_asr_model(args.model, args.device, max_new_tokens=args.max_new_tokens)
 
     # 启动服务器
     logger.info(f"Starting ASR server on {args.host}:{args.port}")

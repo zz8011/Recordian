@@ -26,7 +26,7 @@ class QwenASRProvider(ASRProvider):
         device: str = "cuda:0",
         dtype: str = "bfloat16",
         language: str | None = None,
-        max_new_tokens: int = 1024,
+        max_new_tokens: int = 8192,
         max_inference_batch_size: int = 1,
         context: str = "",
     ) -> None:
