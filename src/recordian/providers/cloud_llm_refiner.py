@@ -166,11 +166,11 @@ class CloudLLMRefiner(BaseTextRefiner):
             {"role": "user", "content": f"原文：{text}\n\n整理后："},
         ]
 
-    def _build_anthropic_payload(self, messages: list[dict[str, str]]) -> dict:
+    def _build_anthropic_payload(self, messages: list[dict[str, str]], *, source_text: str = "") -> dict:
         """Anthropic-compatible API 请求体"""
         return {
             "model": self.model,
-            "max_tokens": self.max_tokens,
+            "max_tokens": self._max_output_tokens_for_text(source_text),
             "temperature": self.temperature,
             "messages": messages,
         }
@@ -195,7 +195,7 @@ class CloudLLMRefiner(BaseTextRefiner):
 
         # 调用 Anthropic-compatible API
         headers = self._build_anthropic_headers()
-        payload = self._build_anthropic_payload(messages)
+        payload = self._build_anthropic_payload(messages, source_text=text)
 
         response = requests.post(
             f"{self.api_base}/v1/messages",
@@ -218,12 +218,12 @@ class CloudLLMRefiner(BaseTextRefiner):
         }
 
     def _build_openai_payload(
-        self, messages: list[dict[str, str]], *, stream: bool = False
+        self, messages: list[dict[str, str]], *, stream: bool = False, source_text: str = ""
     ) -> dict:
         """OpenAI-compatible API 请求体"""
         payload: dict = {
             "model": self.model,
-            "max_tokens": self.max_tokens,
+            "max_tokens": self._max_output_tokens_for_text(source_text),
             "temperature": self.temperature,
             "messages": messages,
             # vLLM/GPUStack serving Qwen3.5 defaults to reasoning mode unless
@@ -256,7 +256,7 @@ class CloudLLMRefiner(BaseTextRefiner):
 
         # 调用 OpenAI-compatible API
         headers = self._build_openai_headers()
-        payload = self._build_openai_payload(messages)
+        payload = self._build_openai_payload(messages, source_text=text)
 
         response = requests.post(
             f"{self.api_base}/chat/completions",
@@ -274,7 +274,7 @@ class CloudLLMRefiner(BaseTextRefiner):
         requests = self._ensure_requests()
 
         headers = self._build_openai_headers()
-        payload = self._build_openai_payload(messages, stream=True)
+        payload = self._build_openai_payload(messages, stream=True, source_text=text)
 
         response = requests.post(
             f"{self.api_base}/chat/completions",
@@ -319,7 +319,7 @@ class CloudLLMRefiner(BaseTextRefiner):
         }
 
     def _build_ollama_payload(
-        self, messages: list[dict[str, str]], *, stream: bool = False
+        self, messages: list[dict[str, str]], *, stream: bool = False, source_text: str = ""
     ) -> dict:
         """Ollama 原生 API 请求体"""
         return {
@@ -330,7 +330,7 @@ class CloudLLMRefiner(BaseTextRefiner):
             # unless `think` is explicitly disabled.
             "think": bool(self.enable_thinking),
             "options": {
-                "num_predict": self.max_tokens,
+                "num_predict": self._max_output_tokens_for_text(source_text),
                 "temperature": self.temperature,
             },
         }
@@ -351,7 +351,7 @@ class CloudLLMRefiner(BaseTextRefiner):
 
         # 调用 Ollama 原生 API
         headers = self._build_ollama_headers()
-        payload = self._build_ollama_payload(messages)
+        payload = self._build_ollama_payload(messages, source_text=text)
 
         response = requests.post(
             f"{self.api_base}/api/chat",
@@ -369,7 +369,7 @@ class CloudLLMRefiner(BaseTextRefiner):
         requests = self._ensure_requests()
 
         headers = self._build_ollama_headers()
-        payload = self._build_ollama_payload(messages, stream=True)
+        payload = self._build_ollama_payload(messages, stream=True, source_text=text)
 
         response = requests.post(
             f"{self.api_base}/api/chat",

@@ -557,7 +557,24 @@ def build_ptt_hotkey_handlers(
                 if isinstance(realtime_asr_worker, _RealtimeASRWorkerHandle):
                     asr_timeout_s = float(getattr(args, "asr_timeout_s", 30.0))
                     realtime_asr_worker.thread.join(timeout=asr_timeout_s)
-                    if realtime_asr_worker.error:
+                    if realtime_asr_worker.thread.is_alive():
+                        cancel_session = realtime_asr_worker.cancel_session
+                        if cancel_session is not None:
+                            try:
+                                cancel_session()
+                            except Exception:
+                                pass
+                        on_state(
+                            {
+                                "event": "log",
+                                "message": (
+                                    "realtime_asr_timeout_fallback:"
+                                    f" timeout_s={asr_timeout_s:.1f}"
+                                    " using_full_audio_transcription"
+                                ),
+                            }
+                        )
+                    elif realtime_asr_worker.error:
                         on_state({"event": "log", "message": f"realtime_asr_failed: {realtime_asr_worker.error}"})
                     else:
                         realtime_final_text = realtime_asr_worker.final_text

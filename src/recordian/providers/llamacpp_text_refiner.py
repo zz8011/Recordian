@@ -124,7 +124,7 @@ class LlamaCppTextRefiner(BaseTextRefiner):
             raise RuntimeError("llama model not loaded")
         result = self._llm(
             prompt,
-            max_tokens=min(self.max_new_tokens, len(text) * 2 + 50),  # 增加 token 限制
+            max_tokens=self._max_output_tokens_for_text(text),
             temperature=0.1,  # 稍微增加随机性，避免过于死板
             repeat_penalty=1.2,  # 降低惩罚，避免影响正常输出
             top_p=0.9,

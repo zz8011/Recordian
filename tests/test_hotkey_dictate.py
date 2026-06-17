@@ -1441,6 +1441,83 @@ def test_ptt_stop_recording_passes_prefetched_detected_language_to_postprocess(m
     assert context.prefetched_commit_info == {"backend": "xdotool", "committed": True, "detail": "realtime_chunks:2"}
 
 
+def test_ptt_stop_recording_discards_prefetched_text_when_realtime_worker_times_out(monkeypatch) -> None:
+    events: list[dict[str, object]] = []
+    captured_contexts: list[object] = []
+    postprocess_done = threading.Event()
+    cancel_event = threading.Event()
+
+    class _FakeProvider:
+        provider_name = "http-cloud"
+
+        def transcribe_file(self, audio_path: Path, hotwords: list[str]) -> SimpleNamespace:  # noqa: ANN001
+            return SimpleNamespace(text="完整音频识别结果")
+
+    class _FakeCommitter:
+        backend_name = "xdotool"
+        target_window_id = None
+
+        def commit(self, text: str) -> SimpleNamespace:
+            return SimpleNamespace(backend="xdotool", committed=True, detail="typed")
+
+    class _FakeProcess:
+        def poll(self) -> int:
+            return 0
+
+    def _fake_start_record_process(**kwargs) -> RecordProcessHandle:  # noqa: ANN003
+        output_path = kwargs["output_path"]
+        output_path.write_bytes(b"")
+        return RecordProcessHandle(process=_FakeProcess(), monitor_stream=io.BytesIO(b""))
+
+    def _fake_start_realtime_asr_worker(**kwargs):  # noqa: ANN003
+        thread = threading.Thread(target=lambda: cancel_event.wait(timeout=1.0), daemon=True)
+        thread.start()
+        return _RealtimeASRWorkerHandle(
+            thread=thread,
+            final_text="只有头部片段",
+            detected_language="zh",
+            transcribe_latency_ms=10.0,
+            commit_info={"backend": "xdotool", "committed": True, "detail": "realtime_chunks:1"},
+            cancel_session=cancel_event.set,
+        )
+
+    def _fake_run_postprocess_pipeline(context) -> None:  # noqa: ANN001
+        captured_contexts.append(context)
+        postprocess_done.set()
+
+    monkeypatch.setattr("recordian.recording_controller.ensure_ffmpeg_available", lambda: "/usr/bin/ffmpeg")
+    monkeypatch.setattr("recordian.recording_controller.choose_record_backend", lambda requested, ffmpeg_bin: "ffmpeg-pulse")
+    monkeypatch.setattr("recordian.recording_controller.resolve_committer", lambda backend: _FakeCommitter())
+    monkeypatch.setattr("recordian.recording_controller.create_provider", lambda args: _FakeProvider())
+    monkeypatch.setattr("recordian.recording_controller.get_focused_window_id", lambda: None)
+    monkeypatch.setattr("recordian.recording_controller.start_record_process", _fake_start_record_process)
+    monkeypatch.setattr("recordian.recording_controller.stop_record_process", lambda *args, **kwargs: None)
+    monkeypatch.setattr("recordian.recording_controller._start_realtime_asr_worker", _fake_start_realtime_asr_worker)
+    monkeypatch.setattr("recordian.recording_controller.run_postprocess_pipeline", _fake_run_postprocess_pipeline)
+
+    start_recording, stop_recording, _, _ = build_ptt_hotkey_handlers(
+        args=_fake_ptt_args(asr_timeout_s=0.01),
+        on_result=events.append,
+        on_error=events.append,
+        on_busy=events.append,
+        on_state=events.append,
+    )
+
+    assert start_recording() is True
+    assert stop_recording() is True
+    assert postprocess_done.wait(timeout=1.0) is True
+    assert cancel_event.is_set() is True
+    assert captured_contexts
+    context = captured_contexts[0]
+    assert context.prefetched_asr_text == ""
+    assert context.prefetched_commit_info is None
+    assert any(
+        "realtime_asr_timeout_fallback" in str(event.get("message", ""))
+        for event in events
+        if event.get("event") == "log"
+    )
+
+
 def test_ptt_start_failure_releases_lock_and_recovers(monkeypatch) -> None:
     events: list[dict[str, object]] = []
     start_attempts = {"count": 0}

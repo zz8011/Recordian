@@ -132,7 +132,7 @@ class Qwen3TextRefiner(BaseTextRefiner):
         # 准备生成参数
         # 优化：使用 greedy decoding 提升速度和稳定性
         generate_kwargs = {
-            "max_new_tokens": self.max_new_tokens,
+            "max_new_tokens": self._max_output_tokens_for_text(text),
             "do_sample": False,  # 使用 greedy decoding，更快更稳定
             "pad_token_id": tokenizer.pad_token_id,
             "eos_token_id": tokenizer.eos_token_id,
@@ -213,7 +213,7 @@ class Qwen3TextRefiner(BaseTextRefiner):
         generate_kwargs = {
             "input_ids": model_inputs.input_ids,
             "attention_mask": model_inputs.attention_mask,
-            "max_new_tokens": self.max_new_tokens,
+            "max_new_tokens": self._max_output_tokens_for_text(text),
             "temperature": self.temperature,
             "do_sample": True if self.temperature > 0 else False,
             "pad_token_id": tokenizer.pad_token_id,

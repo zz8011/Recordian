@@ -39,6 +39,24 @@ class BaseTextRefiner(ABC):
         except Exception:
             pass
 
+    def _max_output_tokens_for_text(self, text: str) -> int:
+        """Return a token budget large enough for long-form cleanup.
+
+        Refinement normally preserves most of the dictated text. A fixed
+        512-token cap can silently keep only the beginning of a long note, so
+        expand the budget from the input length while keeping explicit higher
+        user limits intact.
+        """
+        stripped = text.strip()
+        if not stripped:
+            return max(1, int(self.max_tokens))
+
+        cjk_chars = sum(1 for ch in stripped if "\u4e00" <= ch <= "\u9fff")
+        non_cjk_chars = max(0, len(stripped) - cjk_chars)
+        estimated_input_tokens = cjk_chars + (non_cjk_chars + 3) // 4
+        dynamic_budget = int(estimated_input_tokens * 1.25) + 128
+        return max(1, int(self.max_tokens), dynamic_budget)
+
     def _remove_think_tags(self, text: str) -> str:
         """移除文本中的 <think> 标签及其内容"""
         if not text:

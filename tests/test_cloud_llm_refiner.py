@@ -35,6 +35,24 @@ class TestCloudLLMRefinerInit:
         )
         assert refiner.timeout == 60
 
+    def test_openai_payload_expands_max_tokens_for_long_text(self) -> None:
+        """长文本整理请求应按输入长度放大输出 token 上限。"""
+        from recordian.providers.cloud_llm_refiner import CloudLLMRefiner
+
+        refiner = CloudLLMRefiner(
+            api_base="http://192.168.5.111/v1",
+            api_key="test-key",
+            model="demo-model",
+            api_format="openai",
+            max_tokens=512,
+        )
+        payload = refiner._build_openai_payload(
+            [{"role": "user", "content": "原文：..."}],
+            source_text="这是一个很长的语音输入。" * 300,
+        )
+
+        assert payload["max_tokens"] > 512
+
     def test_api_format_auto_detection_ollama(self) -> None:
         """测试自动检测 Ollama API 格式"""
         from recordian.providers.cloud_llm_refiner import CloudLLMRefiner

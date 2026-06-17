@@ -42,6 +42,7 @@ class _RealtimeASRWorkerHandle:
     transcribe_latency_ms: float = 0.0
     commit_info: dict[str, object] | None = None
     error: str = ""
+    cancel_session: Callable[[], None] | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -327,6 +328,7 @@ def _start_realtime_asr_worker(
                     }
                 )
             session = provider.start_realtime_session(hotwords=resolve_hotwords())
+            worker.cancel_session = session.cancel
             while True:
                 raw = reader.read(chunk_bytes)
                 if not raw:

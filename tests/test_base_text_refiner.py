@@ -178,3 +178,11 @@ class TestBaseRefinerInit:
         refiner = MockRefiner()
         result = refiner.refine("test")
         assert result == "test"
+
+    def test_long_text_expands_output_token_budget(self) -> None:
+        """长文本整理不应被默认 512 token 上限截断。"""
+        refiner = MockRefiner(max_tokens=512)
+        long_text = "这是一个很长的语音输入。" * 300
+
+        assert refiner._max_output_tokens_for_text("短文本") == 512
+        assert refiner._max_output_tokens_for_text(long_text) > 512
