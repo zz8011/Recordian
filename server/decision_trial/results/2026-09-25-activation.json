@@ -1,0 +1,115 @@
+{
+  "recorded_at_utc": "2026-09-24T21:43:03.988036+00:00",
+  "task": "Recordian-dnm",
+  "status": "activated_and_verified",
+  "configuration": {
+    "path": "~/.config/recordian/hotkey.json",
+    "changed_keys": [
+      "semif_endpoint"
+    ],
+    "endpoint_before": "http://192.168.5.111:42032/v1/systemone",
+    "endpoint_after": "http://192.168.5.111:42071/v1/systemone",
+    "timeout_s": 0.35,
+    "compatibility_provider_id": "semif",
+    "correction_enabled": true,
+    "all_other_fields_unchanged": true,
+    "sha256_before": "e2a7968a652a08cb7bd3f906e41215fc5b302859750184fe731e1661266dc4df",
+    "sha256_after": "d8d63cde815a3acd06d83ec8dddfbd481c58f983702f16f575126101cc9e05bc",
+    "backup_path": "~/.config/recordian/backups/hotkey.json.bak-decider-switch-20260924T213241Z",
+    "backup_mode": "0600"
+  },
+  "backend": {
+    "old_pid": 390811,
+    "new_pid": 449590,
+    "tray_pid": 390720,
+    "backend_count": 1,
+    "fresh_ready_log": "2026-09-25 05:37:59 - recordian.tray_app - INFO - backend_ready hotkey=<ctrl_r> mode=ptt notify=none",
+    "reload_method": "one SIGTERM to observed idle backend; existing tray respawns"
+  },
+  "server": {
+    "container": "recordian-decider-trial",
+    "restart_policy": "unless-stopped",
+    "raw_inspect": "running_2026-09-24T21:03:22.122993446Z_unless-stopped",
+    "whole_host_reboot_tested": false
+  },
+  "product_probe": {
+    "label": "current_config_value",
+    "endpoint_used": "http://192.168.5.111:42071/v1/systemone",
+    "timeout_s": 0.35,
+    "input": "打开jeff工具检查这个项目",
+    "finish_output": "打开jev工具检查这个项目",
+    "poll_output": "打开jev工具检查这个项目",
+    "finish_ms": 255.6,
+    "http": [
+      {
+        "url": "http://192.168.5.111:42071/v1/systemone",
+        "status": 200,
+        "ms": 119.7,
+        "timeout_kw": 0.35,
+        "resp_top_keys": [
+          "answers",
+          "model",
+          "usage"
+        ],
+        "resp_model": "decider-4b-v2",
+        "resp_answers": {
+          "role": {
+            "type": "choice",
+            "choice": "tool",
+            "confidence": 0.9559,
+            "x_p_max": 0.9706,
+            "certainty": 0.8673,
+            "probabilities": {
+              "tool": 0.9706,
+              "person": 0.0049,
+              "unclear": 0.0244
+            }
+          }
+        },
+        "resp_usage": {
+          "input_tokens": 121,
+          "output_tokens": 0
+        }
+      }
+    ]
+  },
+  "formatting_tests": {
+    "collected": 4,
+    "passed": 4,
+    "failed": 0,
+    "aggregate": "....  [100%] / 4 passed, 1 warning in 0.07s",
+    "cases": [
+      {
+        "node_id": "tests/test_spoken_formatting.py::test_cardinal_with_units",
+        "status": "passed"
+      },
+      {
+        "node_id": "tests/test_spoken_formatting.py::test_marker_captures_whole_cardinal_before_its_first_digit",
+        "status": "passed"
+      },
+      {
+        "node_id": "tests/test_spoken_formatting.py::test_url_dot_strong_context_only",
+        "status": "passed"
+      },
+      {
+        "node_id": "tests/test_spoken_formatting.py::test_protected_spans_untouched",
+        "status": "passed"
+      }
+    ],
+    "note": "-q 输出为聚合的 4 个点；给定 4 个 node id 全部被收集并计为 passed，退出码 0，无 failed/error 行。"
+  },
+  "evidence_sha256": {
+    "reports/applied-config-review.json": "31de1e17eaa115b2cb8953a6566d9f56c8e3957a08b6d36d310e816dd5ec2d82",
+    "reports/applied-restart-review.json": "79504ff0107d9eab73b0bb601032ab33648fb58e9f4a91ef71c9e397e58a9c7f",
+    "reports/dsh-final-verification.json": "6f006b77b6e74dd875ef57d2f306df62810f168dfae7baa9fa2e52d0b6a7a1db",
+    "reports/dsh-final-corrector.log": "3d4e201de92a13919caa987862693890a97fef0b997396af69ba2ec7779866b1",
+    "reports/formatting-checks.txt": "6317a9e0b7e961a6424cfa57e81a0d820979303d4eed1239df526abaabf2491c"
+  },
+  "limitations": [
+    "The backend restarted after the config change; the probe uses the same parser and factory. This is not a backend memory read or an observed microphone/IME dictation.",
+    "Known contextual Jeff-person error remains open as Recordian-5fn.",
+    "Existing process cleanup substring matching is tracked as Recordian-cyx; an interrupted tools revision is not counted as verified."
+  ],
+  "rollback": "Change only semif_endpoint back to http://192.168.5.111:42032/v1/systemone, then reload the idle backend. Preserve later unrelated settings. Original backup remains available.",
+  "execution": "DeepSeek DSH prepared the config applier and performed final existing-test and product-probe checks; coordinator reviewed and applied authorized host operations. No product source changed."
+}
