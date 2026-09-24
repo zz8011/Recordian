@@ -510,7 +510,7 @@ def test_settings_correction_provider_alias_and_recommend(tmp_path: Path) -> Non
     assert "本机已登录" not in hint_text
     assert "目前能登录" not in hint_text
     assert provider.get_visible()
-    endpoint = _grid_sibling(window, gtk, "内网 SemIf 地址", gtk.Entry)
+    endpoint = _grid_sibling(window, gtk, "SemIf 服务地址", gtk.Entry)
     assert endpoint.get_text() == "http://10.2.2.2:9/semif"
     assert endpoint.get_visible() is False
     jev_timeout = _grid_sibling(window, gtk, "Jev 等待 (秒)", gtk.Entry)
@@ -522,12 +522,12 @@ def test_settings_correction_provider_alias_and_recommend(tmp_path: Path) -> Non
     assert "jeff→jev::软件工具" in alias_text
     assert _grid_sibling(window, gtk, "常用词", gtk.Entry).get_text() == "微信,编辑器"
 
-    provider.set_active(1)
+    provider.set_active(0)
     _pump(glib)
-    assert provider.get_active_text() == "内网SemIf"
+    assert provider.get_active_text() == "本地 SemIf（默认）"
     assert endpoint.get_visible() is True
     assert jev_timeout.get_visible() is False
-    provider.set_active(0)
+    provider.set_active(1)
     _pump(glib)
 
     _button(window, gtk, "使用本机推荐配置").clicked()

@@ -727,15 +727,15 @@ def open_settings_gtk(
             value=current.get("correction_provider", "semif"),
             kind="mapped",
             choices=CORRECTION_PROVIDER_CHOICES,
-            hint="复用 jev 的登录，密钥由 jev 管理；选择官方 Jev 无需填写地址。内网 SemIf 才使用下面的地址。",
+            hint="默认使用本机或内网部署的 SemIf。官方 Jev 复用 jev 的登录，密钥由 jev 管理；选择官方 Jev 无需填写地址。",
         )
         row = _add_field(
             sec_asr,
             row,
             key="semif_endpoint",
-            label="内网 SemIf 地址",
+            label="SemIf 服务地址",
             value=current.get("semif_endpoint", ""),
-            hint="只在选择内网 SemIf 时使用。换成官方 Jev 后地址仍会保存，但不会连接。",
+            hint="选择本地 SemIf 时使用；切换到官方 Jev 后仍保留此地址。",
         )
         row = _add_field(
             sec_asr,
