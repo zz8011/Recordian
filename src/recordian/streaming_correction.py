@@ -37,9 +37,14 @@ _MAX_JUDGE_OPTIONS = 8
 _INSTRUCTIONS = "这是整句识别假设。只能选择一个候选条件。不要改条件以外的字，不要删字。"
 
 # Contextual alias (heard → word with a declared meaning) semantic-role judge.
-# One bounded request can carry the pinyin pick plus at most 3 role picks.
+# One bounded request can carry the pinyin pick plus at most 3 distinct role
+# questions; spans that repeat the exact same clause text share one question.
 _MAX_ALIAS_SPANS = 3
 _CONTEXT_LIMIT = 256
+# Punctuation that ends a clause. Co-occurrence protection and the role
+# question are scoped to one clause, so a repeated mention in a *different*
+# clause cannot drag a person name toward the tool role.
+_CLAUSE_BOUNDARY_RE = re.compile(r"[，。！？；：、,.!?;:\n]+")
 _ROLE_CRITERIA = {
     "tool": "这里指的是软件工具、程序或插件。",
     "person": "这里指的是一个人。",
@@ -57,6 +62,23 @@ _META_MENTION_MARKERS = ("而是", "改成", "写成", "说成", "叫作", "叫�
 _META_MENTION_WINDOW = 4
 _NEGATION_MARKERS = ("不要", "不是", "没有", "不可以", "不会", "不能", "并未", "并不", "别", "不", "没")
 _NEGATION_WINDOW = 8
+# A bare alias in a person role is a person/software ambiguity even when the
+# clause names software around it: 「Jeff帮我调试脚本」 and 「我和Jeff讨论模型」
+# say what the person does or talks about, not that the alias names the tool.
+# Measured on the reference service, those mentions were answered "tool" at
+# 0.60-0.74 and the person spelling was rewritten. No role question is asked
+# for such an occurrence, so the verdict cannot be talked into the tool
+# meaning. A software/model/tool noun attached directly to the alias
+# (「jeff工具」, 「jeff的模型」) removes the ambiguity: that occurrence stays
+# judgeable. The guard is structural — case is irrelevant.
+_HELP_ROLE_RE = re.compile(r"^(?:帮|替)(?:我|你|您|他|她|它|咱|们|忙|个|一下)")
+_COORDINATED_BEFORE_RE = re.compile(r"(?:我|你|您|他|她|咱|们)[和跟与同]$")
+_COORDINATED_AFTER_RE = re.compile(r"^(?:和|跟|与|同)(?:我|你|您|他|她|咱|们)")
+_ARTIFACT_NOUNS = (
+    "软件", "工具", "程序", "插件", "应用", "浏览器", "终端", "命令",
+    "脚本", "项目", "仓库", "代码", "进程", "模型", "服务器", "服务",
+    "系统", "平台", "框架", "引擎", "客户端", "库",
+)
 # Affirmative software context. A lexicon meaning of "软件" is not evidence.
 # The cue may sit in this utterance or the bounded previous-segment tail.
 # Presence only makes a span eligible for the unchanged .70/.20 role gate.
@@ -65,6 +87,9 @@ _SOFTWARE_CONTEXT_CUES = (
     "更新", "升级", "配置", "部署", "编译", "调用",
     "软件", "工具", "程序", "插件", "应用", "浏览器", "终端", "命令",
     "脚本", "项目", "仓库", "测试", "调试", "代码", "进程",
+    # Technical context that names the software without a verb cue
+    # (e.g. “服务器上的jeff模型怎么样”, “jeff的推理延迟很低”).
+    "模型", "服务器", "推理",
 )
 
 
@@ -115,6 +140,43 @@ def _negated_before(text: str, start: int) -> bool:
     return any(marker in window for marker in _NEGATION_MARKERS)
 
 
+# Spaces an IME or ASR may insert beside an ASCII name. The guard looks
+# through them; the original offsets and characters stay unchanged.
+_ALIAS_GAP = " \t\u3000\u00a0"
+
+
+def _artifact_noun_attached(tail: str) -> bool:
+    """True when a software/model/tool noun directly modifies the alias.
+
+    A single gap (「Jeff 工具」, 「Jeff 的 模型」) is still the same attachment.
+    """
+    tail = tail.lstrip(_ALIAS_GAP)
+    if tail.startswith("的"):
+        tail = tail[1:].lstrip(_ALIAS_GAP)
+    return tail.startswith(_ARTIFACT_NOUNS)
+
+
+def _bare_person_alias(text: str, start: int, end: int) -> bool:
+    """True when this occurrence is a person mention, not an artifact name.
+
+    Two structural person roles count: the subject of a helping predicate
+    (「jeff帮我调试脚本」, 「jeff替我看看」) and a coordinated participant
+    (「我和jeff讨论模型」, 「jeff和我聊脚本」). Whitespace glued to the alias
+    does not hide those roles (「Jeff 帮我调试脚本」, 「我和 Jeff 讨论模型」).
+    The clause's software words (调试/脚本/模型) describe what the person does
+    or talks about; they are not evidence that the bare alias names the tool.
+    An attached artifact noun (「jeff工具」, 「jeff 的模型」) keeps the
+    occurrence judgeable.
+    """
+    tail = text[end:].lstrip(_ALIAS_GAP)
+    if _artifact_noun_attached(text[end:]):
+        return False
+    if _HELP_ROLE_RE.match(tail) or _COORDINATED_AFTER_RE.match(tail):
+        return True
+    prefix = text[:start].rstrip(_ALIAS_GAP)
+    return bool(_COORDINATED_BEFORE_RE.search(prefix))
+
+
 def software_context_eligible(text: str, context: str = "") -> bool:
     """True when this utterance or the previous tail names a software action or object.
 
@@ -125,43 +187,100 @@ def software_context_eligible(text: str, context: str = "") -> bool:
     return any(cue in blob for cue in _SOFTWARE_CONTEXT_CUES)
 
 
+def _clause_spans(text: str) -> list[tuple[int, int]]:
+    """Punctuation-delimited clause ranges, boundaries excluded."""
+    spans: list[tuple[int, int]] = []
+    start = 0
+    for match in _CLAUSE_BOUNDARY_RE.finditer(text):
+        spans.append((start, match.start()))
+        start = match.end()
+    spans.append((start, len(text)))
+    return spans
+
+
+def _clause_index(clauses: list[tuple[int, int]], position: int) -> int:
+    for index, (begin, stop) in enumerate(clauses):
+        if begin <= position < stop:
+            return index
+    return max(0, len(clauses) - 1)
+
+
 def _alias_spans(
     text: str,
     aliases: list[tuple[str, str, str]],
+    context: str = "",
 ) -> list[dict[str, object]]:
     """Unprotected, non-meta occurrences of heard tokens, leftmost first.
 
-    A heard token that occurs more than once in the same snapshot is skipped
-    entirely: measured on the reference service, co-occurrence sentences
-    drag every occurrence toward the tool role (person spans scored tool at
-    0.76–0.98), and an all-or-nothing question abstains on everything.
-    Single-occurrence role judging is the reliable, probed configuration.
+    An alias is judged per punctuation-delimited clause, and only when every
+    occurrence of that heard token in this snapshot can be explained by its
+    own clause: the clause holds the token exactly once and carries a software
+    cue (in the clause, or in the bounded previous-segment tail). Then the
+    role question is asked on that clause text alone, so a repeated software
+    mention in a different explicit clause is still corrected and no other
+    clause pollutes the verdict.
+
+    One occurrence that repeats inside a single clause, or that sits in a
+    clause with no software cue of its own, vetoes this heard token for the
+    whole snapshot. Measured on the reference service, those mixed sentences
+    drag person spans toward the tool role (0.76-0.98), so every occurrence
+    keeps the original text; the veto is per heard token, not per snapshot.
+    An occurrence that ``_bare_person_alias`` explains as a person is skipped
+    individually — it is neither judged nor allowed to veto its neighbours —
+    so 「打开jeff工具检查这个项目，Jeff帮我调试脚本」 still corrects the
+    explicit tool mention while the bare helper name stays untouched.
     """
     if not aliases:
         return []
     protected = _protected_spans(text)
-    grouped: list[list[tuple[int, int, str, str, str]]] = []
+    clauses = _clause_spans(text)
+    candidates: list[tuple[int, int, str, str, str, str]] = []
     for heard, word, meaning in aliases:
         pattern = re.compile(
             rf"(?<![A-Za-z0-9_]){re.escape(heard)}(?![A-Za-z0-9_])",
             re.IGNORECASE,
         )
-        found: list[tuple[int, int, str, str, str]] = []
+        per_clause: dict[int, list[tuple[int, int, str]]] = {}
         for match in pattern.finditer(text):
             start, end = match.start(), match.end()
             if _overlaps_span(start, end, protected):
                 continue
-            if _meta_mention(text, start, end) or _negated_before(text, start):
+            if (
+                _meta_mention(text, start, end)
+                or _negated_before(text, start)
+                or _bare_person_alias(text, start, end)
+            ):
                 continue
-            found.append((start, end, match.group(0), word, meaning))
-        grouped.append(found)
-    candidates = [item for found in grouped if len(found) == 1 for item in found]
+            index = _clause_index(clauses, start)
+            per_clause.setdefault(index, []).append((start, end, match.group(0)))
+        eligible: list[tuple[int, int, str, str]] = []
+        for index in sorted(per_clause):
+            found = per_clause[index]
+            begin, stop = clauses[index]
+            focus = text[begin:stop]
+            if len(found) != 1 or not software_context_eligible(focus, context):
+                # A repeat inside one clause, or a mention whose own clause
+                # names no software action or object, vetoes this alias for
+                # the whole snapshot. That is the measured mixed-sentence
+                # protection: nothing is judged, nothing is replaced.
+                eligible = []
+                break
+            start, end, surface = found[0]
+            eligible.append((start, end, surface, focus))
+        for start, end, surface, focus in eligible:
+            candidates.append((start, end, surface, word, meaning, focus))
     candidates.sort(key=lambda item: item[0])
     spans: list[dict[str, object]] = []
     occupied: list[tuple[int, int]] = []
-    for start, end, surface, word, meaning in candidates:
-        if len(spans) >= _MAX_ALIAS_SPANS:
-            break
+    # The cap bounds distinct role questions, not spans: a clause text that
+    # was already admitted shares its one verdict with every twin span.
+    judged: set[tuple[str, str, str, str]] = set()
+    for start, end, surface, word, meaning, focus in candidates:
+        key = (surface, word, meaning, focus)
+        if key not in judged:
+            if len(judged) >= _MAX_ALIAS_SPANS:
+                continue
+            judged.add(key)
         if _overlaps_span(start, end, occupied):
             continue
         occupied.append((start, end))
@@ -173,6 +292,7 @@ def _alias_spans(
                 "heard_surface": surface,
                 "word": word,
                 "meaning": meaning,
+                "focus": focus,
             }
         )
     return spans
@@ -180,6 +300,16 @@ def _alias_spans(
 
 def _overlaps_span(start: int, end: int, spans: list[tuple[int, int]]) -> bool:
     return any(start < stop and begin < end for begin, stop in spans)
+
+
+def _apply_alias_edits(base: str, edits: list[tuple[int, int, str, str]]) -> str:
+    """Apply role replacements right to left; offsets refer to the snapshot."""
+    updated = base
+    for start, end, surface, word in sorted(edits, reverse=True):
+        if updated[start:end] != surface:
+            continue
+        updated = updated[:start] + word + updated[end:]
+    return updated
 
 
 class _Job:
@@ -203,6 +333,9 @@ class _Job:
         self.aliases = aliases
         self.context = context
         self.dropped = False
+        # Last decided, safe text of this job. Read only by a bounded
+        # ``finish`` that ran out of budget.
+        self.partial: str | None = None
 
 
 def _compile_hotwords(
@@ -341,7 +474,10 @@ class StreamingHotwordCorrector:
 
         A sentence that never went through ``submit`` is still judged once.
         Repeating ``finish`` or ``submit`` on that same text does not start
-        another request. Disabled mode returns the deterministic text.
+        another request. Out of budget, the verdicts already decided are
+        returned and kept for this exact snapshot, so repeating ``finish`` or
+        ``poll`` on the same text answers the same text instead of falling
+        back to the raw one. Disabled mode returns the deterministic text.
         """
         deterministic = self.submit(text)
         if not self._network_on():
@@ -360,8 +496,11 @@ class StreamingHotwordCorrector:
                     return deterministic
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
+                    # Out of budget: keep the verdicts already decided inside
+                    # it, drop the rest, and never delay the caller further.
+                    partial = self._cache_partial_locked(text, generation, epoch)
                     self._drop_matching_locked(text, generation, epoch)
-                    return deterministic
+                    return partial if partial is not None else deterministic
                 self._cv.wait(remaining)
 
     def cancel(self) -> None:
@@ -412,9 +551,8 @@ class StreamingHotwordCorrector:
         if not self._network_on():
             return deterministic, None, []
         span = ambiguous_pinyin_span(deterministic, self._terms, frequencies=self._frequencies)
-        alias_spans = _alias_spans(deterministic, self._aliases)
-        if alias_spans and not software_context_eligible(deterministic, self._context):
-            alias_spans = []
+        # The software-context gate is applied per clause inside _alias_spans.
+        alias_spans = _alias_spans(deterministic, self._aliases, self._context)
         return deterministic, span, alias_spans
 
     def _deterministic(self, text: str) -> str:
@@ -464,6 +602,39 @@ class StreamingHotwordCorrector:
             if job.origin == text and job.generation == generation and job.epoch == epoch:
                 job.dropped = True
         self._kill_proc_locked()
+
+    def _cache_partial_locked(self, text: str, generation: int, epoch: int) -> str | None:
+        """Keep this exact job's decided part as the answer for its snapshot.
+
+        Stored under the same origin/generation/context key as a final
+        result, so a repeated ``finish``/``poll`` of the same snapshot
+        returns the same text instead of falling back to the untouched
+        original. ``finish`` drops this job on the next line, and only an
+        accepted, undropped, same-epoch job can store a late reply, so the
+        kept part cannot be overwritten afterwards. ``cancel``/``close``
+        clear the cache.
+        """
+        for job in (self._pending, self._inflight):
+            if job is None or job.dropped:
+                continue
+            if job.origin == text and job.generation == generation and job.epoch == epoch:
+                if job.partial is not None:
+                    self._store_locked(job.origin, job.context, job.partial)
+                return job.partial
+        return None
+
+    def _publish_partial(self, job: _Job, text: str) -> None:
+        """Record the safe edits decided so far for this exact job.
+
+        A verdict that already cleared the unchanged role gate may be kept
+        when the single job budget expires before the remaining clauses
+        answered. A dropped, stale, or closed job publishes nothing, so a
+        late reply can never land in another sentence.
+        """
+        with self._cv:
+            if job.dropped or job.generation != self._generation or job.epoch != self._epoch:
+                return
+            job.partial = text
 
     def _kill_proc_locked(self) -> None:
         proc = self._proc
@@ -574,43 +745,48 @@ class StreamingHotwordCorrector:
                 replacement = words[picked]
                 if updated[start:end] == surface and replacement != surface:
                     updated = updated[:start] + replacement + updated[end:]
+                    self._publish_partial(job, updated)
 
-        # Semantic-role judgments: one request per span. Batching several
-        # spans into one request measurably degraded per-span accuracy on the
-        # reference service, so a job makes at most _MAX_ALIAS_SPANS bounded
-        # sequential requests instead.
+        # Semantic-role judgments: one request per distinct clause, at most
+        # _MAX_ALIAS_SPANS distinct clause questions. Batching several spans
+        # into one request measurably degraded per-span accuracy on the
+        # reference service, but clauses with the exact same text share one
+        # verdict inside this job, so a repeated sentence stays inside one
+        # bounded budget.
         alias_edits: list[tuple[int, int, str, str]] = []
-        for item in job.aliases[:_MAX_ALIAS_SPANS]:
+        verdicts: dict[tuple[str, str, str, str], str | None] = {}
+        for item in job.aliases:
             surface = str(item["surface"])
-            results = ask(
-                self._state(job, surface),
-                {
-                    "role": {
-                        "type": "choice",
-                        "instructions": _ROLE_INSTRUCTIONS.format(
-                            surface=surface,
-                            word=str(item["word"]),
-                            meaning=str(item["meaning"]),
-                            heard=surface,
-                        ),
-                        "criteria": dict(_ROLE_CRITERIA),
-                    }
-                },
-            )
-            if results.get("role") != "tool":
+            word = str(item["word"])
+            focus = str(item.get("focus") or job.deterministic)
+            key = (surface, word, str(item["meaning"]), focus)
+            if key not in verdicts:
+                results = ask(
+                    self._state(job, surface, focus),
+                    {
+                        "role": {
+                            "type": "choice",
+                            "instructions": _ROLE_INSTRUCTIONS.format(
+                                surface=surface,
+                                word=word,
+                                meaning=str(item["meaning"]),
+                                heard=surface,
+                            ),
+                            "criteria": dict(_ROLE_CRITERIA),
+                        }
+                    },
+                )
+                verdicts[key] = results.get("role")
+            if verdicts[key] != "tool":
                 continue
             start = int(cast(int, item["start"]))
             end = int(cast(int, item["end"]))
-            word = str(item["word"])
             if deterministic[start:end] == surface and word != surface:
                 alias_edits.append((start, end, surface, word))
+                self._publish_partial(job, _apply_alias_edits(updated, alias_edits))
         # Offsets refer to the deterministic snapshot; apply right to left and
         # skip a span whose text shifted under an accepted pinyin replacement.
-        for start, end, surface, word in sorted(alias_edits, reverse=True):
-            if updated[start:end] != surface:
-                continue
-            updated = updated[:start] + word + updated[end:]
-        return updated
+        return _apply_alias_edits(updated, alias_edits)
 
     def _register_proc(self, proc: Any, job: _Job) -> None:
         with self._cv:
@@ -619,11 +795,11 @@ class StreamingHotwordCorrector:
                 self._kill_proc_locked()
 
     @staticmethod
-    def _state(job: _Job, surface: str) -> str:
+    def _state(job: _Job, surface: str, focus: str | None = None) -> str:
         lines = []
         if job.context:
             lines.append(f"上一段：{job.context}")
-        lines.append(job.deterministic)
+        lines.append(job.deterministic if focus is None else focus)
         lines.append(f"只判断这个跨度：「{surface}」")
         return "\n".join(lines)
 

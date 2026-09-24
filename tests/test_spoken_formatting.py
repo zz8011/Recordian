@@ -10,7 +10,6 @@ def test_cardinal_with_units() -> None:
 
 def test_approximate_and_bare_readings_stay() -> None:
     assert format_spoken_text("一万二") == "一万二"
-    assert format_spoken_text("第二十名") == "第二十名"
     assert format_spoken_text("三里屯见") == "三里屯见"
     assert format_spoken_text("我十分高兴") == "我十分高兴"
 
@@ -43,14 +42,15 @@ def test_ipv4() -> None:
 
 def test_date_keeps_chinese_separators() -> None:
     assert format_spoken_text("二〇二六年九月二十四日") == "2026年9月24日"
-    assert format_spoken_text("二十六号下午三点半") == "26号下午三点半"
+    assert format_spoken_text("二十六号下午三点半") == "26号下午3点半"
     # Impossible month stays untouched.
     assert format_spoken_text("二〇二六年十三月一日") == "二〇二六年十三月一日"
 
 
-def test_time_words_stay() -> None:
-    assert format_spoken_text("一点钟") == "一点钟"
-    assert format_spoken_text("三点半") == "三点半"
+def test_clock_time_formats_and_suggestion_stays() -> None:
+    assert format_spoken_text("一点钟") == "1点钟"
+    assert format_spoken_text("三点半") == "3点半"
+    assert format_spoken_text("一点建议") == "一点建议"
 
 
 def test_url_dot_strong_context_only() -> None:
@@ -200,3 +200,117 @@ def test_review_idempotent_over_repro_set() -> None:
     ):
         once = format_spoken_text(sample)
         assert format_spoken_text(once) == once
+
+
+def test_long_press_run_and_short_run_boundary() -> None:
+    # 长按位 digit-by-digit entry: a long unmarked run is positional.
+    assert format_spoken_text("长按位一二三四五六七八九") == "长按位123456789"
+    assert format_spoken_text("一二三四五") == "12345"
+    assert format_spoken_text("零一二三") == "0123"
+    # A bare two-character pair stays Chinese: approximate pair or lexical run.
+    assert format_spoken_text("三四") == "三四"
+    assert format_spoken_text("三五成群") == "三五成群"
+    assert format_spoken_text("他说三五") == "他说三五"
+    # Three or more characters are positional even when they contain 三四.
+    assert format_spoken_text("一二三三四") == "12334"
+
+
+def test_yao_is_digit_one_in_runs_but_not_in_words() -> None:
+    assert format_spoken_text("幺一幺服务器") == "111服务器"
+    assert format_spoken_text("服务器幺幺幺") == "服务器111"
+    assert format_spoken_text("幺幺") == "11"
+    assert format_spoken_text("幺幺零") == "110"
+    assert format_spoken_text("端口幺二三四") == "端口1234"
+    assert format_spoken_text("电话幺三八零零幺三八零零零") == "电话13800138000"
+    assert format_spoken_text("幺九二点幺六八点幺点幺") == "192.168.1.1"
+    for text in ("幺妹", "幺蛾子", "幺儿", "幺"):
+        assert format_spoken_text(text) == text
+
+
+def test_percent_forms() -> None:
+    assert format_spoken_text("百分之三十五") == "35%"
+    assert format_spoken_text("百分之三点五") == "3.5%"
+    assert format_spoken_text("百分之35") == "35%"
+    assert format_spoken_text("增长百分之一百二十") == "增长120%"
+
+
+def test_explicit_ordinal_forms_and_lexical_first() -> None:
+    assert format_spoken_text("第十二个") == "第12个"
+    assert format_spoken_text("第十二章") == "第12章"
+    assert format_spoken_text("第二十名") == "第20名"
+    # A single digit after 第 is a lexical form, not an ordinal value.
+    for text in ("第三方", "第一名"):
+        assert format_spoken_text(text) == text
+
+
+def test_clock_forms_and_point_words_stay() -> None:
+    assert format_spoken_text("下午三点半") == "下午3点半"
+    assert format_spoken_text("一点钟") == "1点钟"
+    for text in ("一点建议", "重点是这个"):
+        assert format_spoken_text(text) == text
+
+
+def test_bare_eleven_and_marker_pair() -> None:
+    assert format_spoken_text("十一") == "11"
+    assert format_spoken_text("数字三四") == "数字34"
+    assert format_spoken_text("号码幺幺零") == "号码110"
+    for text in ("十一黄金周", "五一假期", "五一节", "三番五次", "代码", "一万二", "两三天", "三四个"):
+        assert format_spoken_text(text) == text
+
+
+def test_existing_ascii_and_formed_urls_untouched() -> None:
+    for text in (
+        "已经有13800138000了不要再改",
+        "端口8080",
+        "http://192.168.1.1/幺妹",
+        "运行`echo 一二三`看看",
+        "已经1.5了不要再改",
+    ):
+        assert format_spoken_text(text) == text
+
+
+def test_new_forms_are_idempotent() -> None:
+    for sample in (
+        "长按位一二三四五六七八九", "一二三三四", "幺一幺服务器", "幺幺", "幺幺零",
+        "服务器幺幺幺", "端口幺二三四", "电话幺三八零零幺三八零零零",
+        "幺九二点幺六八点幺点幺", "百分之三点五", "百分之35", "第十二个",
+        "第二十名", "下午三点半", "一点钟", "十一", "数字三四", "号码幺幺零",
+    ):
+        once = format_spoken_text(sample)
+        assert format_spoken_text(once) == once
+
+
+def test_marker_captures_whole_cardinal_before_its_first_digit() -> None:
+    """An explicit marker claims the complete numeral, not just its first digit."""
+    assert format_spoken_text("端口一百零二") == "端口102"
+    assert format_spoken_text("编号一百二十三") == "编号123"
+    assert format_spoken_text("数字三百二十") == "数字320"
+    # A suffix marker must not leave a truncated digit behind either.
+    assert format_spoken_text("一百一服务器") == "101服务器"
+    assert format_spoken_text("端口幺二三四") == "端口1234"
+    assert format_spoken_text("编号零零一二") == "编号0012"
+
+
+def test_determiner_and_locative_yi_is_not_a_quantity() -> None:
+    """定位/指代前缀 + 一 + 量词 is grammatical, not the number 1."""
+    for text in ("下一个", "上一个", "另一个", "每一个", "这一个", "那一个", "哪一个", "前一个"):
+        assert format_spoken_text(text) == text, text
+    assert format_spoken_text("下一个是端口幺二") == "下一个是端口12"
+    # An explicit quantity after a verb still converts.
+    assert format_spoken_text("我有一个文件") == "我有1个文件"
+    assert format_spoken_text("多一个文件") == "多1个文件"
+
+
+def test_clock_hour_minute_and_month_day_forms() -> None:
+    assert format_spoken_text("下午三点十五分") == "下午3点15分"
+    assert format_spoken_text("上午九点零五分") == "上午9点05分"
+    assert format_spoken_text("九月二十四号") == "9月24号"
+    assert format_spoken_text("九月二十四日") == "9月24日"
+    assert format_spoken_text("十二月三十一号") == "12月31号"
+    # Ambiguous or lexical neighbours stay: 一点建议, 三点一四 is a decimal,
+    # 三点半 is already a clock form, and the full year date keeps working.
+    assert format_spoken_text("一点建议") == "一点建议"
+    assert format_spoken_text("三点一四") == "3.14"
+    assert format_spoken_text("下午三点半") == "下午3点半"
+    assert format_spoken_text("二〇二六年九月二十四日") == "2026年9月24日"
+    assert format_spoken_text("编号零零一二") == "编号0012"

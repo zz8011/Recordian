@@ -35,6 +35,7 @@ from .linux_commit import (
 )
 from .linux_dictate import open_monitor_stream_reader
 from .providers import provider_supports_realtime
+from .spoken_formatting import NUMBER_MARKERS
 
 # ---------------------------------------------------------------------------
 # Handle returned by the worker starter
@@ -98,13 +99,28 @@ class _RealtimeASRWorkerHandle:
 # Glue tails stay raw across a segment cut (no space when joined). An ASCII
 # word tail is also held so the next English word can take one space; it is
 # not run through the formatter by itself.
+#
+# Spoken digits include 幺 (the "1" used in ports / IDs / phone numbers):
+# cutting before it would commit a lone "幺" and leave the next segment's
+# digits unreadable as one number.
+_CN_NUMERAL = "零〇一二两三四五六七八九十百千万亿点．.幺"
+# Explicit number markers are held together with the digits that follow them
+# (百分之 三 -> 3%, 号码 三 -> 号码3). Committing the marker alone is wrong
+# twice over: the next segment restarts the number, and a bare "三四" would
+# look like an approximation (概数) instead of the digits 34. The marker list
+# is the formatter's NUMBER_MARKERS so the two number paths cannot drift.
+_CN_NUMBER_MARKER = "|".join(sorted(NUMBER_MARKERS, key=len, reverse=True))
+_HELD_ASCII_DIGITS = r"[0-9][0-9.,:/%+-]*"
 _GLUE_TAIL_RE = re.compile(
     r"(?:https?://\S+"
     r"|www(?:点|\.)[0-9A-Za-z点.\-]*"
     r"|[0-9A-Za-z]+(?:点[0-9A-Za-z.\-]+)+"
     r"|\d{1,3}(?:\.\d{1,3}){2,3}"
     r"|\d[\d.,:/%+-]*"
-    r"|[零〇一二两三四五六七八九十百千万亿点．.]+"
+    rf"|百分之(?:{_HELD_ASCII_DIGITS}|[{_CN_NUMERAL}]*)"
+    rf"|(?:{_CN_NUMBER_MARKER})(?:是|为|[:：])?\s*"
+    rf"(?:{_HELD_ASCII_DIGITS}|[{_CN_NUMERAL}]+)"
+    rf"|[{_CN_NUMERAL}]+"
     r")$"
 )
 _WORD_TAIL_RE = re.compile(r"[A-Za-z]+(?:'[A-Za-z]+)?$")

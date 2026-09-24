@@ -553,18 +553,312 @@ def test_alias_protected_spans_never_judged() -> None:
         corrector.close()
 
 
-def test_alias_repeated_heard_token_abstains() -> None:
-    # Co-occurrence sentences are provably unreliable on the reference model
-    # (person spans dragged to tool at 0.76-0.98), so repeats never judge.
-    session = _Session(lambda call: (_ for _ in ()).throw(AssertionError(call)))
+def test_alias_repeated_inside_one_clause_still_abstains() -> None:
+    # Co-occurrence inside ONE punctuation-delimited clause is provably
+    # unreliable on the reference model (person spans dragged to tool at
+    # 0.76-0.98), so every occurrence in that clause keeps the original text.
+    session = _Session(lambda call: {"answers": _role_answers({"role": "tool"})})
     corrector = _alias_corrector(session)
     try:
-        text = "打开jeff，然后重启jeff"
+        text = "打开jeff工具给Jeff看看"
         assert corrector.finish(text) == text
-        mixed = "打开jeff工具，发给Jeff看"
-        assert corrector.finish(mixed) == mixed
         assert session.calls == []
     finally:
+        corrector.close()
+
+
+def test_alias_mixed_clauses_without_own_clause_context_stay_original() -> None:
+    # "发给Jeff看" names no software action of its own. The same heard token
+    # in an unexplained clause vetoes the alias, so the software clause is
+    # not judged either and the person spelling is untouched.
+    session = _Session(lambda call: {"answers": _role_answers({"role": "tool"})})
+    corrector = _alias_corrector(session)
+    try:
+        text = "打开jeff工具，发给Jeff看"
+        assert corrector.finish(text) == text
+        assert session.calls == []
+    finally:
+        corrector.close()
+
+
+def test_alias_veto_is_per_heard_token_not_per_snapshot() -> None:
+    # jeff is vetoed by its cue-less person clause; cody is independent and
+    # keeps its own eligible software clause.
+    aliases = [
+        {"heard": "jeff", "word": "jev", "meaning": "软件工具"},
+        {"heard": "cody", "word": "Kodi", "meaning": "播放器软件"},
+    ]
+    session = _Session(
+        lambda call: {
+            "answers": _role_answers(
+                {"role": "tool" if "「cody」" in str(call["json"]["state"]) else "person"}
+            )
+        }
+    )
+    corrector = StreamingHotwordCorrector(
+        [],
+        endpoint="http://192.168.5.111:42032/v1/systemone",
+        timeout_s=0.3,
+        enabled=True,
+        session=session,
+        contextual_aliases=aliases,
+    )
+    try:
+        text = "打开jeff工具，Jeff是我同事，运行cody播放器"
+        assert corrector.finish(text) == "打开jeff工具，Jeff是我同事，运行Kodi播放器"
+        assert len(session.calls) == 1
+    finally:
+        corrector.close()
+
+
+def test_alias_repeated_in_distinct_software_clauses_judges_each_clause() -> None:
+    # Different explicit clauses are independent contexts: each clause that
+    # holds the alias exactly once is judged on its own clause text.
+    session = _Session(lambda call: {"answers": _role_answers({"role": "tool"})})
+    corrector = _alias_corrector(session)
+    try:
+        text = "打开jeff工具检查这个项目，然后重启jeff服务"
+        assert corrector.finish(text) == "打开jev工具检查这个项目，然后重启jev服务"
+        assert len(session.calls) == 2
+    finally:
+        corrector.close()
+
+
+def test_alias_identical_software_clauses_share_one_verdict() -> None:
+    # The measured 31 s shape: the same software clause twice in one segment.
+    # One bounded request answers every twin span (exact same clause text),
+    # and twins do not consume the three distinct-clause budget.
+    session = _Session(lambda call: {"answers": _role_answers({"role": "tool"})})
+    corrector = _alias_corrector(session)
+    try:
+        text = "服务器上的jeff模型怎么样，端口1234，服务器上的jeff模型怎么样，数字123456789，服务器上的jeff模型怎么样，比例35%，服务器上的jeff模型怎么样"
+        assert corrector.finish(text) == text.replace("jeff", "jev")
+        assert len(session.calls) == 1
+    finally:
+        corrector.close()
+
+
+def test_alias_clause_state_excludes_the_neighbouring_clause() -> None:
+    # Both clauses are eligible, but each judgment sees only its own clause:
+    # the software clause must not drag the person clause toward "tool".
+    states: list[str] = []
+
+    def handler(call: dict[str, object]) -> dict[str, object]:
+        state = str(call["json"]["state"])
+        states.append(state)
+        return {"answers": _role_answers({"role": "tool" if "打开jeff工具" in state else "person"})}
+
+    session = _Session(handler)
+    corrector = _alias_corrector(session)
+    try:
+        text = "打开jeff工具检查这个项目，给Jeff发一封关于模型的邮件"
+        assert corrector.finish(text) == "打开jev工具检查这个项目，给Jeff发一封关于模型的邮件"
+        assert len(session.calls) == 2
+        software_state, person_state = states
+        assert "打开jeff工具" in software_state
+        assert "给Jeff发一封" not in software_state
+        assert "给Jeff发一封" in person_state
+        assert "打开jeff工具" not in person_state
+    finally:
+        corrector.close()
+
+
+def test_bare_helper_alias_is_never_sent_to_the_model() -> None:
+    # The live service answered "tool" (0.74) for a bare helper subject and
+    # rewrote the person name (reports/live-clause-judge.json). A bare alias
+    # the clause puts in the helper role is a person/tool ambiguity, so it is
+    # gated off BEFORE any request: the guard does not depend on the model.
+    session = _Session(lambda call: {"answers": _role_answers({"role": "tool"})})
+    corrector = _alias_corrector(session)
+    try:
+        for text in (
+            "Jeff帮我调试脚本",
+            "Jeff替我看看这个项目",
+            "Jeff帮忙检查服务器",
+            "Jeff帮我把脚本跑起来",
+        ):
+            assert corrector.finish(text) == text, text
+        assert session.calls == []
+    finally:
+        corrector.close()
+
+
+def test_high_confidence_tool_verdict_cannot_touch_the_bare_helper_alias() -> None:
+    # Exact live failure: the model answered "tool" for BOTH clauses (0.97
+    # and 0.74) and the person Jeff became jev. The explicitly modified
+    # "jeff工具" clause stays judgeable; the bare helper alias is never asked.
+    session = _Session(lambda call: {"answers": _role_answers({"role": "tool"})})
+    corrector = _alias_corrector(session)
+    try:
+        text = "打开jeff工具检查这个项目，Jeff帮我调试脚本"
+        assert corrector.finish(text) == "打开jev工具检查这个项目，Jeff帮我调试脚本"
+        assert len(session.calls) == 1
+        assert "Jeff帮我调试脚本" not in str(session.calls[0]["json"]["state"])
+    finally:
+        corrector.close()
+
+
+def test_coordinated_person_alias_is_never_sent_to_the_model() -> None:
+    # Same ambiguity class: the alias is a fellow participant, not the name of
+    # an artifact. "模型/脚本" name what the people discuss or do.
+    session = _Session(lambda call: {"answers": _role_answers({"role": "tool"})})
+    corrector = _alias_corrector(session)
+    try:
+        for text in (
+            "我和Jeff讨论模型",
+            "我和Jeff在讨论模型",
+            "我跟Jeff聊脚本",
+            "Jeff和我讨论模型",
+        ):
+            assert corrector.finish(text) == text, text
+        assert session.calls == []
+    finally:
+        corrector.close()
+
+
+def test_space_beside_alias_does_not_bypass_the_person_guard() -> None:
+    # A high-confidence tool verdict must not rewrite a person role just
+    # because a space sits against the alias. Artifact nouns with the same
+    # gap stay judgeable, and a mixed sentence still corrects only the tool.
+    session = _Session(lambda call: {"answers": _role_answers({"role": "tool"})})
+    corrector = _alias_corrector(session)
+    try:
+        for text in (
+            "Jeff 帮我调试脚本",
+            "我和 Jeff 讨论模型",
+        ):
+            assert corrector.finish(text) == text, text
+        assert session.calls == []
+        for text, expected in (
+            ("打开 Jeff 工具检查这个项目", "打开 jev 工具检查这个项目"),
+            ("服务器上的 Jeff 模型怎么样", "服务器上的 jev 模型怎么样"),
+        ):
+            assert corrector.finish(text) == expected, text
+        mixed = "打开 Jeff 工具检查这个项目，Jeff 帮我调试脚本"
+        assert corrector.finish(mixed) == "打开 jev 工具检查这个项目，Jeff 帮我调试脚本"
+        assert len(session.calls) == 3
+        assert all("帮我" not in str(call["json"]["state"]) for call in session.calls)
+    finally:
+        corrector.close()
+
+
+def test_explicit_artifact_noun_still_gets_the_role_question() -> None:
+    # A directly attached software/model/tool noun names the artifact and
+    # keeps the occurrence judgeable, exactly as before the person guard.
+    session = _Session(lambda call: {"answers": _role_answers({"role": "tool"})})
+    corrector = _alias_corrector(session)
+    try:
+        for text, expected in (
+            ("打开Jeff工具检查这个项目", "打开jev工具检查这个项目"),
+            ("服务器上的Jeff模型怎么样", "服务器上的jev模型怎么样"),
+            ("重启jeff服务", "重启jev服务"),
+            ("打开jeff工具帮我检查端口", "打开jev工具帮我检查端口"),
+        ):
+            assert corrector.finish(text) == expected, text
+        assert len(session.calls) == 4
+    finally:
+        corrector.close()
+
+
+def test_alias_person_clause_without_its_own_cue_vetoes_the_alias() -> None:
+    # The cue belongs to the software clause, but the person clause carries
+    # the same heard token with no context of its own. Keeping the documented
+    # mixed-sentence protection, nothing is sent and nothing is replaced.
+    session = _Session(lambda call: {"answers": _role_answers({"role": "tool"})})
+    corrector = _alias_corrector(session)
+    try:
+        text = "打开jeff工具检查这个项目，Jeff是我同事"
+        assert corrector.finish(text) == text
+        assert session.calls == []
+    finally:
+        corrector.close()
+
+
+def test_alias_three_distinct_clauses_keep_the_budgeted_verdicts() -> None:
+    # Three distinct clauses at one request each can exceed the single job
+    # budget. Verdicts decided inside the budget are kept; the clause whose
+    # request overruns stays original; finish() never waits past one budget.
+    def handler(call: dict[str, object]) -> dict[str, object]:
+        time.sleep(0.01 if len(session.calls) <= 2 else 0.4)
+        return {"answers": _role_answers({"role": "tool"})}
+
+    session = _Session(handler)
+    corrector = _alias_corrector(session, timeout_s=0.15)
+    try:
+        text = "打开jeff工具检查这个项目，重新安装jeff浏览器插件，启动jeff服务"
+        started = time.monotonic()
+        result = corrector.finish(text)
+        elapsed = time.monotonic() - started
+        assert result == "打开jev工具检查这个项目，重新安装jev浏览器插件，启动jeff服务"
+        assert elapsed < 0.3, elapsed
+        # The kept part is this snapshot's answer, not a one-shot return.
+        assert corrector.poll(text) == result
+        assert corrector.finish(text) == result
+    finally:
+        corrector.close()
+
+
+def test_finish_partial_is_stable_until_cancel() -> None:
+    # Out of budget, finish() returns the verdicts already decided. That text
+    # is the answer for this exact snapshot: the next finish()/poll() must not
+    # fall back to the untouched original, and the late reply from the dropped
+    # job must not replace it either.
+    release = threading.Event()
+    entered = threading.Event()
+
+    def handler(call: dict[str, object]) -> dict[str, object]:
+        if len(session.calls) == 1:
+            return {"answers": _role_answers({"role": "tool"})}
+        entered.set()
+        release.wait(2)
+        return {"answers": _role_answers({"role": "tool"})}
+
+    session = _Session(handler)
+    corrector = _alias_corrector(session, timeout_s=0.15)
+    try:
+        text = "打开jeff工具检查这个项目，重启jeff服务"
+        partial = "打开jev工具检查这个项目，重启jeff服务"
+        started = time.monotonic()
+        assert corrector.finish(text) == partial
+        assert time.monotonic() - started < 0.3
+        assert entered.wait(1)
+        assert corrector.poll(text) == partial
+        assert corrector.finish(text) == partial
+        release.set()
+        time.sleep(0.25)
+        assert corrector.poll(text) == partial  # a dropped job stays silent
+        corrector.cancel()
+        assert corrector.poll(text) == text  # cancel clears the kept part
+    finally:
+        release.set()
+        corrector.close()
+
+
+def test_alias_clause_timeout_and_cancel_never_apply_a_late_verdict() -> None:
+    release = threading.Event()
+    entered = threading.Event()
+
+    def handler(call: dict[str, object]) -> dict[str, object]:
+        entered.set()
+        release.wait(2)
+        return {"answers": _role_answers({"role": "tool"})}
+
+    session = _Session(handler)
+    corrector = _alias_corrector(session, timeout_s=0.05)
+    try:
+        text = "打开jeff工具检查这个项目，然后重启jeff服务"
+        assert corrector.submit(text) == text
+        assert entered.wait(1)
+        started = time.monotonic()
+        assert corrector.finish(text) == text  # bounded abstain, no partial yet
+        assert time.monotonic() - started < 0.2
+        corrector.cancel()
+        release.set()
+        time.sleep(0.05)
+        assert corrector.poll(text) == text
+        assert corrector.poll("打开jeff工具干别的") == "打开jeff工具干别的"
+    finally:
+        release.set()
         corrector.close()
 
 
@@ -589,8 +883,8 @@ def test_alias_multiple_distinct_aliases_judge_independently() -> None:
         contextual_aliases=aliases,
     )
     try:
-        text = "打开jeff工具，再问问cody"
-        assert corrector.finish(text) == "打开jev工具，再问问cody"
+        text = "打开jeff工具，再运行cody播放器"
+        assert corrector.finish(text) == "打开jev工具，再运行cody播放器"
         assert len(session.calls) == 2
     finally:
         corrector.close()
@@ -804,5 +1098,66 @@ def test_debug_mail_keyword_does_not_replace_a_person_verdict() -> None:
         text = "我给Jeff发邮件请他调试脚本"
         assert corrector.finish(text) == text
         assert len(session.calls) == 1
+    finally:
+        corrector.close()
+
+
+# --- Technical context words (模型/服务器/推理) only widen eligibility; the
+# --- unchanged .70/.20 role verdict still decides the replacement. ---
+
+
+def test_technical_context_words_get_exactly_one_role_request() -> None:
+    # These sentences carry no open/install/run verb cue at all.
+    for text, expected in (
+        ("服务器上的jeff模型怎么样", "服务器上的jev模型怎么样"),
+        ("jeff的推理延迟很低", "jev的推理延迟很低"),
+    ):
+        def handler(call: dict[str, object]) -> dict[str, object]:
+            questions = call["json"]["questions"]
+            assert set(questions) == {"role"}
+            return {"answers": _role_answers({"role": "tool"})}
+
+        session = _Session(handler)
+        corrector = _alias_corrector(session)
+        try:
+            assert corrector.finish(text) == expected, text
+            assert len(session.calls) == 1, text
+        finally:
+            corrector.close()
+
+
+def test_technical_context_keeps_person_and_weak_verdicts() -> None:
+    for text, choice in (
+        ("给Jeff发一封关于模型的邮件", "person"),
+        ("服务器上的jeff模型怎么样", "unclear"),
+    ):
+        session = _Session(lambda call, pick=choice: {"answers": _role_answers({"role": pick})})
+        corrector = _alias_corrector(session)
+        try:
+            assert corrector.finish(text) == text, text
+            assert len(session.calls) == 1, text  # eligible, judged, still original
+        finally:
+            corrector.close()
+
+    weak = {"tool": 0.6, "person": 0.3, "unclear": 0.1}
+    session = _Session(
+        lambda call: {"answers": {"role": {"choice": "tool", "probabilities": weak}}}
+    )
+    corrector = _alias_corrector(session)
+    try:
+        text = "jeff的推理延迟很低"
+        assert corrector.finish(text) == text
+        assert len(session.calls) == 1
+    finally:
+        corrector.close()
+
+
+def test_no_technical_or_software_context_still_never_judged() -> None:
+    session = _Session(lambda call: (_ for _ in ()).throw(AssertionError(call)))
+    corrector = _alias_corrector(session)
+    try:
+        for text in ("Jeff今天来开会", "jeff的延迟很低", "Jeff挺不错的"):
+            assert corrector.finish(text) == text
+        assert session.calls == []
     finally:
         corrector.close()

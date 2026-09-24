@@ -287,6 +287,43 @@ def test_split_held_tail_caps_at_limit() -> None:
     assert prefix == "x" + "7" * 36
 
 
+def test_split_held_tail_keeps_yao_digit() -> None:
+    # 幺 is the spoken "1" of ports / IDs: it must survive the cut as a digit
+    # instead of being committed alone.
+    assert _split_held_tail("前文幺一") == ("前文", "幺一")
+    assert _split_held_tail("端口幺") == ("", "端口幺")
+
+
+def test_split_held_tail_keeps_percent_and_number_markers_whole() -> None:
+    # A marker that only means something with the digits after it is never
+    # committed on its own: the next segment completes it before formatting
+    # ("百分之三" + "十五" -> "百分之三十五" -> 35%).
+    assert _split_held_tail("前文百分之三") == ("前文", "百分之三")
+    assert _split_held_tail("比例百分之") == ("比例", "百分之")
+    # ASCII digits after the marker belong to the same held span: the next
+    # segment's "5" must join "百分之3" before the formatter runs.
+    assert _split_held_tail("比例百分之3") == ("比例", "百分之3")
+    # 号码 must stay glued to its digits: a bare "三四" would be an
+    # approximation and stay unconverted.
+    assert _split_held_tail("前文号码三") == ("前文", "号码三")
+    assert _split_held_tail("前文编号幺二") == ("前文", "编号幺二")
+    # A connector (是/为) and an optional space stay with the marker span:
+    # committing "号码是" alone loses the ID context across the cut.
+    assert _split_held_tail("号码是三") == ("", "号码是三")
+    assert _split_held_tail("前文号码 三") == ("前文", "号码 三")
+    # A bare marker with no digits yet is an ordinary word, not a tail.
+    assert _split_held_tail("这是号码") == ("这是号码", "")
+
+
+def test_join_raw_tail_keeps_yao_percent_and_marker_raw() -> None:
+    # join_raw_tail concatenates RAW text: no ASCII/percent conversion and no
+    # marker rewriting may happen before the next segment is joined.
+    assert join_raw_tail("幺", "二三四") == "幺二三四"
+    assert join_raw_tail("百分之三", "十五") == "百分之三十五"
+    assert join_raw_tail("号码三", "四") == "号码三四"
+    assert join_raw_tail("端口幺", "二三四") == "端口幺二三四"
+
+
 def test_join_raw_tail_number_and_url_concatenate() -> None:
     assert join_raw_tail("一百二", "十五") == "一百二十五"
     assert join_raw_tail("www点exa", "mple点com") == "www点example点com"
@@ -410,6 +447,109 @@ def test_display_normalisation_does_not_rewrite_held_tail(monkeypatch: pytest.Mo
     assert h.session.segments == ["一共"]
     assert h.session.commits == ["125"]
     assert worker.final_text == "一共125"
+
+
+# ---------------------------------------------------------------------------
+# Raw held tail across a boundary: 幺 / 百分数 / explicit number markers
+# ---------------------------------------------------------------------------
+
+def test_boundary_next_yi_stays_chinese_and_port_tail_joins(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The e2e counterexample shape: at the segment cut after
+    「下一个是端口幺」, the prefix used to commit 「下1个是」 and the held
+    port digits were at risk."""
+    _short_segment_settings(monkeypatch)
+    payload = _speech(1.5) + _silence(0.4) + _speech(0.5)
+    provider = _FakeProvider(["下一个是端口幺", "二完毕"])
+    h = _Harness(reader=_Reader(payload), provider=provider)
+    worker = h.run()
+
+    # The 定位 prefix stayed Chinese and the held port digits still formed
+    # one number when the next segment arrived.
+    assert h.session.segments == ["下一个是"]
+    assert h.session.commits == ["端口12完毕"]
+    assert worker.final_text == "下一个是端口12完毕"
+    assert "下1个" not in worker.final_text
+    assert h.fatals == []
+
+
+def test_boundary_keeps_yao_digit_for_next_segment(monkeypatch: pytest.MonkeyPatch) -> None:
+    _short_segment_settings(monkeypatch)
+    payload = _speech(1.5) + _silence(0.4) + _speech(0.5)
+    provider = _FakeProvider(["端口幺", "二三四"])
+    h = _Harness(reader=_Reader(payload), provider=provider)
+    worker = h.run()
+
+    # Nothing was formatted at the cut: the raw tail reached the formatter
+    # once as the joined snapshot "端口幺二三四".
+    assert h.session.segments == []
+    assert h.session.commits == ["端口1234"]
+    assert worker.final_text == "端口1234"
+    assert h.fatals == []
+
+
+def test_boundary_keeps_percent_marker_for_next_segment(monkeypatch: pytest.MonkeyPatch) -> None:
+    _short_segment_settings(monkeypatch)
+    payload = _speech(1.5) + _silence(0.4) + _speech(0.5)
+    provider = _FakeProvider(["比例百分之三", "十五"])
+    h = _Harness(reader=_Reader(payload), provider=provider)
+    worker = h.run()
+
+    expected_tail = _normalize_final_text("百分之三十五")
+    assert expected_tail.endswith(("%", "％")), expected_tail
+    # Only the safe prefix "比例" crossed the cut; "百分之" was never
+    # committed, so the next segment's "十五" completed the percentage in one
+    # formatter pass over the raw snapshot "百分之三十五".
+    assert h.session.segments == ["比例"]
+    assert h.session.commits == [expected_tail]
+    assert worker.final_text == "比例" + expected_tail
+    assert h.fatals == []
+
+
+def test_boundary_keeps_number_marker_for_next_segment(monkeypatch: pytest.MonkeyPatch) -> None:
+    _short_segment_settings(monkeypatch)
+    payload = _speech(1.5) + _silence(0.4) + _speech(0.5)
+    provider = _FakeProvider(["号码三", "四"])
+    h = _Harness(reader=_Reader(payload), provider=provider)
+    worker = h.run()
+
+    # Had "号码" been committed alone, the tail would have been a bare "三四"
+    # approximation and stayed unconverted.
+    assert h.session.segments == []
+    assert h.session.commits == ["号码34"]
+    assert worker.final_text == "号码34"
+    assert h.fatals == []
+
+
+def test_boundary_keeps_ascii_percent_for_next_segment(monkeypatch: pytest.MonkeyPatch) -> None:
+    _short_segment_settings(monkeypatch)
+    payload = _speech(1.5) + _silence(0.4) + _speech(0.5)
+    provider = _FakeProvider(["比例百分之3", "5"])
+    h = _Harness(reader=_Reader(payload), provider=provider)
+    worker = h.run()
+
+    # "百分之3" was held raw; the next segment's "5" joined it and the pair
+    # formatted once as a single percentage.
+    assert h.session.segments == ["比例"]
+    assert h.session.commits == ["35%"]
+    assert worker.final_text == "比例35%"
+    assert h.fatals == []
+
+
+def test_boundary_keeps_marker_connector_and_digits_for_next_segment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _short_segment_settings(monkeypatch)
+    payload = _speech(1.5) + _silence(0.4) + _speech(0.5)
+    provider = _FakeProvider(["号码是三", "四"])
+    h = _Harness(reader=_Reader(payload), provider=provider)
+    worker = h.run()
+
+    # The whole "号码是三" span stayed raw, so the joined snapshot still had
+    # the ID marker and read "号码是34" instead of a bare "三四" approximation.
+    assert h.session.segments == []
+    assert h.session.commits == ["号码是34"]
+    assert worker.final_text == "号码是34"
+    assert h.fatals == []
 
 
 # ---------------------------------------------------------------------------
@@ -869,6 +1009,117 @@ def test_same_snapshot_partial_poll_shows_ready_judgment_before_finish(
     assert session.commits == []
     assert worker.outcome == "committed"
     assert worker.final_text == "桌上有时期。"
+    assert h.fatals == []
+
+
+_ALIAS_SEMIF_ARGS = argparse.Namespace(
+    semif_endpoint="http://127.0.0.1:9/v1/systemone",
+    semif_timeout_s=0.35,
+    enable_semif_correction=True,
+    contextual_aliases=[{"heard": "jeff", "word": "jev", "meaning": "软件工具"}],
+)
+
+
+class _RoleJudgeSession:
+    """Role judge for the REAL corrector: every eligible clause is "tool"."""
+
+    def __init__(self) -> None:
+        self.payloads: list[dict[str, object]] = []
+        self.closed = False
+
+    def post(
+        self, url: str, json: dict | None = None, timeout: float | None = None
+    ) -> _PeakedResponse:
+        self.payloads.append(json)  # type: ignore[arg-type]
+        questions = json["questions"]  # type: ignore[index]
+        assert set(questions) == {"role"}, questions
+        return _PeakedResponse(
+            {
+                "answers": {
+                    "role": {
+                        "type": "choice",
+                        "choice": "tool",
+                        "probabilities": {"tool": 1.0, "person": 0.0, "unclear": 0.0},
+                    }
+                }
+            }
+        )
+
+    def close(self) -> None:
+        self.closed = True
+
+
+def test_segment_with_twin_software_clauses_commits_jev_at_the_real_boundary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Recordian-7bv at the real commit boundary: the 31 s fixture shape has
+    two identical software clauses in one segment. The old global uniqueness
+    filter sent zero requests and committed raw "jeff" twice; one
+    clause-scoped verdict must now cover both spans before commit."""
+    pytest.importorskip("pypinyin")
+    from recordian import semif_judge
+
+    _short_segment_settings(monkeypatch)
+    judge = _RoleJudgeSession()
+    monkeypatch.setattr(
+        semif_judge, "require_requests", lambda: SimpleNamespace(Session=lambda: judge)
+    )
+
+    segment = "服务器上的jeff模型怎么样，端口1234，服务器上的jeff模型怎么样"
+    provider = _FakeProvider([segment, "服务器上的jeff模型怎么样，比例35%。"])
+    h = _Harness(
+        reader=_Reader(_speech(1.5) + _silence(0.4) + _speech(0.5)),
+        provider=provider,
+        build_corrector=lambda context="": corrector_from_args(
+            _ALIAS_SEMIF_ARGS, [], context=context
+        ),
+    )
+    worker = h.run()
+
+    fixed = "服务器上的jev模型怎么样，端口1234，服务器上的jev模型怎么样"
+    assert h.session.segments == [fixed]
+    assert h.session.commits == ["服务器上的jev模型怎么样，比例35%。"]
+    assert worker.final_text == fixed + "服务器上的jev模型怎么样，比例35%。"
+    assert worker.outcome == "committed"
+    # One verdict per segment: the twin clauses share the identical clause text.
+    assert len(judge.payloads) == 2, judge.payloads
+    assert h.fatals == []
+
+
+def test_segment_never_rewrites_a_bare_helper_person_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Live SemIf failure at the real commit boundary: the model answered
+    "tool" for both clauses (0.97 / 0.74) and the person Jeff was committed
+    as jev. The explicitly modified "jeff工具" clause is still corrected; the
+    bare helper alias is gated before any request."""
+    pytest.importorskip("pypinyin")
+    from recordian import semif_judge
+
+    _short_segment_settings(monkeypatch)
+    judge = _RoleJudgeSession()
+    monkeypatch.setattr(
+        semif_judge, "require_requests", lambda: SimpleNamespace(Session=lambda: judge)
+    )
+
+    segment = "打开jeff工具检查这个项目，Jeff帮我调试脚本"
+    provider = _FakeProvider([segment, "记录完成。"])
+    h = _Harness(
+        reader=_Reader(_speech(1.5) + _silence(0.4) + _speech(0.5)),
+        provider=provider,
+        build_corrector=lambda context="": corrector_from_args(
+            _ALIAS_SEMIF_ARGS, [], context=context
+        ),
+    )
+    worker = h.run()
+
+    fixed = "打开jev工具检查这个项目，Jeff帮我调试脚本"
+    assert h.session.segments == [fixed]
+    assert h.session.commits == ["记录完成。"]
+    assert worker.final_text == fixed + "记录完成。"
+    assert worker.outcome == "committed"
+    # One judgeable clause; the bare helper alias is never sent.
+    assert len(judge.payloads) == 1, judge.payloads
     assert h.fatals == []
 
 
