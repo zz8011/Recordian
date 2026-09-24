@@ -95,6 +95,8 @@ Grok 使用真实 loopback 复现并复查 ASR 结束判定。普通 reset 后�
 
 本机未执行Python3.10/3.11的完整CI矩阵，也未宣称云端CI或生产部署通过。模型服务的Python3.11环境已单独完成实际GPU验证。
 
+交付前由Kimi使用原项目 `.venv/bin/python` 复核客户端：`recordian.hotkey_dictate --help`、provider及配置模块导入、私有配置归一化均exit=0，产品路径指向原项目 `src`。客户端实际依赖 `websocket-client`，原环境已有1.7.0；`websockets`用于服务端和测试。协调者最初把两个包混淆、据metadata缺失推断客户端缺依赖，该推断已撤回，更正报告与原始stdout/stderr保留在 `kimi-client-runtime-final.report.md` 和 `kimi-client-runtime-final.raw-evidence.log`。额外创建的 `runtime/client-env`仅是验证环境，不是客户端启动的必要条件；下方默认命令继续使用原项目解释器。这次核验没有开启麦克风或模型服务。
+
 最终关键文件SHA-256：
 
 | 文件 | SHA-256 |
