@@ -2,7 +2,7 @@
 
 > Voice dictation for Linux. Audio → ASR → hotword correction → input-method commit, with optional text refinement.
 
-**Last updated:** 2026-09-24
+**Last updated:** 2026-09-25
 
 ## Module Map
 
@@ -13,6 +13,8 @@
 | `src/recordian/providers/asr/` | ASR backend implementations | qwen, streaming, etc. |
 | `src/recordian/providers/refine/` | Text refinement LLMs | cloud LLM refine pipeline |
 | `server/` | Local ASR server processes | `confucius_streaming_server.py` (WebSocket v1, loopback), `qwen_streaming_server.py` (HTTP) |
+| `server/decision_trial/` | SystemOne model comparison and synthetic Chinese hotword corpus | Read its README for metric boundaries and reproducible runs |
+| `server/decider_trial/` / `server/winnow_trial/` | Isolated AMD server trial deployment | Pinned models, startup checks, and rollback instructions |
 | `tests/` | Unit & integration tests | |
 | `docs/` | Architecture & research docs | |
 | `models/` | ASR model files (gitignored) | Do not commit large files |
@@ -62,6 +64,7 @@
 - **Hotkey configuration** → `hotkey_dictate.py` + `recordian-hotkey-dictate --help`
 - **Continuous Alt dictation** → `continuous_dictation.py` + `docs/CONTINUOUS-DICTATION.zh-CN.md`
 - **Local streaming ASR server** → `server/confucius_streaming_server.py` + `server/README-confucius.md`
+- **Contextual correction model selection** → `docs/DECISION-MODEL-SELECTION.zh-CN.md` + `server/decision_trial/README.md`
 - **Wake word** → `voice_wake.py`
 - **Config schema** → `runtime_config.py` + `pyproject.toml`
 - **Running the daemon** → `recordian-hotkey-dictate --help`

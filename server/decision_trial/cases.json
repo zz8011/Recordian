@@ -1,0 +1,4259 @@
+{
+  "schema_version": 2,
+  "name": "systemone_decision_contextual_alias_cases",
+  "created": "2026-09-25",
+  "language": "zh-CN + en",
+  "provenance": "全部句子由本轮任务手写合成，不含任何用户录音、私密文本、真实人名或账号信息。",
+  "purpose": "在同一 SystemOne /v1/systemone choice 请求形状下，对照不同模型的语境别名 role 判定，并用产品 interpret_choice 0.70/0.20 门槛与 streaming_correction 结构保护做重放。不运行完整流式 correction / IME 路径。",
+  "alias": {
+    "heard": "jeff",
+    "word": "jev",
+    "meaning": "软件工具"
+  },
+  "question": {
+    "type": "choice",
+    "criteria": {
+      "tool": "这里指的是软件工具、程序或插件。",
+      "person": "这里指的是一个人。",
+      "unclear": "不清楚，或者以上都不是。"
+    },
+    "instructions_template": "判断句子中标记的「{surface}」在这个语境里指的是什么。只能从给定候选里选一个。拿不准就选“不清楚”。补充说明：用户的常用词里，{word} 是这个用户的{meaning}；语音识别经常把它误写成 {heard}。",
+    "state_template": "{context_line}{focus}\n只判断这个跨度：「{surface}」",
+    "note": "快照仅供阅读；实际请求使用运行时可导入的产品常量，报告会记录实际值。"
+  },
+  "labeling_rules": [
+    "标签针对 marker（⟦⟧）标出的那一次出现，不针对整句。",
+    "expected=tool 表示该次出现指软件工具/程序/插件/服务/模型。",
+    "expected=person 表示该次出现指人，即使同小句出现模型/脚本/服务器等词。",
+    "expected=unclear 表示该次出现只是词形/拼写讨论，或语境不足以判定；弃权是合理答案，不是错误。",
+    "否定、元话语、引用里的目标出现仍按“所指对象”标注，产品是否改写由结构性保护单独决定（guard_expected）。",
+    "阿拉伯数字/端口/网址由本机规则处理，不纳入模型能力评估（见 background_negative）。",
+    "guard_expected 是人工按 streaming_correction 的结构保护预判的产品行为；运行时用真实产品函数复核，不一致会写进报告。"
+  ],
+  "guard_values": {
+    "ask": "产品会发出 role 请求（本工具的 HTTP 请求即对应这一路）。",
+    "skip_person": "产品的 _bare_person_alias 认为是人名（帮我/替我/和…），不请求、不改写。",
+    "skip_meta": "产品认为是拼写元话语（而是/改成/写成/说成…），不请求、不改写。",
+    "skip_negation": "产品在否定窗口内，不请求、不改写。",
+    "skip_no_cue": "该小句（及上一段）没有软件线索词，产品整体弃权，不请求、不改写。",
+    "skip_repeat_in_clause": "同一小句内同一别名出现多次，产品整体弃权，不请求、不改写。",
+    "skip_protected": "目标落在反引号代码片段等保护范围内，产品不改写。"
+  },
+  "case_count": 99,
+  "negative_count": 45,
+  "counts": {
+    "expected": {
+      "person": 33,
+      "tool": 54,
+      "unclear": 12
+    },
+    "guard_expected": {
+      "ask": 61,
+      "skip_meta": 2,
+      "skip_negation": 6,
+      "skip_no_cue": 12,
+      "skip_person": 14,
+      "skip_protected": 1,
+      "skip_repeat_in_clause": 3
+    },
+    "category": {
+      "background_negative": 4,
+      "case_and_spacing": 6,
+      "context_prior_software": 6,
+      "genuine_unclear": 3,
+      "guard_structural": 2,
+      "meta_mention": 5,
+      "mixed_person_tool": 8,
+      "multi_hotword": 5,
+      "negation": 5,
+      "no_context": 4,
+      "person_discuss": 8,
+      "person_help": 8,
+      "quotation": 5,
+      "tool_attached_noun": 5,
+      "tool_install_run": 10,
+      "tool_model_server": 9,
+      "zh_en_mix": 6
+    },
+    "has_alt": 99,
+    "raw_accuracy_eligible": 96,
+    "raw_accuracy_excluded": 3,
+    "raw_accuracy_excluded_ids": [
+      "mixed-05",
+      "mixed-06",
+      "guard-repeat-01"
+    ]
+  },
+  "cases": [
+    {
+      "id": "tool-install-01",
+      "category": "tool_install_run",
+      "text": "今天下午先把jeff安装好，然后再写文档。",
+      "marker_text": "今天下午先把⟦jeff⟧安装好，然后再写文档。",
+      "target_span": {
+        "start": 6,
+        "end": 10,
+        "surface": "jeff"
+      },
+      "target_occurrence_index": 0,
+      "occurrences": [
+        {
+          "start": 6,
+          "end": 10,
+          "surface": "jeff"
+        }
+      ],
+      "focus": "今天下午先把jeff安装好",
+      "context": "",
+      "expected": "tool",
+      "expected_reason": "目标出现是安装动作的宾语，指软件工具。",
+      "guard_expected": "ask",
+      "alt": {
+        "text": "先把jeff安装到测试机，再跑一遍用例。",
+        "marker_text": "先把⟦jeff⟧安装到测试机，再跑一遍用例。",
+        "target_span": {
+          "start": 2,
+          "end": 6,
+          "surface": "jeff"
+        },
+        "occurrences": [
+          {
+            "start": 2,
+            "end": 6,
+            "surface": "jeff"
+          }
+        ],
+        "focus": "先把jeff安装到测试机"
+      }
+    },
+    {
+      "id": "tool-install-02",
+      "category": "tool_install_run",
+      "text": "初始化环境的时候记得安装jeff。",
+      "marker_text": "初始化环境的时候记得安装⟦jeff⟧。",
+      "target_span": {
+        "start": 12,
+        "end": 16,
+        "surface": "jeff"
+      },
+      "target_occurrence_index": 0,
+      "occurrences": [
+        {
+          "start": 12,
+          "end": 16,
+          "surface": "jeff"
+        }
+      ],
+      "focus": "初始化环境的时候记得安装jeff",
+      "context": "",
+      "expected": "tool",
+      "expected_reason": "安装对象是软件本体。",
+      "guard_expected": "ask",
+      "alt": {
+        "text": "配环境时记得把jeff部署到容器里。",
+        "marker_text": "配环境时记得把⟦jeff⟧部署到容器里。",
+        "target_span": {
+          "start": 7,
+          "end": 11,
+          "surface": "jeff"
+        },
+        "occurrences": [
+          {
+            "start": 7,
+            "end": 11,
+            "surface": "jeff"
+          }
+        ],
+        "focus": "配环境时记得把jeff部署到容器里"
+      }
+    },
+    {
+      "id": "tool-start-01",
+      "category": "tool_install_run",
+      "text": "早上打开jeff的时候它闪退了。",
+      "marker_text": "早上打开⟦jeff⟧的时候它闪退了。",
+      "target_span": {
+        "start": 4,
+        "end": 8,
+        "surface": "jeff"
+      },
+      "target_occurrence_index": 0,
+      "occurrences": [
+        {
+          "start": 4,
+          "end": 8,
+          "surface": "jeff"
+        }
+      ],
+      "focus": "早上打开jeff的时候它闪退了",
+      "context": "",
+      "expected": "tool",
+      "expected_reason": "闪退的是程序本身。",
+      "guard_expected": "ask",
+      "alt": {
+        "text": "启动jeff之后界面直接卡住。",
+        "marker_text": "启动⟦jeff⟧之后界面直接卡住。",
+        "target_span": {
+          "start": 2,
+          "end": 6,
+          "surface": "jeff"
+        },
+        "occurrences": [
+          {
+            "start": 2,
+            "end": 6,
+            "surface": "jeff"
+          }
+        ],
+        "focus": "启动jeff之后界面直接卡住"
+      }
+    },
+    {
+      "id": "tool-start-02",
+      "category": "tool_install_run",
+      "text": "服务重启以后 jeff 还是起不来。",
+      "marker_text": "服务重启以后 ⟦jeff⟧ 还是起不来。",
+      "target_span": {
+        "start": 7,
+        "end": 11,
+        "surface": "jeff"
+      },
+      "target_occurrence_index": 0,
+      "occurrences": [
+        {
+          "start": 7,
+          "end": 11,
+          "surface": "jeff"
+        }
+      ],
+      "focus": "服务重启以后 jeff 还是起不来",
+      "context": "",
+      "expected": "tool",
+      "expected_reason": "起不来的是服务/程序。",
+      "guard_expected": "ask",
+      "alt": {
+        "text": "重启机器之后 jeff 依旧无法启动。",
+        "marker_text": "重启机器之后 ⟦jeff⟧ 依旧无法启动。",
+        "target_span": {
+          "start": 7,
+          "end": 11,
+          "surface": "jeff"
+        },
+        "occurrences": [
+          {
+            "start": 7,
+            "end": 11,
+            "surface": "jeff"
+          }
+        ],
+        "focus": "重启机器之后 jeff 依旧无法启动"
+      }
+    },
+    {
+      "id": "tool-run-01",
+      "category": "tool_install_run",
+      "text": "我在终端里运行jeff，结果没有任何输出。",
+      "marker_text": "我在终端里运行⟦jeff⟧，结果没有任何输出。",
+      "target_span": {
+        "start": 7,
+        "end": 11,
+        "surface": "jeff"
+      },
+      "target_occurrence_index": 0,
+      "occurrences": [
+        {
+          "start": 7,
+          "end": 11,
+          "surface": "jeff"
+        }
+      ],
+      "focus": "我在终端里运行jeff",
+      "context": "",
+      "expected": "tool",
+      "expected_reason": "在终端运行的是程序。",
+      "guard_expected": "ask",
+      "alt": {
+        "text": "命令行里执行jeff时报了权限错误。",
+        "marker_text": "命令行里执行⟦jeff⟧时报了权限错误。",
+        "target_span": {
+          "start": 6,
+          "end": 10,
+          "surface": "jeff"
+        },
+        "occurrences": [
+          {
+            "start": 6,
+            "end": 10,
+            "surface": "jeff"
+          }
+        ],
+        "focus": "命令行里执行jeff时报了权限错误"
+      }
+    },
+    {
+      "id": "tool-upgrade-01",
+      "category": "tool_install_run",
+      "text": "周末把jeff升级到最新版本试试。",
+      "marker_text": "周末把⟦jeff⟧升级到最新版本试试。",
+      "target_span": {
+        "start": 3,
+        "end": 7,
+        "surface": "jeff"
+      },
+      "target_occurrence_index": 0,
+      "occurrences": [
+        {
+          "start": 3,
+          "end": 7,
+          "surface": "jeff"
+        }
+      ],
+      "focus": "周末把jeff升级到最新版本试试",
+      "context": "",
+      "expected": "tool",
+      "expected_reason": "被升级的是软件版本。",
+      "guard_expected": "ask",
+      "alt": {
+        "text": "有空把jeff更新一下，老版本有 bug。",
+        "marker_text": "有空把⟦jeff⟧更新一下，老版本有 bug。",
+        "target_span": {
+          "start": 3,
+          "end": 7,
+          "surface": "jeff"
+        },
+        "occurrences": [
+          {
+            "start": 3,
+            "end": 7,
+            "surface": "jeff"
+          }
+        ],
+        "focus": "有空把jeff更新一下"
+      }
+    },
+    {
+      "id": "tool-uninstall-01",
+      "category": "tool_install_run",
+      "text": "如果还是冲突，就先卸载jeff再重装。",
+      "marker_text": "如果还是冲突，就先卸载⟦jeff⟧再重装。",
+      "target_span": {
+        "start": 11,
+        "end": 15,
+        "surface": "jeff"
+      },
+      "target_occurrence_index": 0,
+      "occurrences": [
+        {
+          "start": 11,
+          "end": 15,
+          "surface": "jeff"
+        }
+      ],
+      "focus": "就先卸载jeff再重装",
+      "context": "",
+      "expected": "tool",
+      "expected_reason": "卸载/重装的对象是软件。",
+      "guard_expected": "ask",
+      "alt": {
+        "text": "冲突还在的话就把jeff卸载掉。",
+        "marker_text": "冲突还在的话就把⟦jeff⟧卸载掉。",
+        "target_span": {
+          "start": 8,
+          "end": 12,
+          "surface": "jeff"
+        },
+        "occurrences": [
+          {
+            "start": 8,
+            "end": 12,
+            "surface": "jeff"
+          }
+        ],
+        "focus": "冲突还在的话就把jeff卸载掉"
+      }
+    },
+    {
+      "id": "tool-config-01",
+      "category": "tool_install_run",
+      "text": "帮我把jeff的配置文件改成默认值。",
+      "marker_text": "帮我把⟦jeff⟧的配置文件改成默认值。",
+      "target_span": {
+        "start": 3,
+        "end": 7,
+        "surface": "jeff"
+      },
+      "target_occurrence_index": 0,
+      "occurrences": [
+        {
+          "start": 3,
+          "end": 7,
+          "surface": "jeff"
+        }
+      ],
+      "focus": "帮我把jeff的配置文件改成默认值",
+      "context": "",
+      "expected": "tool",
+      "expected_reason": "配置文件属于该软件，并非把 Jeff 当人。",
+      "guard_expected": "ask",
+      "alt": {
+        "text": "记得把jeff的配置同步到新机器。",
+        "marker_text": "记得把⟦jeff⟧的配置同步到新机器。",
+        "target_span": {
+          "start": 3,
+          "end": 7,
+          "surface": "jeff"
+        },
+        "occurrences": [
+          {
+            "start": 3,
+            "end": 7,
+            "surface": "jeff"
+          }
+        ],
+        "focus": "记得把jeff的配置同步到新机器"
+      }
+    },
+    {
+      "id": "tool-deploy-01",
+      "category": "tool_install_run",
+      "text": "把jeff部署到内网服务器上，端口先别改。",
+      "marker_text": "把⟦jeff⟧部署到内网服务器上，端口先别改。",
+      "target_span": {
+        "start": 1,
+        "end": 5,
+        "surface": "jeff"
+      },
+      "target_occurrence_index": 0,
+      "occurrences": [
+        {
+          "start": 1,
+          "end": 5,
+          "surface": "jeff"
+        }
+      ],
+      "focus": "把jeff部署到内网服务器上",
+      "context": "",
+      "expected": "tool",
+      "expected_reason": "被部署的是服务程序。",
+      "guard_expected": "ask",
+      "alt": {
+        "text": "下周一再把jeff部署到生产服务器。",
+        "marker_text": "下周一再把⟦jeff⟧部署到生产服务器。",
+        "target_span": {
+          "start": 5,
+          "end": 9,
+          "surface": "jeff"
+        },
+        "occurrences": [
+          {
+            "start": 5,
+            "end": 9,
+            "surface": "jeff"
+          }
+        ],
+        "focus": "下周一再把jeff部署到生产服务器"
+      }
+    },
+    {
+      "id": "tool-update-01",
+      "category": "tool_install_run",
+      "text": "有空更新一下jeff，别让它一直报错。",
+      "marker_text": "有空更新一下⟦jeff⟧，别让它一直报错。",
+      "target_span": {
+        "start": 6,
+        "end": 10,
+        "surface": "jeff"
+      },
+      "target_occurrence_index": 0,
+      "occurrences": [
+        {
+          "start": 6,
+          "end": 10,
+          "surface": "jeff"
+        }
+      ],
+      "focus": "有空更新一下jeff",
+      "context": "",
+      "expected": "tool",
+      "expected_reason": "报错的是程序。",
+      "guard_expected": "ask",
+      "alt": {
+        "text": "先更新jeff再复现这个 bug。",
+        "marker_text": "先更新⟦jeff⟧再复现这个 bug。",
+        "target_span": {
+          "start": 3,
+          "end": 7,
+          "surface": "jeff"
+        },
+        "occurrences": [
+          {
+            "start": 3,
+            "end": 7,
+            "surface": "jeff"
+          }
+        ],
+        "focus": "先更新jeff再复现这个 bug"
+      }
+    },
+    {
+      "id": "tool-model-01",
+      "category": "tool_model_server",
+      "text": "jeff模型的推理速度比上周快了不少。",
+      "marker_text": "⟦jeff⟧模型的推理速度比上周快了不少。",
+      "target_span": {
+        "start": 0,
+        "end": 4,
+        "surface": "jeff"
+      },
+      "target_occurrence_index": 0,
+      "occurrences": [
+        {
+          "start": 0,
+          "end": 4,
+          "surface": "jeff"
+        }
+      ],
+      "focus": "jeff模型的推理速度比上周快了不少",
+      "context": "",
+      "expected": "tool",
+      "expected_reason": "“jeff模型”= 该软件的模型，直接修饰关系。",
+      "guard_expected": "ask",
+      "alt": {
+        "text": "jeff模型的显存占用降下来了。",
+        "marker_text": "⟦jeff⟧模型的显存占用降下来了。",
+        "target_span": {
+          "start": 0,
+          "end": 4,
+          "surface": "jeff"
+        },
+        "occurrences": [
+          {
+            "start": 0,
+            "end": 4,
+            "surface": "jeff"
+          }
+        ],
+        "focus": "jeff模型的显存占用降下来了"
+      }
+    },
+    {
+      "id": "tool-model-02",
+      "category": "tool_model_server",
+      "text": "服务器上的 jeff 模型占用显存有点高。",
+      "marker_text": "服务器上的 ⟦jeff⟧ 模型占用显存有点高。",
+      "target_span": {
+        "start": 6,
+        "end": 10,
+        "surface": "jeff"
+      },
+      "target_occurrence_index": 0,
+      "occurrences": [
+        {
+          "start": 6,
+          "end": 10,
+          "surface": "jeff"
+        }
+      ],
+      "focus": "服务器上的 jeff 模型占用显存有点高",
+      "context": "",
+      "expected": "tool",
+      "expected_reason": "服务器上部署的模型，指软件产物。",
+      "guard_expected": "ask",
+      "alt": {
+        "text": "测试机上的 jeff 模型还没量化。",
+        "marker_text": "测试机上的 ⟦jeff⟧ 模型还没量化。",
+        "target_span": {
+          "start": 6,
+          "end": 10,
+          "surface": "jeff"
+        },
+        "occurrences": [
+          {
+            "start": 6,
+            "end": 10,
+            "surface": "jeff"
+          }
+        ],
+        "focus": "测试机上的 jeff 模型还没量化"
+      }
+    },
+    {
+      "id": "tool-server-01",
+      "category": "tool_model_server",
+      "text": "jeff 服务器今天凌晨挂过一次。",
+      "marker_text": "⟦jeff⟧ 服务器今天凌晨挂过一次。",
+      "target_span": {
+        "start": 0,
+        "end": 4,
+        "surface": "jeff"
+      },
+      "target_occurrence_index": 0,
+      "occurrences": [
+        {
+          "start": 0,
+          "end": 4,
+          "surface": "jeff"
+        }
+      ],
+      "focus": "jeff 服务器今天凌晨挂过一次",
+      "context": "",
+      "expected": "tool",
+      "expected_reason": "挂掉的是服务器进程。",
+      "guard_expected": "ask",
+      "alt": {
+        "text": "jeff 服务器重启之后正常了。",
+        "marker_text": "⟦jeff⟧ 服务器重启之后正常了。",
+        "target_span": {
+          "start": 0,
+          "end": 4,
+          "surface": "jeff"
+        },
+        "occurrences": [
+          {
+            "start": 0,
+            "end": 4,
+            "surface": "jeff"
+          }
+        ],
+        "focus": "jeff 服务器重启之后正常了"
+      }
+    },
+    {
+      "id": "tool-server-02",
+      "category": "tool_model_server",
+      "text": "把 jeff 服务器加到监控里。",
+      "marker_text": "把 ⟦jeff⟧ 服务器加到监控里。",
+      "target_span": {
+        "start": 2,
+        "end": 6,
+        "surface": "jeff"
+      },
+      "target_occurrence_index": 0,
+      "occurrences": [
+        {
+          "start": 2,
+          "end": 6,
+          "surface": "jeff"
+        }
+      ],
+      "focus": "把 jeff 服务器加到监控里",
+      "context": "",
+      "expected": "tool",
+      "expected_reason": "被监控的是服务器。",
+      "guard_expected": "ask",
+      "alt": {
+        "text": "把 jeff 服务写进部署文档。",
+        "marker_text": "把 ⟦jeff⟧ 服务写进部署文档。",
+        "target_span": {
+          "start": 2,
+          "end": 6,
+          "surface": "jeff"
+        },
+        "occurrences": [
+          {
+            "start": 2,
+            "end": 6,
+            "surface": "jeff"
+          }
+        ],
+        "focus": "把 jeff 服务写进部署文档"
+      }
+    },
+    {
+      "id": "tool-server-03",
+      "category": "tool_model_server",
+      "text": "内网的jeff服务和测试环境是同一套权重吗？",
+      "marker_text": "内网的⟦jeff⟧服务和测试环境是同一套权重吗？",
+      "target_span": {
+        "start": 3,
+        "end": 7,
+        "surface": "jeff"
+      },
+      "target_occurrence_index": 0,
+      "occurrences": [
+        {
+          "start": 3,
+          "end": 7,
+          "surface": "jeff"
+        }
+      ],
+      "focus": "内网的jeff服务和测试环境是同一套权重吗",
+      "context": "",
+      "expected": "tool",
+      "expected_reason": "问的是服务/权重版本，指软件。",
+      "guard_expected": "ask",
+      "alt": {
+        "text": "jeff服务器用的是哪一版权重？",
+        "marker_text": "⟦jeff⟧服务器用的是哪一版权重？",
+        "target_span": {
+          "start": 0,
+          "end": 4,
+          "surface": "jeff"
+        },
+        "occurrences": [
+          {
+            "start": 0,
+            "end": 4,
+            "surface": "jeff"
+          }
+        ],
+        "focus": "jeff服务器用的是哪一版权重"
+      }
+    },
+    {
+      "id": "tool-model-03",
+      "category": "tool_model_server",
+      "text": "jeff这个模型的量化版本效果一般。",
+      "marker_text": "⟦jeff⟧这个模型的量化版本效果一般。",
+      "target_span": {
+        "start": 0,
+        "end": 4,
+        "surface": "jeff"
+      },
+      "target_occurrence_index": 0,
+      "occurrences": [
+        {
+          "start": 0,
+          "end": 4,
+          "surface": "jeff"
+        }
+      ],
+      "focus": "jeff这个模型的量化版本效果一般",
+      "context": "",
+      "expected": "tool",
+      "expected_reason": "“这个模型”回指软件模型。",
+      "guard_expected": "ask",
+      "alt": {
+        "text": "jeff这个模型的响应速度还行。",
+        "marker_text": "⟦jeff⟧这个模型的响应速度还行。",
+        "target_span": {
+          "start": 0,
+          "end": 4,
+          "surface": "jeff"
+        },
+        "occurrences": [
+          {
+            "start": 0,
+            "end": 4,
+            "surface": "jeff"
+          }
+        ],
+        "focus": "jeff这个模型的响应速度还行"
+      }
+    },
+    {
+      "id": "tool-latency-01",
+      "category": "tool_model_server",
+      "text": "压测显示 jeff 的推理延迟在两百毫秒左右。",
+      "marker_text": "压测显示 ⟦jeff⟧ 的推理延迟在两百毫秒左右。",
+      "target_span": {
+        "start": 5,
+        "end": 9,
+        "surface": "jeff"
+      },
+      "target_occurrence_index": 0,
+      "occurrences": [
+        {
+          "start": 5,
+          "end": 9,
+          "surface": "jeff"
+        }
+      ],
+      "focus": "压测显示 jeff 的推理延迟在两百毫秒左右",
+      "context": "",
+      "expected": "tool",
+      "expected_reason": "推理延迟是模型属性。",
+      "guard_expected": "ask",
+      "alt": {
+        "text": "监控上看 jeff 的推理延迟很稳定。",
+        "marker_text": "监控上看 ⟦jeff⟧ 的推理延迟很稳定。",
+        "target_span": {
+          "start": 5,
+          "end": 9,
+          "surface": "jeff"
+        },
+        "occurrences": [
+          {
+            "start": 5,
+            "end": 9,
+            "surface": "jeff"
+          }
+        ],
+        "focus": "监控上看 jeff 的推理延迟很稳定"
+      }
+    },
+    {
+      "id": "tool-endpoint-01",
+      "category": "tool_model_server",
+      "text": "把请求转发到 jeff 的服务器接口上。",
+      "marker_text": "把请求转发到 ⟦jeff⟧ 的服务器接口上。",
+      "target_span": {
+        "start": 7,
+        "end": 11,
+        "surface": "jeff"
+      },
+      "target_occurrence_index": 0,
+      "occurrences": [
+        {
+          "start": 7,
+          "end": 11,
+          "surface": "jeff"
+        }
+      ],
+      "focus": "把请求转发到 jeff 的服务器接口上",
+      "context": "",
+      "expected": "tool",
+      "expected_reason": "接口属于该服务器。",
+      "guard_expected": "ask",
+      "alt": {
+        "text": "客户端先连 jeff 的服务器地址。",
+        "marker_text": "客户端先连 ⟦jeff⟧ 的服务器地址。",
+        "target_span": {
+          "start": 6,
+          "end": 10,
+          "surface": "jeff"
+        },
+        "occurrences": [
+          {
+            "start": 6,
+            "end": 10,
+            "surface": "jeff"
+          }
+        ],
+        "focus": "客户端先连 jeff 的服务器地址"
+      }
+    },
+    {
+      "id": "tool-log-01",
+      "category": "tool_model_server",
+      "text": "先在终端里看 jeff 的日志有没有报错。",
+      "marker_text": "先在终端里看 ⟦jeff⟧ 的日志有没有报错。",
+      "target_span": {
+        "start": 7,
+        "end": 11,
+        "surface": "jeff"
+      },
+      "target_occurrence_index": 0,
+      "occurrences": [
+        {
+          "start": 7,
+          "end": 11,
+          "surface": "jeff"
+        }
+      ],
+      "focus": "先在终端里看 jeff 的日志有没有报错",
+      "context": "",
+      "expected": "tool",
+      "expected_reason": "日志是程序产出的。",
+      "guard_expected": "ask",
+      "alt": {
+        "text": "打开终端翻一下 jeff 的日志。",
+        "marker_text": "打开终端翻一下 ⟦jeff⟧ 的日志。",
+        "target_span": {
+          "start": 8,
+          "end": 12,
+          "surface": "jeff"
+        },
+        "occurrences": [
+          {
+            "start": 8,
+            "end": 12,
+            "surface": "jeff"
+          }
+        ],
+        "focus": "打开终端翻一下 jeff 的日志"
+      }
+    },
+    {
+      "id": "person-help-01",
+      "category": "person_help",
+      "text": "Jeff帮我调试一下这个脚本。",
+      "marker_text": "⟦Jeff⟧帮我调试一下这个脚本。",
+      "target_span": {
+        "start": 0,
+        "end": 4,
+        "surface": "Jeff"
+      },
+      "target_occurrence_index": 0,
+      "occurrences": [
+        {
+          "start": 0,
+          "end": 4,
+          "surface": "Jeff"
+        }
+      ],
+      "focus": "Jeff帮我调试一下这个脚本",
+      "context": "",
+      "expected": "person",
+      "expected_reason": "Jeff 是施助的人，脚本只是他操作的对象。",
+      "guard_expected": "skip_person",
+      "alt": {
+        "text": "Jeff帮我看看这个脚本哪里写错了。",
+        "marker_text": "⟦Jeff⟧帮我看看这个脚本哪里写错了。",
+        "target_span": {
+          "start": 0,
+          "end": 4,
+          "surface": "Jeff"
+        },
+        "occurrences": [
+          {
+            "start": 0,
+            "end": 4,
+            "surface": "Jeff"
+          }
+        ],
+        "focus": "Jeff帮我看看这个脚本哪里写错了"
+      }
+    },
+    {
+      "id": "person-help-02",
+      "category": "person_help",
+      "text": "明天让 Jeff 帮我看看模型为什么训不起来。",
+      "marker_text": "明天让 ⟦Jeff⟧ 帮我看看模型为什么训不起来。",
+      "target_span": {
+        "start": 4,
+        "end": 8,
+        "surface": "Jeff"
+      },
+      "target_occurrence_index": 0,
+      "occurrences": [
+        {
+          "start": 4,
+          "end": 8,
+          "surface": "Jeff"
+        }
+      ],
+      "focus": "明天让 Jeff 帮我看看模型为什么训不起来",
+      "context": "",
+      "expected": "person",
+      "expected_reason": "出现“模型”不改变 Jeff 是人。",
+      "guard_expected": "skip_person",
+      "alt": {
+        "text": "回头请 Jeff 帮我检查一下训练脚本。",
+        "marker_text": "回头请 ⟦Jeff⟧ 帮我检查一下训练脚本。",
+        "target_span": {
+          "start": 4,
+          "end": 8,
+          "surface": "Jeff"
+        },
+        "occurrences": [
+          {
+            "start": 4,
+            "end": 8,
+            "surface": "Jeff"
+          }
+        ],
+        "focus": "回头请 Jeff 帮我检查一下训练脚本"
+      }
+    },
+    {
+      "id": "person-help-03",
+      "category": "person_help",
+      "text": "Jeff替我把服务器重启一下吧。",
+      "marker_text": "⟦Jeff⟧替我把服务器重启一下吧。",
+      "target_span": {
+        "start": 0,
+        "end": 4,
+        "surface": "Jeff"
+      },
+      "target_occurrence_index": 0,
+      "occurrences": [
+        {
+          "start": 0,
+          "end": 4,
+          "surface": "Jeff"
+        }
+      ],
+      "focus": "Jeff替我把服务器重启一下吧",
+      "context": "",
+      "expected": "person",
+      "expected_reason": "“替我把服务器重启”是人的动作。",
+      "guard_expected": "skip_person",
+      "alt": {
+        "text": "Jeff替我盯着这次上线。",
+        "marker_text": "⟦Jeff⟧替我盯着这次上线。",
+        "target_span": {
+          "start": 0,
+          "end": 4,
+          "surface": "Jeff"
+        },
+        "occurrences": [
+          {
+            "start": 0,
+            "end": 4,
+            "surface": "Jeff"
+          }
+        ],
+        "focus": "Jeff替我盯着这次上线"
+      }
+    },
+    {
+      "id": "person-help-04",
+      "category": "person_help",
+      "text": "刚才 Jeff 帮我改了一段代码。",
+      "marker_text": "刚才 ⟦Jeff⟧ 帮我改了一段代码。",
+      "target_span": {
+        "start": 3,
+        "end": 7,
+        "surface": "Jeff"
+      },
+      "target_occurrence_index": 0,
+      "occurrences": [
+        {
+          "start": 3,
+          "end": 7,
+          "surface": "Jeff"
+        }
+      ],
+      "focus": "刚才 Jeff 帮我改了一段代码",
+      "context": "",
+      "expected": "person",
+      "expected_reason": "改代码的是人。",
+      "guard_expected": "skip_person",
+      "alt": {
+        "text": "Jeff帮我审了一遍代码。",
+        "marker_text": "⟦Jeff⟧帮我审了一遍代码。",
+        "target_span": {
+          "start": 0,
+          "end": 4,
+          "surface": "Jeff"
+        },
+        "occurrences": [
+          {
+            "start": 0,
+            "end": 4,
+            "surface": "Jeff"
+          }
+        ],
+        "focus": "Jeff帮我审了一遍代码"
+      }
+    },
+    {
+      "id": "person-help-05",
+      "category": "person_help",
+      "text": "你问问 Jeff 能不能帮忙看下这个插件。",
+      "marker_text": "你问问 ⟦Jeff⟧ 能不能帮忙看下这个插件。",
+      "target_span": {
+        "start": 4,
+        "end": 8,
+        "surface": "Jeff"
+      },
+      "target_occurrence_index": 0,
+      "occurrences": [
+        {
+          "start": 4,
+          "end": 8,
+          "surface": "Jeff"
+        }
+      ],
+      "focus": "你问问 Jeff 能不能帮忙看下这个插件",
+      "context": "",
+      "expected": "person",
+      "expected_reason": "“帮忙看插件”的仍是人；插件只是话题。",
+      "guard_expected": "ask",
+      "alt": {
+        "text": "要不你问问 Jeff 这个插件怎么配。",
+        "marker_text": "要不你问问 ⟦Jeff⟧ 这个插件怎么配。",
+        "target_span": {
+          "start": 6,
+          "end": 10,
+          "surface": "Jeff"
+        },
+        "occurrences": [
+          {
+            "start": 6,
+            "end": 10,
+            "surface": "Jeff"
+          }
+        ],
+        "focus": "要不你问问 Jeff 这个插件怎么配"
+      }
+    },
+    {
+      "id": "person-help-06",
+      "category": "person_help",
+      "text": "麻烦Jeff把工具链的问题排查一下。",
+      "marker_text": "麻烦⟦Jeff⟧把工具链的问题排查一下。",
+      "target_span": {
+        "start": 2,
+        "end": 6,
+        "surface": "Jeff"
+      },
+      "target_occurrence_index": 0,
+      "occurrences": [
+        {
+          "start": 2,
+          "end": 6,
+          "surface": "Jeff"
+        }
+      ],
+      "focus": "麻烦Jeff把工具链的问题排查一下",
+      "context": "",
+      "expected": "person",
+      "expected_reason": "“工具链”是话题，排查者是人。",
+      "guard_expected": "ask",
+      "alt": {
+        "text": "让Jeff看看这个工具报错的原因。",
+        "marker_text": "让⟦Jeff⟧看看这个工具报错的原因。",
+        "target_span": {
+          "start": 1,
+          "end": 5,
+          "surface": "Jeff"
+        },
+        "occurrences": [
+          {
+            "start": 1,
+            "end": 5,
+            "surface": "Jeff"
+          }
+        ],
+        "focus": "让Jeff看看这个工具报错的原因"
+      }
+    },
+    {
+      "id": "person-help-07",
+      "category": "person_help",
+      "text": "Jeff 说这个软件下周就能上线。",
+      "marker_text": "⟦Jeff⟧ 说这个软件下周就能上线。",
+      "target_span": {
+        "start": 0,
+        "end": 4,
+        "surface": "Jeff"
+      },
+      "target_occurrence_index": 0,
+      "occurrences": [
+        {
+          "start": 0,
+          "end": 4,
+          "surface": "Jeff"
+        }
+      ],
+      "focus": "Jeff 说这个软件下周就能上线",
+      "context": "",
+      "expected": "person",
+      "expected_reason": "说话人是人，软件是他谈论的对象。",
+      "guard_expected": "ask",
+      "alt": {
+        "text": "Jeff 觉得这个软件还有不少坑。",
+        "marker_text": "⟦Jeff⟧ 觉得这个软件还有不少坑。",
+        "target_span": {
+          "start": 0,
+          "end": 4,
+          "surface": "Jeff"
+        },
+        "occurrences": [
+          {
+            "start": 0,
+            "end": 4,
+            "surface": "Jeff"
+          }
+        ],
+        "focus": "Jeff 觉得这个软件还有不少坑"
+      }
+    },
+    {
+      "id": "person-help-08",
+      "category": "person_help",
+      "text": "让 Jeff 帮你看看安装失败的原因。",
+      "marker_text": "让 ⟦Jeff⟧ 帮你看看安装失败的原因。",
+      "target_span": {
+        "start": 2,
+        "end": 6,
+        "surface": "Jeff"
+      },
+      "target_occurrence_index": 0,
+      "occurrences": [
+        {
+          "start": 2,
+          "end": 6,
+          "surface": "Jeff"
+        }
+      ],
+      "focus": "让 Jeff 帮你看看安装失败的原因",
+      "context": "",
+      "expected": "person",
+      "expected_reason": "帮你看安装问题的是人。",
+      "guard_expected": "skip_person",
+      "alt": {
+        "text": "让 Jeff 帮你确认一下版本号。",
+        "marker_text": "让 ⟦Jeff⟧ 帮你确认一下版本号。",
+        "target_span": {
+          "start": 2,
+          "end": 6,
+          "surface": "Jeff"
+        },
+        "occurrences": [
+          {
+            "start": 2,
+            "end": 6,
+            "surface": "Jeff"
+          }
+        ],
+        "focus": "让 Jeff 帮你确认一下版本号"
+      }
+    },
+    {
+      "id": "person-discuss-01",
+      "category": "person_discuss",
+      "text": "我和Jeff讨论模型的量化方案。",
+      "marker_text": "我和⟦Jeff⟧讨论模型的量化方案。",
+      "target_span": {
+        "start": 2,
+        "end": 6,
+        "surface": "Jeff"
+      },
+      "target_occurrence_index": 0,
+      "occurrences": [
+        {
+          "start": 2,
+          "end": 6,
+          "surface": "Jeff"
+        }
+      ],
+      "focus": "我和Jeff讨论模型的量化方案",
+      "context": "",
+      "expected": "person",
+      "expected_reason": "“我和 Jeff 讨论模型”：人是参与者。",
+      "guard_expected": "skip_person",
+      "alt": {
+        "text": "我和Jeff聊过模型评测的事。",
+        "marker_text": "我和⟦Jeff⟧聊过模型评测的事。",
+        "target_span": {
+          "start": 2,
+          "end": 6,
+          "surface": "Jeff"
+        },
+        "occurrences": [
+          {
+            "start": 2,
+            "end": 6,
+            "surface": "Jeff"
+          }
+        ],
+        "focus": "我和Jeff聊过模型评测的事"
+      }
+    },
+    {
+      "id": "person-discuss-02",
+      "category": "person_discuss",
+      "text": "刚刚跟 Jeff 聊了脚本自动化的事。",
+      "marker_text": "刚刚跟 ⟦Jeff⟧ 聊了脚本自动化的事。",
+      "target_span": {
+        "start": 4,
+        "end": 8,
+        "surface": "Jeff"
+      },
+      "target_occurrence_index": 0,
+      "occurrences": [
+        {
+          "start": 4,
+          "end": 8,
+          "surface": "Jeff"
+        }
+      ],
+      "focus": "刚刚跟 Jeff 聊了脚本自动化的事",
+      "context": "",
+      "expected": "person",
+      "expected_reason": "“跟 Jeff 聊脚本”：脚本是话题。",
+      "guard_expected": "ask",
+      "alt": {
+        "text": "昨天又跟 Jeff 讨论了脚本的写法。",
+        "marker_text": "昨天又跟 ⟦Jeff⟧ 讨论了脚本的写法。",
+        "target_span": {
+          "start": 5,
+          "end": 9,
+          "surface": "Jeff"
+        },
+        "occurrences": [
+          {
+            "start": 5,
+            "end": 9,
+            "surface": "Jeff"
+          }
+        ],
+        "focus": "昨天又跟 Jeff 讨论了脚本的写法"
+      }
+    },
+    {
+      "id": "person-discuss-03",
+      "category": "person_discuss",
+      "text": "Jeff和我上周聊过这个项目。",
+      "marker_text": "⟦Jeff⟧和我上周聊过这个项目。",
+      "target_span": {
+        "start": 0,
+        "end": 4,
+        "surface": "Jeff"
+      },
+      "target_occurrence_index": 0,
+      "occurrences": [
+        {
+          "start": 0,
+          "end": 4,
+          "surface": "Jeff"
+        }
+      ],
+      "focus": "Jeff和我上周聊过这个项目",
+      "context": "",
+      "expected": "person",
+      "expected_reason": "“Jeff 和我”：并列的人。",
+      "guard_expected": "skip_person",
+      "alt": {
+        "text": "Jeff和我都觉着这个项目要延期。",
+        "marker_text": "⟦Jeff⟧和我都觉着这个项目要延期。",
+        "target_span": {
+          "start": 0,
+          "end": 4,
+          "surface": "Jeff"
+        },
+        "occurrences": [
+          {
+            "start": 0,
+            "end": 4,
+            "surface": "Jeff"
+          }
+        ],
+        "focus": "Jeff和我都觉着这个项目要延期"
+      }
+    },
+    {
+      "id": "person-discuss-04",
+      "category": "person_discuss",
+      "text": "我想找 Jeff 聊聊这个模型的问题。",
+      "marker_text": "我想找 ⟦Jeff⟧ 聊聊这个模型的问题。",
+      "target_span": {
+        "start": 4,
+        "end": 8,
+        "surface": "Jeff"
+      },
+      "target_occurrence_index": 0,
+      "occurrences": [
+        {
+          "start": 4,
+          "end": 8,
+          "surface": "Jeff"
+        }
+      ],
+      "focus": "我想找 Jeff 聊聊这个模型的问题",
+      "context": "",
+      "expected": "person",
+      "expected_reason": "被找的人；模型是话题。",
+      "guard_expected": "ask",
+      "alt": {
+        "text": "待会儿找 Jeff 确认一下模型参数。",
+        "marker_text": "待会儿找 ⟦Jeff⟧ 确认一下模型参数。",
+        "target_span": {
+          "start": 5,
+          "end": 9,
+          "surface": "Jeff"
+        },
+        "occurrences": [
+          {
+            "start": 5,
+            "end": 9,
+            "surface": "Jeff"
+          }
+        ],
+        "focus": "待会儿找 Jeff 确认一下模型参数"
+      }
+    },
+    {
+      "id": "person-discuss-05",
+      "category": "person_discuss",
+      "text": "会议上 Jeff 提到模型评测要重做。",
+      "marker_text": "会议上 ⟦Jeff⟧ 提到模型评测要重做。",
+      "target_span": {
+        "start": 4,
+        "end": 8,
+        "surface": "Jeff"
+      },
+      "target_occurrence_index": 0,
+      "occurrences": [
+        {
+          "start": 4,
+          "end": 8,
+          "surface": "Jeff"
+        }
+      ],
+      "focus": "会议上 Jeff 提到模型评测要重做",
+      "context": "",
+      "expected": "person",
+      "expected_reason": "发言者是人。",
+      "guard_expected": "ask",
+      "alt": {
+        "text": "评审会上 Jeff 说测试集要换。",
+        "marker_text": "评审会上 ⟦Jeff⟧ 说测试集要换。",
+        "target_span": {
+          "start": 5,
+          "end": 9,
+          "surface": "Jeff"
+        },
+        "occurrences": [
+          {
+            "start": 5,
+            "end": 9,
+            "surface": "Jeff"
+          }
+        ],
+        "focus": "评审会上 Jeff 说测试集要换"
+      }
+    },
+    {
+      "id": "person-discuss-06",
+      "category": "person_discuss",
+      "text": "等会儿和 Jeff 对一下测试结果。",
+      "marker_text": "等会儿和 ⟦Jeff⟧ 对一下测试结果。",
+      "target_span": {
+        "start": 5,
+        "end": 9,
+        "surface": "Jeff"
+      },
+      "target_occurrence_index": 0,
+      "occurrences": [
+        {
+          "start": 5,
+          "end": 9,
+          "surface": "Jeff"
+        }
+      ],
+      "focus": "等会儿和 Jeff 对一下测试结果",
+      "context": "",
+      "expected": "person",
+      "expected_reason": "“和 Jeff 对结果”：人是对象。",
+      "guard_expected": "ask",
+      "alt": {
+        "text": "下午跟 Jeff 核对一下测试数据。",
+        "marker_text": "下午跟 ⟦Jeff⟧ 核对一下测试数据。",
+        "target_span": {
+          "start": 4,
+          "end": 8,
+          "surface": "Jeff"
+        },
+        "occurrences": [
+          {
+            "start": 4,
+            "end": 8,
+            "surface": "Jeff"
+          }
+        ],
+        "focus": "下午跟 Jeff 核对一下测试数据"
+      }
+    },
+    {
+      "id": "person-discuss-07",
+      "category": "person_discuss",
+      "text": "Jeff 昨天问我那个插件怎么装。",
+      "marker_text": "⟦Jeff⟧ 昨天问我那个插件怎么装。",
+      "target_span": {
+        "start": 0,
+        "end": 4,
+        "surface": "Jeff"
+      },
+      "target_occurrence_index": 0,
+      "occurrences": [
+        {
+          "start": 0,
+          "end": 4,
+          "surface": "Jeff"
+        }
+      ],
+      "focus": "Jeff 昨天问我那个插件怎么装",
+      "context": "",
+      "expected": "person",
+      "expected_reason": "提问者是人。",
+      "guard_expected": "ask",
+      "alt": {
+        "text": "Jeff 问我插件要不要升级。",
+        "marker_text": "⟦Jeff⟧ 问我插件要不要升级。",
+        "target_span": {
+          "start": 0,
+          "end": 4,
+          "surface": "Jeff"
+        },
+        "occurrences": [
+          {
+            "start": 0,
+            "end": 4,
+            "surface": "Jeff"
+          }
+        ],
+        "focus": "Jeff 问我插件要不要升级"
+      }
+    },
+    {
+      "id": "person-discuss-08",
+      "category": "person_discuss",
+      "text": "我让 Jeff 帮忙评估一下服务器成本。",
+      "marker_text": "我让 ⟦Jeff⟧ 帮忙评估一下服务器成本。",
+      "target_span": {
+        "start": 3,
+        "end": 7,
+        "surface": "Jeff"
+      },
+      "target_occurrence_index": 0,
+      "occurrences": [
+        {
+          "start": 3,
+          "end": 7,
+          "surface": "Jeff"
+        }
+      ],
+      "focus": "我让 Jeff 帮忙评估一下服务器成本",
+      "context": "",
+      "expected": "person",
+      "expected_reason": "评估成本的是人。",
+      "guard_expected": "skip_person",
+      "alt": {
+        "text": "我请 Jeff 帮忙看服务器报价。",
+        "marker_text": "我请 ⟦Jeff⟧ 帮忙看服务器报价。",
+        "target_span": {
+          "start": 3,
+          "end": 7,
+          "surface": "Jeff"
+        },
+        "occurrences": [
+          {
+            "start": 3,
+            "end": 7,
+            "surface": "Jeff"
+          }
+        ],
+        "focus": "我请 Jeff 帮忙看服务器报价"
+      }
+    },
+    {
+      "id": "mixed-01",
+      "category": "mixed_person_tool",
+      "text": "Jeff帮我调试脚本，另外把 jeff 工具也装上。",
+      "marker_text": "⟦Jeff⟧帮我调试脚本，另外把 jeff 工具也装上。",
+      "target_span": {
+        "start": 0,
+        "end": 4,
+        "surface": "Jeff"
+      },
+      "target_occurrence_index": 0,
+      "occurrences": [
+        {
+          "start": 0,
+          "end": 4,
+          "surface": "Jeff"
+        },
+        {
+          "start": 15,
+          "end": 19,
+          "surface": "jeff"
+        }
+      ],
+      "focus": "Jeff帮我调试脚本",
+      "context": "",
+      "expected": "person",
+      "expected_reason": "同句先人名后工具名，目标为前一处人名。",
+      "guard_expected": "skip_person",
+      "alt": {
+        "text": "Jeff帮我调脚本，顺便把 jeff 插件装上。",
+        "marker_text": "⟦Jeff⟧帮我调脚本，顺便把 jeff 插件装上。",
+        "target_span": {
+          "start": 0,
+          "end": 4,
+          "surface": "Jeff"
+        },
+        "occurrences": [
+          {
+            "start": 0,
+            "end": 4,
+            "surface": "Jeff"
+          },
+          {
+            "start": 14,
+            "end": 18,
+            "surface": "jeff"
+          }
+        ],
+        "focus": "Jeff帮我调脚本"
+      }
+    },
+    {
+      "id": "mixed-02",
+      "category": "mixed_person_tool",
+      "text": "Jeff帮我改脚本，顺便把 jeff 插件装了。",
+      "marker_text": "Jeff帮我改脚本，顺便把 ⟦jeff⟧ 插件装了。",
+      "target_span": {
+        "start": 14,
+        "end": 18,
+        "surface": "jeff"
+      },
+      "target_occurrence_index": 1,
+      "occurrences": [
+        {
+          "start": 0,
+          "end": 4,
+          "surface": "Jeff"
+        },
+        {
+          "start": 14,
+          "end": 18,
+          "surface": "jeff"
+        }
+      ],
+      "focus": "顺便把 jeff 插件装了",
+      "context": "",
+      "expected": "tool",
+      "expected_reason": "同句先人名后工具名，目标为后一处工具名。",
+      "guard_expected": "ask",
+      "alt": {
+        "text": "Jeff帮我审脚本，另外把 jeff 工具装一下。",
+        "marker_text": "Jeff帮我审脚本，另外把 ⟦jeff⟧ 工具装一下。",
+        "target_span": {
+          "start": 14,
+          "end": 18,
+          "surface": "jeff"
+        },
+        "occurrences": [
+          {
+            "start": 0,
+            "end": 4,
+            "surface": "Jeff"
+          },
+          {
+            "start": 14,
+            "end": 18,
+            "surface": "jeff"
+          }
+        ],
+        "focus": "另外把 jeff 工具装一下"
+      }
+    },
+    {
+      "id": "mixed-03",
+      "category": "mixed_person_tool",
+      "text": "我和 Jeff 讨论了方案，顺便把 jeff 服务部署一下。",
+      "marker_text": "我和 ⟦Jeff⟧ 讨论了方案，顺便把 jeff 服务部署一下。",
+      "target_span": {
+        "start": 3,
+        "end": 7,
+        "surface": "Jeff"
+      },
+      "target_occurrence_index": 0,
+      "occurrences": [
+        {
+          "start": 3,
+          "end": 7,
+          "surface": "Jeff"
+        },
+        {
+          "start": 18,
+          "end": 22,
+          "surface": "jeff"
+        }
+      ],
+      "focus": "我和 Jeff 讨论了方案",
+      "context": "",
+      "expected": "person",
+      "expected_reason": "目标为并列结构里的人名。",
+      "guard_expected": "skip_person",
+      "alt": {
+        "text": "我和 Jeff 过了一遍方案，接着把 jeff 服务部署了。",
+        "marker_text": "我和 ⟦Jeff⟧ 过了一遍方案，接着把 jeff 服务部署了。",
+        "target_span": {
+          "start": 3,
+          "end": 7,
+          "surface": "Jeff"
+        },
+        "occurrences": [
+          {
+            "start": 3,
+            "end": 7,
+            "surface": "Jeff"
+          },
+          {
+            "start": 19,
+            "end": 23,
+            "surface": "jeff"
+          }
+        ],
+        "focus": "我和 Jeff 过了一遍方案"
+      }
+    },
+    {
+      "id": "mixed-04",
+      "category": "mixed_person_tool",
+      "text": "我和 Jeff 定了方案，回头把 jeff 服务部署一下。",
+      "marker_text": "我和 Jeff 定了方案，回头把 ⟦jeff⟧ 服务部署一下。",
+      "target_span": {
+        "start": 17,
+        "end": 21,
+        "surface": "jeff"
+      },
+      "target_occurrence_index": 1,
+      "occurrences": [
+        {
+          "start": 3,
+          "end": 7,
+          "surface": "Jeff"
+        },
+        {
+          "start": 17,
+          "end": 21,
+          "surface": "jeff"
+        }
+      ],
+      "focus": "回头把 jeff 服务部署一下",
+      "context": "",
+      "expected": "tool",
+      "expected_reason": "目标为被部署的服务名。",
+      "guard_expected": "ask",
+      "alt": {
+        "text": "我和 Jeff 过了方案，接着把 jeff 服务部署了。",
+        "marker_text": "我和 Jeff 过了方案，接着把 ⟦jeff⟧ 服务部署了。",
+        "target_span": {
+          "start": 17,
+          "end": 21,
+          "surface": "jeff"
+        },
+        "occurrences": [
+          {
+            "start": 3,
+            "end": 7,
+            "surface": "Jeff"
+          },
+          {
+            "start": 17,
+            "end": 21,
+            "surface": "jeff"
+          }
+        ],
+        "focus": "接着把 jeff 服务部署了"
+      }
+    },
+    {
+      "id": "mixed-05",
+      "category": "mixed_person_tool",
+      "text": "Jeff 说 jeff 的模型该升级了。",
+      "marker_text": "⟦Jeff⟧ 说 jeff 的模型该升级了。",
+      "target_span": {
+        "start": 0,
+        "end": 4,
+        "surface": "Jeff"
+      },
+      "target_occurrence_index": 0,
+      "occurrences": [
+        {
+          "start": 0,
+          "end": 4,
+          "surface": "Jeff"
+        },
+        {
+          "start": 7,
+          "end": 11,
+          "surface": "jeff"
+        }
+      ],
+      "focus": "Jeff 说 jeff 的模型该升级了",
+      "context": "",
+      "expected": "person",
+      "expected_reason": "同一小句内两次出现：产品整体弃权；目标指人。",
+      "guard_expected": "skip_repeat_in_clause",
+      "alt": {
+        "text": "Jeff 认为 jeff 模型该更新了。",
+        "marker_text": "⟦Jeff⟧ 认为 jeff 模型该更新了。",
+        "target_span": {
+          "start": 0,
+          "end": 4,
+          "surface": "Jeff"
+        },
+        "occurrences": [
+          {
+            "start": 0,
+            "end": 4,
+            "surface": "Jeff"
+          },
+          {
+            "start": 8,
+            "end": 12,
+            "surface": "jeff"
+          }
+        ],
+        "focus": "Jeff 认为 jeff 模型该更新了"
+      },
+      "exclude_from_raw_accuracy": true,
+      "exclude_from_raw_accuracy_reason": "同小句内同一别名出现多次，产品不请求也不改写；只保留结构保护重放测试。"
+    },
+    {
+      "id": "mixed-06",
+      "category": "mixed_person_tool",
+      "text": "Jeff 觉得 jeff 模型该更新了。",
+      "marker_text": "Jeff 觉得 ⟦jeff⟧ 模型该更新了。",
+      "target_span": {
+        "start": 8,
+        "end": 12,
+        "surface": "jeff"
+      },
+      "target_occurrence_index": 1,
+      "occurrences": [
+        {
+          "start": 0,
+          "end": 4,
+          "surface": "Jeff"
+        },
+        {
+          "start": 8,
+          "end": 12,
+          "surface": "jeff"
+        }
+      ],
+      "focus": "Jeff 觉得 jeff 模型该更新了",
+      "context": "",
+      "expected": "tool",
+      "expected_reason": "同一小句内两次出现：产品整体弃权；目标指软件。",
+      "guard_expected": "skip_repeat_in_clause",
+      "alt": {
+        "text": "Jeff 认为 jeff 的模型该更新了。",
+        "marker_text": "Jeff 认为 ⟦jeff⟧ 的模型该更新了。",
+        "target_span": {
+          "start": 8,
+          "end": 12,
+          "surface": "jeff"
+        },
+        "occurrences": [
+          {
+            "start": 0,
+            "end": 4,
+            "surface": "Jeff"
+          },
+          {
+            "start": 8,
+            "end": 12,
+            "surface": "jeff"
+          }
+        ],
+        "focus": "Jeff 认为 jeff 的模型该更新了"
+      },
+      "exclude_from_raw_accuracy": true,
+      "exclude_from_raw_accuracy_reason": "同小句内同一别名出现多次，产品不请求也不改写；只保留结构保护重放测试。"
+    },
+    {
+      "id": "mixed-07",
+      "category": "mixed_person_tool",
+      "text": "帮 Jeff 把服务重启，然后我再验证 jeff 服务器的日志。",
+      "marker_text": "帮 ⟦Jeff⟧ 把服务重启，然后我再验证 jeff 服务器的日志。",
+      "target_span": {
+        "start": 2,
+        "end": 6,
+        "surface": "Jeff"
+      },
+      "target_occurrence_index": 0,
+      "occurrences": [
+        {
+          "start": 2,
+          "end": 6,
+          "surface": "Jeff"
+        },
+        {
+          "start": 20,
+          "end": 24,
+          "surface": "jeff"
+        }
+      ],
+      "focus": "帮 Jeff 把服务重启",
+      "context": "",
+      "expected": "person",
+      "expected_reason": "目标为被帮忙的人；后一小句才是软件。",
+      "guard_expected": "ask",
+      "alt": {
+        "text": "帮 Jeff 重启服务器，然后我再查 jeff 服务器的日志。",
+        "marker_text": "帮 ⟦Jeff⟧ 重启服务器，然后我再查 jeff 服务器的日志。",
+        "target_span": {
+          "start": 2,
+          "end": 6,
+          "surface": "Jeff"
+        },
+        "occurrences": [
+          {
+            "start": 2,
+            "end": 6,
+            "surface": "Jeff"
+          },
+          {
+            "start": 19,
+            "end": 23,
+            "surface": "jeff"
+          }
+        ],
+        "focus": "帮 Jeff 重启服务器"
+      }
+    },
+    {
+      "id": "mixed-08",
+      "category": "mixed_person_tool",
+      "text": "帮 Jeff 重启一下服务，然后我再查 jeff 服务器的日志。",
+      "marker_text": "帮 Jeff 重启一下服务，然后我再查 ⟦jeff⟧ 服务器的日志。",
+      "target_span": {
+        "start": 20,
+        "end": 24,
+        "surface": "jeff"
+      },
+      "target_occurrence_index": 1,
+      "occurrences": [
+        {
+          "start": 2,
+          "end": 6,
+          "surface": "Jeff"
+        },
+        {
+          "start": 20,
+          "end": 24,
+          "surface": "jeff"
+        }
+      ],
+      "focus": "然后我再查 jeff 服务器的日志",
+      "context": "",
+      "expected": "tool",
+      "expected_reason": "目标为软件服务器的日志。",
+      "guard_expected": "ask",
+      "alt": {
+        "text": "帮 Jeff 重启了服务器，然后顺手查一下 jeff 服务器的日志。",
+        "marker_text": "帮 Jeff 重启了服务器，然后顺手查一下 ⟦jeff⟧ 服务器的日志。",
+        "target_span": {
+          "start": 22,
+          "end": 26,
+          "surface": "jeff"
+        },
+        "occurrences": [
+          {
+            "start": 2,
+            "end": 6,
+            "surface": "Jeff"
+          },
+          {
+            "start": 22,
+            "end": 26,
+            "surface": "jeff"
+          }
+        ],
+        "focus": "然后顺手查一下 jeff 服务器的日志"
+      }
+    },
+    {
+      "id": "case-space-01",
+      "category": "case_and_spacing",
+      "text": "先卸载 JEFF，再重新安装一遍。",
+      "marker_text": "先卸载 ⟦JEFF⟧，再重新安装一遍。",
+      "target_span": {
+        "start": 4,
+        "end": 8,
+        "surface": "JEFF"
+      },
+      "target_occurrence_index": 0,
+      "occurrences": [
+        {
+          "start": 4,
+          "end": 8,
+          "surface": "JEFF"
+        }
+      ],
+      "focus": "先卸载 JEFF",
+      "context": "",
+      "expected": "tool",
+      "expected_reason": "全大写不改变所指：软件。",
+      "guard_expected": "ask",
+      "alt": {
+        "text": "先卸载 JeFF，然后重新安装。",
+        "marker_text": "先卸载 ⟦JeFF⟧，然后重新安装。",
+        "target_span": {
+          "start": 4,
+          "end": 8,
+          "surface": "JeFF"
+        },
+        "occurrences": [
+          {
+            "start": 4,
+            "end": 8,
+            "surface": "JeFF"
+          }
+        ],
+        "focus": "先卸载 JeFF"
+      }
+    },
+    {
+      "id": "case-space-02",
+      "category": "case_and_spacing",
+      "text": "jEfF 的配置文件在哪里？",
+      "marker_text": "⟦jEfF⟧ 的配置文件在哪里？",
+      "target_span": {
+        "start": 0,
+        "end": 4,
+        "surface": "jEfF"
+      },
+      "target_occurrence_index": 0,
+      "occurrences": [
+        {
+          "start": 0,
+          "end": 4,
+          "surface": "jEfF"
+        }
+      ],
+      "focus": "jEfF 的配置文件在哪里",
+      "context": "",
+      "expected": "tool",
+      "expected_reason": "混合大小写；配置属于软件。",
+      "guard_expected": "ask",
+      "alt": {
+        "text": "JEFF 的配置项在哪个文件里？",
+        "marker_text": "⟦JEFF⟧ 的配置项在哪个文件里？",
+        "target_span": {
+          "start": 0,
+          "end": 4,
+          "surface": "JEFF"
+        },
+        "occurrences": [
+          {
+            "start": 0,
+            "end": 4,
+            "surface": "JEFF"
+          }
+        ],
+        "focus": "JEFF 的配置项在哪个文件里"
+      }
+    },
+    {
+      "id": "case-space-03",
+      "category": "case_and_spacing",
+      "text": "我和 JEFF 一起看这个程序的日志。",
+      "marker_text": "我和 ⟦JEFF⟧ 一起看这个程序的日志。",
+      "target_span": {
+        "start": 3,
+        "end": 7,
+        "surface": "JEFF"
+      },
+      "target_occurrence_index": 0,
+      "occurrences": [
+        {
+          "start": 3,
+          "end": 7,
+          "surface": "JEFF"
+        }
+      ],
+      "focus": "我和 JEFF 一起看这个程序的日志",
+      "context": "",
+      "expected": "person",
+      "expected_reason": "大写人名，人与程序并列提及。",
+      "guard_expected": "skip_person",
+      "alt": {
+        "text": "我和 jEfF 一起过了一遍程序日志。",
+        "marker_text": "我和 ⟦jEfF⟧ 一起过了一遍程序日志。",
+        "target_span": {
+          "start": 3,
+          "end": 7,
+          "surface": "jEfF"
+        },
+        "occurrences": [
+          {
+            "start": 3,
+            "end": 7,
+            "surface": "jEfF"
+          }
+        ],
+        "focus": "我和 jEfF 一起过了一遍程序日志"
+      }
+    },
+    {
+      "id": "case-space-04",
+      "category": "case_and_spacing",
+      "text": "把 Jeff 安装到这台机器上。",
+      "marker_text": "把 ⟦Jeff⟧ 安装到这台机器上。",
+      "target_span": {
+        "start": 2,
+        "end": 6,
+        "surface": "Jeff"
+      },
+      "target_occurrence_index": 0,
+      "occurrences": [
+        {
+          "start": 2,
+          "end": 6,
+          "surface": "Jeff"
+        }
+      ],
+      "focus": "把 Jeff 安装到这台机器上",
+      "context": "",
+      "expected": "tool",
+      "expected_reason": "别名两侧有空格，仍是软件名。",
+      "guard_expected": "ask",
+      "alt": {
+        "text": "把 JEFF 部署到那台服务器。",
+        "marker_text": "把 ⟦JEFF⟧ 部署到那台服务器。",
+        "target_span": {
+          "start": 2,
+          "end": 6,
+          "surface": "JEFF"
+        },
+        "occurrences": [
+          {
+            "start": 2,
+            "end": 6,
+            "surface": "JEFF"
+          }
+        ],
+        "focus": "把 JEFF 部署到那台服务器"
+      }
+    },
+    {
+      "id": "case-space-05",
+      "category": "case_and_spacing",
+      "text": "Jeff帮我改一下这个工具的参数。",
+      "marker_text": "⟦Jeff⟧帮我改一下这个工具的参数。",
+      "target_span": {
+        "start": 0,
+        "end": 4,
+        "surface": "Jeff"
+      },
+      "target_occurrence_index": 0,
+      "occurrences": [
+        {
+          "start": 0,
+          "end": 4,
+          "surface": "Jeff"
+        }
+      ],
+      "focus": "Jeff帮我改一下这个工具的参数",
+      "context": "",
+      "expected": "person",
+      "expected_reason": "人名，工具是操作对象。",
+      "guard_expected": "skip_person",
+      "alt": {
+        "text": "JEFF帮我调一下工具配置。",
+        "marker_text": "⟦JEFF⟧帮我调一下工具配置。",
+        "target_span": {
+          "start": 0,
+          "end": 4,
+          "surface": "JEFF"
+        },
+        "occurrences": [
+          {
+            "start": 0,
+            "end": 4,
+            "surface": "JEFF"
+          }
+        ],
+        "focus": "JEFF帮我调一下工具配置"
+      }
+    },
+    {
+      "id": "case-space-06",
+      "category": "case_and_spacing",
+      "text": "运行 JEFF 的时候记得加 --debug。",
+      "marker_text": "运行 ⟦JEFF⟧ 的时候记得加 --debug。",
+      "target_span": {
+        "start": 3,
+        "end": 7,
+        "surface": "JEFF"
+      },
+      "target_occurrence_index": 0,
+      "occurrences": [
+        {
+          "start": 3,
+          "end": 7,
+          "surface": "JEFF"
+        }
+      ],
+      "focus": "运行 JEFF 的时候记得加 --debug",
+      "context": "",
+      "expected": "tool",
+      "expected_reason": "运行对象是软件。",
+      "guard_expected": "ask",
+      "alt": {
+        "text": "启动 Jeff 时加上 --verbose。",
+        "marker_text": "启动 ⟦Jeff⟧ 时加上 --verbose。",
+        "target_span": {
+          "start": 3,
+          "end": 7,
+          "surface": "Jeff"
+        },
+        "occurrences": [
+          {
+            "start": 3,
+            "end": 7,
+            "surface": "Jeff"
+          }
+        ],
+        "focus": "启动 Jeff 时加上 --verbose"
+      }
+    },
+    {
+      "id": "ctx-person-01",
+      "category": "context_prior_software",
+      "text": "Jeff说他更喜欢用脚本自动化。",
+      "marker_text": "⟦Jeff⟧说他更喜欢用脚本自动化。",
+      "target_span": {
+        "start": 0,
+        "end": 4,
+        "surface": "Jeff"
+      },
+      "target_occurrence_index": 0,
+      "occurrences": [
+        {
+          "start": 0,
+          "end": 4,
+          "surface": "Jeff"
+        }
+      ],
+      "focus": "Jeff说他更喜欢用脚本自动化",
+      "context": "刚才把 jeff 工具安装好了",
+      "expected": "person",
+      "expected_reason": "上一段谈软件，但本句主语是人；脚本是话题。",
+      "guard_expected": "ask",
+      "alt": {
+        "text": "Jeff说他习惯写脚本处理。",
+        "marker_text": "⟦Jeff⟧说他习惯写脚本处理。",
+        "target_span": {
+          "start": 0,
+          "end": 4,
+          "surface": "Jeff"
+        },
+        "occurrences": [
+          {
+            "start": 0,
+            "end": 4,
+            "surface": "Jeff"
+          }
+        ],
+        "focus": "Jeff说他习惯写脚本处理"
+      }
+    },
+    {
+      "id": "ctx-person-02",
+      "category": "context_prior_software",
+      "text": "Jeff 今天请假了。",
+      "marker_text": "⟦Jeff⟧ 今天请假了。",
+      "target_span": {
+        "start": 0,
+        "end": 4,
+        "surface": "Jeff"
+      },
+      "target_occurrence_index": 0,
+      "occurrences": [
+        {
+          "start": 0,
+          "end": 4,
+          "surface": "Jeff"
+        }
+      ],
+      "focus": "Jeff 今天请假了",
+      "context": "jeff 服务刚重启过",
+      "expected": "person",
+      "expected_reason": "上一段的服务语境不该把人名拖成工具。",
+      "guard_expected": "ask",
+      "alt": {
+        "text": "Jeff 下午不在工位。",
+        "marker_text": "⟦Jeff⟧ 下午不在工位。",
+        "target_span": {
+          "start": 0,
+          "end": 4,
+          "surface": "Jeff"
+        },
+        "occurrences": [
+          {
+            "start": 0,
+            "end": 4,
+            "surface": "Jeff"
+          }
+        ],
+        "focus": "Jeff 下午不在工位"
+      }
+    },
+    {
+      "id": "ctx-person-03",
+      "category": "context_prior_software",
+      "text": "这个方案是 Jeff 提出来的。",
+      "marker_text": "这个方案是 ⟦Jeff⟧ 提出来的。",
+      "target_span": {
+        "start": 6,
+        "end": 10,
+        "surface": "Jeff"
+      },
+      "target_occurrence_index": 0,
+      "occurrences": [
+        {
+          "start": 6,
+          "end": 10,
+          "surface": "Jeff"
+        }
+      ],
+      "focus": "这个方案是 Jeff 提出来的",
+      "context": "先把 jeff 模型部署到测试机",
+      "expected": "person",
+      "expected_reason": "上一段谈模型，本句说的是提出方案的人。",
+      "guard_expected": "ask",
+      "alt": {
+        "text": "这个想法是 Jeff 先提的。",
+        "marker_text": "这个想法是 ⟦Jeff⟧ 先提的。",
+        "target_span": {
+          "start": 6,
+          "end": 10,
+          "surface": "Jeff"
+        },
+        "occurrences": [
+          {
+            "start": 6,
+            "end": 10,
+            "surface": "Jeff"
+          }
+        ],
+        "focus": "这个想法是 Jeff 先提的"
+      }
+    },
+    {
+      "id": "ctx-tool-01",
+      "category": "context_prior_software",
+      "text": "我还是先把 jeff 启动了再说。",
+      "marker_text": "我还是先把 ⟦jeff⟧ 启动了再说。",
+      "target_span": {
+        "start": 6,
+        "end": 10,
+        "surface": "jeff"
+      },
+      "target_occurrence_index": 0,
+      "occurrences": [
+        {
+          "start": 6,
+          "end": 10,
+          "surface": "jeff"
+        }
+      ],
+      "focus": "我还是先把 jeff 启动了再说",
+      "context": "Jeff 说他那边网络不好",
+      "expected": "tool",
+      "expected_reason": "上一段的人名语境不该拖成 person：启动对象是软件。",
+      "guard_expected": "ask",
+      "alt": {
+        "text": "那先把 jeff 运行起来看看。",
+        "marker_text": "那先把 ⟦jeff⟧ 运行起来看看。",
+        "target_span": {
+          "start": 4,
+          "end": 8,
+          "surface": "jeff"
+        },
+        "occurrences": [
+          {
+            "start": 4,
+            "end": 8,
+            "surface": "jeff"
+          }
+        ],
+        "focus": "那先把 jeff 运行起来看看"
+      }
+    },
+    {
+      "id": "ctx-person-04",
+      "category": "context_prior_software",
+      "text": "我打算找 Jeff 确认一下。",
+      "marker_text": "我打算找 ⟦Jeff⟧ 确认一下。",
+      "target_span": {
+        "start": 5,
+        "end": 9,
+        "surface": "Jeff"
+      },
+      "target_occurrence_index": 0,
+      "occurrences": [
+        {
+          "start": 5,
+          "end": 9,
+          "surface": "Jeff"
+        }
+      ],
+      "focus": "我打算找 Jeff 确认一下",
+      "context": "文档里写了 jeff 工具的安装步骤",
+      "expected": "person",
+      "expected_reason": "上一段谈工具安装，本句要找的是人。",
+      "guard_expected": "ask",
+      "alt": {
+        "text": "我准备问一下 Jeff。",
+        "marker_text": "我准备问一下 ⟦Jeff⟧。",
+        "target_span": {
+          "start": 7,
+          "end": 11,
+          "surface": "Jeff"
+        },
+        "occurrences": [
+          {
+            "start": 7,
+            "end": 11,
+            "surface": "Jeff"
+          }
+        ],
+        "focus": "我准备问一下 Jeff"
+      }
+    },
+    {
+      "id": "ctx-tool-02",
+      "category": "context_prior_software",
+      "text": "顺便看看 jeff 模型的效果。",
+      "marker_text": "顺便看看 ⟦jeff⟧ 模型的效果。",
+      "target_span": {
+        "start": 5,
+        "end": 9,
+        "surface": "jeff"
+      },
+      "target_occurrence_index": 0,
+      "occurrences": [
+        {
+          "start": 5,
+          "end": 9,
+          "surface": "jeff"
+        }
+      ],
+      "focus": "顺便看看 jeff 模型的效果",
+      "context": "Jeff 让我问你什么时候有空",
+      "expected": "tool",
+      "expected_reason": "上一段的人名语境下，本句仍指软件模型。",
+      "guard_expected": "ask",
+      "alt": {
+        "text": "有空再对比一下 jeff 模型的输出。",
+        "marker_text": "有空再对比一下 ⟦jeff⟧ 模型的输出。",
+        "target_span": {
+          "start": 8,
+          "end": 12,
+          "surface": "jeff"
+        },
+        "occurrences": [
+          {
+            "start": 8,
+            "end": 12,
+            "surface": "jeff"
+          }
+        ],
+        "focus": "有空再对比一下 jeff 模型的输出"
+      }
+    },
+    {
+      "id": "neg-01",
+      "category": "negation",
+      "text": "先不要启动jeff，等我把配置改完。",
+      "marker_text": "先不要启动⟦jeff⟧，等我把配置改完。",
+      "target_span": {
+        "start": 5,
+        "end": 9,
+        "surface": "jeff"
+      },
+      "target_occurrence_index": 0,
+      "occurrences": [
+        {
+          "start": 5,
+          "end": 9,
+          "surface": "jeff"
+        }
+      ],
+      "focus": "先不要启动jeff",
+      "context": "",
+      "expected": "tool",
+      "expected_reason": "所指仍是软件，但被否定保护，产品不该改写。",
+      "guard_expected": "skip_negation",
+      "alt": {
+        "text": "暂时不要运行jeff，配置还没改完。",
+        "marker_text": "暂时不要运行⟦jeff⟧，配置还没改完。",
+        "target_span": {
+          "start": 6,
+          "end": 10,
+          "surface": "jeff"
+        },
+        "occurrences": [
+          {
+            "start": 6,
+            "end": 10,
+            "surface": "jeff"
+          }
+        ],
+        "focus": "暂时不要运行jeff"
+      }
+    },
+    {
+      "id": "neg-02",
+      "category": "negation",
+      "text": "我没打开jeff，所以不是它的问题。",
+      "marker_text": "我没打开⟦jeff⟧，所以不是它的问题。",
+      "target_span": {
+        "start": 4,
+        "end": 8,
+        "surface": "jeff"
+      },
+      "target_occurrence_index": 0,
+      "occurrences": [
+        {
+          "start": 4,
+          "end": 8,
+          "surface": "jeff"
+        }
+      ],
+      "focus": "我没打开jeff",
+      "context": "",
+      "expected": "tool",
+      "expected_reason": "否定语境里的软件名。",
+      "guard_expected": "skip_negation",
+      "alt": {
+        "text": "我今天没启动jeff，应该不是它。",
+        "marker_text": "我今天没启动⟦jeff⟧，应该不是它。",
+        "target_span": {
+          "start": 6,
+          "end": 10,
+          "surface": "jeff"
+        },
+        "occurrences": [
+          {
+            "start": 6,
+            "end": 10,
+            "surface": "jeff"
+          }
+        ],
+        "focus": "我今天没启动jeff"
+      }
+    },
+    {
+      "id": "neg-03",
+      "category": "negation",
+      "text": "别运行jeff，它有内存泄漏。",
+      "marker_text": "别运行⟦jeff⟧，它有内存泄漏。",
+      "target_span": {
+        "start": 3,
+        "end": 7,
+        "surface": "jeff"
+      },
+      "target_occurrence_index": 0,
+      "occurrences": [
+        {
+          "start": 3,
+          "end": 7,
+          "surface": "jeff"
+        }
+      ],
+      "focus": "别运行jeff",
+      "context": "",
+      "expected": "tool",
+      "expected_reason": "被劝阻运行的是软件。",
+      "guard_expected": "skip_negation",
+      "alt": {
+        "text": "别启动jeff，新版本有内存泄漏。",
+        "marker_text": "别启动⟦jeff⟧，新版本有内存泄漏。",
+        "target_span": {
+          "start": 3,
+          "end": 7,
+          "surface": "jeff"
+        },
+        "occurrences": [
+          {
+            "start": 3,
+            "end": 7,
+            "surface": "jeff"
+          }
+        ],
+        "focus": "别启动jeff"
+      }
+    },
+    {
+      "id": "neg-04",
+      "category": "negation",
+      "text": "千万不要卸载jeff，我还要用它做对比。",
+      "marker_text": "千万不要卸载⟦jeff⟧，我还要用它做对比。",
+      "target_span": {
+        "start": 6,
+        "end": 10,
+        "surface": "jeff"
+      },
+      "target_occurrence_index": 0,
+      "occurrences": [
+        {
+          "start": 6,
+          "end": 10,
+          "surface": "jeff"
+        }
+      ],
+      "focus": "千万不要卸载jeff",
+      "context": "",
+      "expected": "tool",
+      "expected_reason": "不要卸载的对象是软件。",
+      "guard_expected": "skip_negation",
+      "alt": {
+        "text": "不要删除jeff的配置，我还要用。",
+        "marker_text": "不要删除⟦jeff⟧的配置，我还要用。",
+        "target_span": {
+          "start": 4,
+          "end": 8,
+          "surface": "jeff"
+        },
+        "occurrences": [
+          {
+            "start": 4,
+            "end": 8,
+            "surface": "jeff"
+          }
+        ],
+        "focus": "不要删除jeff的配置"
+      }
+    },
+    {
+      "id": "neg-05",
+      "category": "negation",
+      "text": "我不想升级jeff，新版本反而更慢。",
+      "marker_text": "我不想升级⟦jeff⟧，新版本反而更慢。",
+      "target_span": {
+        "start": 5,
+        "end": 9,
+        "surface": "jeff"
+      },
+      "target_occurrence_index": 0,
+      "occurrences": [
+        {
+          "start": 5,
+          "end": 9,
+          "surface": "jeff"
+        }
+      ],
+      "focus": "我不想升级jeff",
+      "context": "",
+      "expected": "tool",
+      "expected_reason": "不想升级的是软件。",
+      "guard_expected": "skip_negation",
+      "alt": {
+        "text": "先不更新jeff，怕出问题。",
+        "marker_text": "先不更新⟦jeff⟧，怕出问题。",
+        "target_span": {
+          "start": 4,
+          "end": 8,
+          "surface": "jeff"
+        },
+        "occurrences": [
+          {
+            "start": 4,
+            "end": 8,
+            "surface": "jeff"
+          }
+        ],
+        "focus": "先不更新jeff"
+      }
+    },
+    {
+      "id": "quote-01",
+      "category": "quotation",
+      "text": "文档里写着「jeff 工具需要先安装依赖」。",
+      "marker_text": "文档里写着「⟦jeff⟧ 工具需要先安装依赖」。",
+      "target_span": {
+        "start": 6,
+        "end": 10,
+        "surface": "jeff"
+      },
+      "target_occurrence_index": 0,
+      "occurrences": [
+        {
+          "start": 6,
+          "end": 10,
+          "surface": "jeff"
+        }
+      ],
+      "focus": "文档里写着「jeff 工具需要先安装依赖」",
+      "context": "",
+      "expected": "tool",
+      "expected_reason": "引用文档，但被引内容是工具用法。",
+      "guard_expected": "ask",
+      "alt": {
+        "text": "手册里写着「jeff 程序要先配置环境」。",
+        "marker_text": "手册里写着「⟦jeff⟧ 程序要先配置环境」。",
+        "target_span": {
+          "start": 6,
+          "end": 10,
+          "surface": "jeff"
+        },
+        "occurrences": [
+          {
+            "start": 6,
+            "end": 10,
+            "surface": "jeff"
+          }
+        ],
+        "focus": "手册里写着「jeff 程序要先配置环境」"
+      }
+    },
+    {
+      "id": "quote-02",
+      "category": "quotation",
+      "text": "他说：“我把 jeff 安装好了。”",
+      "marker_text": "他说：“我把 ⟦jeff⟧ 安装好了。”",
+      "target_span": {
+        "start": 7,
+        "end": 11,
+        "surface": "jeff"
+      },
+      "target_occurrence_index": 0,
+      "occurrences": [
+        {
+          "start": 7,
+          "end": 11,
+          "surface": "jeff"
+        }
+      ],
+      "focus": "“我把 jeff 安装好了",
+      "context": "",
+      "expected": "tool",
+      "expected_reason": "转述他人的安装动作，对象是软件。",
+      "guard_expected": "ask",
+      "alt": {
+        "text": "她回消息说：“jeff 我已经启动了。”",
+        "marker_text": "她回消息说：“⟦jeff⟧ 我已经启动了。”",
+        "target_span": {
+          "start": 7,
+          "end": 11,
+          "surface": "jeff"
+        },
+        "occurrences": [
+          {
+            "start": 7,
+            "end": 11,
+            "surface": "jeff"
+          }
+        ],
+        "focus": "“jeff 我已经启动了"
+      }
+    },
+    {
+      "id": "quote-03",
+      "category": "quotation",
+      "text": "聊天记录里那句「jeff 又崩了」说的就是这个工具。",
+      "marker_text": "聊天记录里那句「⟦jeff⟧ 又崩了」说的就是这个工具。",
+      "target_span": {
+        "start": 8,
+        "end": 12,
+        "surface": "jeff"
+      },
+      "target_occurrence_index": 0,
+      "occurrences": [
+        {
+          "start": 8,
+          "end": 12,
+          "surface": "jeff"
+        }
+      ],
+      "focus": "聊天记录里那句「jeff 又崩了」说的就是这个工具",
+      "context": "",
+      "expected": "tool",
+      "expected_reason": "引用内容由后文点明指工具。",
+      "guard_expected": "ask",
+      "alt": {
+        "text": "群里那句「jeff 又挂了」指的就是这个程序。",
+        "marker_text": "群里那句「⟦jeff⟧ 又挂了」指的就是这个程序。",
+        "target_span": {
+          "start": 5,
+          "end": 9,
+          "surface": "jeff"
+        },
+        "occurrences": [
+          {
+            "start": 5,
+            "end": 9,
+            "surface": "jeff"
+          }
+        ],
+        "focus": "群里那句「jeff 又挂了」指的就是这个程序"
+      }
+    },
+    {
+      "id": "quote-04",
+      "category": "quotation",
+      "text": "他嘴上说的那个「jeff」其实是我们老板的英文名。",
+      "marker_text": "他嘴上说的那个「⟦jeff⟧」其实是我们老板的英文名。",
+      "target_span": {
+        "start": 8,
+        "end": 12,
+        "surface": "jeff"
+      },
+      "target_occurrence_index": 0,
+      "occurrences": [
+        {
+          "start": 8,
+          "end": 12,
+          "surface": "jeff"
+        }
+      ],
+      "focus": "他嘴上说的那个「jeff」其实是我们老板的英文名",
+      "context": "",
+      "expected": "person",
+      "expected_reason": "引用的是人名，句子明确否认是软件。",
+      "guard_expected": "skip_no_cue",
+      "alt": {
+        "text": "他提到的「jeff」是他同事的英文名。",
+        "marker_text": "他提到的「⟦jeff⟧」是他同事的英文名。",
+        "target_span": {
+          "start": 5,
+          "end": 9,
+          "surface": "jeff"
+        },
+        "occurrences": [
+          {
+            "start": 5,
+            "end": 9,
+            "surface": "jeff"
+          }
+        ],
+        "focus": "他提到的「jeff」是他同事的英文名"
+      }
+    },
+    {
+      "id": "quote-05",
+      "category": "quotation",
+      "text": "他把 jeff 念成了“杰夫”，我们笑了半天。",
+      "marker_text": "他把 ⟦jeff⟧ 念成了“杰夫”，我们笑了半天。",
+      "target_span": {
+        "start": 3,
+        "end": 7,
+        "surface": "jeff"
+      },
+      "target_occurrence_index": 0,
+      "occurrences": [
+        {
+          "start": 3,
+          "end": 7,
+          "surface": "jeff"
+        }
+      ],
+      "focus": "他把 jeff 念成了“杰夫”",
+      "context": "",
+      "expected": "person",
+      "expected_reason": "讨论人名读音，不是软件。",
+      "guard_expected": "skip_no_cue",
+      "alt": {
+        "text": "她把 Jeff 读成了“杰夫”。",
+        "marker_text": "她把 ⟦Jeff⟧ 读成了“杰夫”。",
+        "target_span": {
+          "start": 3,
+          "end": 7,
+          "surface": "Jeff"
+        },
+        "occurrences": [
+          {
+            "start": 3,
+            "end": 7,
+            "surface": "Jeff"
+          }
+        ],
+        "focus": "她把 Jeff 读成了“杰夫”"
+      }
+    },
+    {
+      "id": "meta-01",
+      "category": "meta_mention",
+      "text": "不要写成 jeff，正确的是 jev。",
+      "marker_text": "不要写成 ⟦jeff⟧，正确的是 jev。",
+      "target_span": {
+        "start": 5,
+        "end": 9,
+        "surface": "jeff"
+      },
+      "target_occurrence_index": 0,
+      "occurrences": [
+        {
+          "start": 5,
+          "end": 9,
+          "surface": "jeff"
+        }
+      ],
+      "focus": "不要写成 jeff",
+      "context": "",
+      "expected": "unclear",
+      "expected_reason": "谈论拼写本身，不指任何实体。",
+      "guard_expected": "skip_meta",
+      "alt": {
+        "text": "别写成 Jeff，正确拼写是 jev。",
+        "marker_text": "别写成 ⟦Jeff⟧，正确拼写是 jev。",
+        "target_span": {
+          "start": 4,
+          "end": 8,
+          "surface": "Jeff"
+        },
+        "occurrences": [
+          {
+            "start": 4,
+            "end": 8,
+            "surface": "Jeff"
+          }
+        ],
+        "focus": "别写成 Jeff"
+      }
+    },
+    {
+      "id": "meta-02",
+      "category": "meta_mention",
+      "text": "很多人把 jev 写成 jeff，其实指的是同一个工具。",
+      "marker_text": "很多人把 jev 写成 ⟦jeff⟧，其实指的是同一个工具。",
+      "target_span": {
+        "start": 12,
+        "end": 16,
+        "surface": "jeff"
+      },
+      "target_occurrence_index": 0,
+      "occurrences": [
+        {
+          "start": 12,
+          "end": 16,
+          "surface": "jeff"
+        }
+      ],
+      "focus": "很多人把 jev 写成 jeff",
+      "context": "",
+      "expected": "unclear",
+      "expected_reason": "被讨论的是误拼形式本身。",
+      "guard_expected": "skip_meta",
+      "alt": {
+        "text": "有人总把 jev 写成 Jeff，其实是一个东西。",
+        "marker_text": "有人总把 jev 写成 ⟦Jeff⟧，其实是一个东西。",
+        "target_span": {
+          "start": 12,
+          "end": 16,
+          "surface": "Jeff"
+        },
+        "occurrences": [
+          {
+            "start": 12,
+            "end": 16,
+            "surface": "Jeff"
+          }
+        ],
+        "focus": "有人总把 jev 写成 Jeff"
+      }
+    },
+    {
+      "id": "meta-03",
+      "category": "meta_mention",
+      "text": "我强调一遍，别用jeff这个写法，正确拼写是 j-e-v。",
+      "marker_text": "我强调一遍，别用⟦jeff⟧这个写法，正确拼写是 j-e-v。",
+      "target_span": {
+        "start": 8,
+        "end": 12,
+        "surface": "jeff"
+      },
+      "target_occurrence_index": 0,
+      "occurrences": [
+        {
+          "start": 8,
+          "end": 12,
+          "surface": "jeff"
+        }
+      ],
+      "focus": "别用jeff这个写法",
+      "context": "",
+      "expected": "unclear",
+      "expected_reason": "纠正拼写的元话语，落在否定窗口内，目标不指实体。",
+      "guard_expected": "skip_negation",
+      "alt": {
+        "text": "再说一次，别写Jeff，正确是 jev。",
+        "marker_text": "再说一次，别写⟦Jeff⟧，正确是 jev。",
+        "target_span": {
+          "start": 7,
+          "end": 11,
+          "surface": "Jeff"
+        },
+        "occurrences": [
+          {
+            "start": 7,
+            "end": 11,
+            "surface": "Jeff"
+          }
+        ],
+        "focus": "别写Jeff"
+      }
+    },
+    {
+      "id": "meta-04",
+      "category": "meta_mention",
+      "text": "他刚才说的是“jeff”这个词，不是那个软件。",
+      "marker_text": "他刚才说的是“⟦jeff⟧”这个词，不是那个软件。",
+      "target_span": {
+        "start": 7,
+        "end": 11,
+        "surface": "jeff"
+      },
+      "target_occurrence_index": 0,
+      "occurrences": [
+        {
+          "start": 7,
+          "end": 11,
+          "surface": "jeff"
+        }
+      ],
+      "focus": "他刚才说的是“jeff”这个词",
+      "context": "",
+      "expected": "unclear",
+      "expected_reason": "提到的是词形，且明确否认指软件。",
+      "guard_expected": "skip_no_cue",
+      "alt": {
+        "text": "他念的是“Jeff”这三个字母，不是软件。",
+        "marker_text": "他念的是“⟦Jeff⟧”这三个字母，不是软件。",
+        "target_span": {
+          "start": 5,
+          "end": 9,
+          "surface": "Jeff"
+        },
+        "occurrences": [
+          {
+            "start": 5,
+            "end": 9,
+            "surface": "Jeff"
+          }
+        ],
+        "focus": "他念的是“Jeff”这三个字母"
+      }
+    },
+    {
+      "id": "meta-05",
+      "category": "meta_mention",
+      "text": "我刚才说不要把 jeff 说成 jef，现在请重新安装jeff工具。",
+      "marker_text": "我刚才说不要把 jeff 说成 jef，现在请重新安装⟦jeff⟧工具。",
+      "target_span": {
+        "start": 27,
+        "end": 31,
+        "surface": "jeff"
+      },
+      "target_occurrence_index": 1,
+      "occurrences": [
+        {
+          "start": 8,
+          "end": 12,
+          "surface": "jeff"
+        },
+        {
+          "start": 27,
+          "end": 31,
+          "surface": "jeff"
+        }
+      ],
+      "focus": "现在请重新安装jeff工具",
+      "context": "",
+      "expected": "tool",
+      "expected_reason": "元话语在别处；目标出现是真实安装对象，应判 tool。",
+      "guard_expected": "ask",
+      "alt": {
+        "text": "我前面说过 jeff 别写成 jef，现在请把jeff插件装上。",
+        "marker_text": "我前面说过 jeff 别写成 jef，现在请把⟦jeff⟧插件装上。",
+        "target_span": {
+          "start": 23,
+          "end": 27,
+          "surface": "jeff"
+        },
+        "occurrences": [
+          {
+            "start": 6,
+            "end": 10,
+            "surface": "jeff"
+          },
+          {
+            "start": 23,
+            "end": 27,
+            "surface": "jeff"
+          }
+        ],
+        "focus": "现在请把jeff插件装上"
+      }
+    },
+    {
+      "id": "mix-01",
+      "category": "zh_en_mix",
+      "text": "这个 feature 的代码还是交给 Jeff 来 review。",
+      "marker_text": "这个 feature 的代码还是交给 ⟦Jeff⟧ 来 review。",
+      "target_span": {
+        "start": 19,
+        "end": 23,
+        "surface": "Jeff"
+      },
+      "target_occurrence_index": 0,
+      "occurrences": [
+        {
+          "start": 19,
+          "end": 23,
+          "surface": "Jeff"
+        }
+      ],
+      "focus": "这个 feature 的代码还是交给 Jeff 来 review",
+      "context": "",
+      "expected": "person",
+      "expected_reason": "review 代码的是人。",
+      "guard_expected": "ask",
+      "alt": {
+        "text": "这块 feature 的代码让 Jeff 来 review。",
+        "marker_text": "这块 feature 的代码让 ⟦Jeff⟧ 来 review。",
+        "target_span": {
+          "start": 16,
+          "end": 20,
+          "surface": "Jeff"
+        },
+        "occurrences": [
+          {
+            "start": 16,
+            "end": 20,
+            "surface": "Jeff"
+          }
+        ],
+        "focus": "这块 feature 的代码让 Jeff 来 review"
+      }
+    },
+    {
+      "id": "mix-02",
+      "category": "zh_en_mix",
+      "text": "把 jeff 部署到 Docker 里，重新 build 镜像。",
+      "marker_text": "把 ⟦jeff⟧ 部署到 Docker 里，重新 build 镜像。",
+      "target_span": {
+        "start": 2,
+        "end": 6,
+        "surface": "jeff"
+      },
+      "target_occurrence_index": 0,
+      "occurrences": [
+        {
+          "start": 2,
+          "end": 6,
+          "surface": "jeff"
+        }
+      ],
+      "focus": "把 jeff 部署到 Docker 里",
+      "context": "",
+      "expected": "tool",
+      "expected_reason": "被部署的是软件。",
+      "guard_expected": "ask",
+      "alt": {
+        "text": "用 Docker 把 jeff 部署一遍，再 build 镜像。",
+        "marker_text": "用 Docker 把 ⟦jeff⟧ 部署一遍，再 build 镜像。",
+        "target_span": {
+          "start": 11,
+          "end": 15,
+          "surface": "jeff"
+        },
+        "occurrences": [
+          {
+            "start": 11,
+            "end": 15,
+            "surface": "jeff"
+          }
+        ],
+        "focus": "用 Docker 把 jeff 部署一遍"
+      }
+    },
+    {
+      "id": "mix-03",
+      "category": "zh_en_mix",
+      "text": "我在 CI 上跑了 jeff 的测试用例。",
+      "marker_text": "我在 CI 上跑了 ⟦jeff⟧ 的测试用例。",
+      "target_span": {
+        "start": 10,
+        "end": 14,
+        "surface": "jeff"
+      },
+      "target_occurrence_index": 0,
+      "occurrences": [
+        {
+          "start": 10,
+          "end": 14,
+          "surface": "jeff"
+        }
+      ],
+      "focus": "我在 CI 上跑了 jeff 的测试用例",
+      "context": "",
+      "expected": "tool",
+      "expected_reason": "测试用例属于软件。",
+      "guard_expected": "ask",
+      "alt": {
+        "text": "CI 里跑一遍 jeff 的测试。",
+        "marker_text": "CI 里跑一遍 ⟦jeff⟧ 的测试。",
+        "target_span": {
+          "start": 8,
+          "end": 12,
+          "surface": "jeff"
+        },
+        "occurrences": [
+          {
+            "start": 8,
+            "end": 12,
+            "surface": "jeff"
+          }
+        ],
+        "focus": "CI 里跑一遍 jeff 的测试"
+      }
+    },
+    {
+      "id": "mix-04",
+      "category": "zh_en_mix",
+      "text": "Jeff 在 Slack 上问我 API 该怎么调用。",
+      "marker_text": "⟦Jeff⟧ 在 Slack 上问我 API 该怎么调用。",
+      "target_span": {
+        "start": 0,
+        "end": 4,
+        "surface": "Jeff"
+      },
+      "target_occurrence_index": 0,
+      "occurrences": [
+        {
+          "start": 0,
+          "end": 4,
+          "surface": "Jeff"
+        }
+      ],
+      "focus": "Jeff 在 Slack 上问我 API 该怎么调用",
+      "context": "",
+      "expected": "person",
+      "expected_reason": "提问的是人。",
+      "guard_expected": "ask",
+      "alt": {
+        "text": "Jeff 在群里问我接口怎么调用。",
+        "marker_text": "⟦Jeff⟧ 在群里问我接口怎么调用。",
+        "target_span": {
+          "start": 0,
+          "end": 4,
+          "surface": "Jeff"
+        },
+        "occurrences": [
+          {
+            "start": 0,
+            "end": 4,
+            "surface": "Jeff"
+          }
+        ],
+        "focus": "Jeff 在群里问我接口怎么调用"
+      }
+    },
+    {
+      "id": "mix-05",
+      "category": "zh_en_mix",
+      "text": "命令行里执行 pip install jeff 就能装好。",
+      "marker_text": "命令行里执行 pip install ⟦jeff⟧ 就能装好。",
+      "target_span": {
+        "start": 19,
+        "end": 23,
+        "surface": "jeff"
+      },
+      "target_occurrence_index": 0,
+      "occurrences": [
+        {
+          "start": 19,
+          "end": 23,
+          "surface": "jeff"
+        }
+      ],
+      "focus": "命令行里执行 pip install jeff 就能装好",
+      "context": "",
+      "expected": "tool",
+      "expected_reason": "pip 安装的是软件包。",
+      "guard_expected": "ask",
+      "alt": {
+        "text": "在终端执行 pip install jeff 就行。",
+        "marker_text": "在终端执行 pip install ⟦jeff⟧ 就行。",
+        "target_span": {
+          "start": 18,
+          "end": 22,
+          "surface": "jeff"
+        },
+        "occurrences": [
+          {
+            "start": 18,
+            "end": 22,
+            "surface": "jeff"
+          }
+        ],
+        "focus": "在终端执行 pip install jeff 就行"
+      }
+    },
+    {
+      "id": "mix-06",
+      "category": "zh_en_mix",
+      "text": "在 VS Code 里用 jeff 插件补全代码。",
+      "marker_text": "在 VS Code 里用 ⟦jeff⟧ 插件补全代码。",
+      "target_span": {
+        "start": 13,
+        "end": 17,
+        "surface": "jeff"
+      },
+      "target_occurrence_index": 0,
+      "occurrences": [
+        {
+          "start": 13,
+          "end": 17,
+          "surface": "jeff"
+        }
+      ],
+      "focus": "在 VS Code 里用 jeff 插件补全代码",
+      "context": "",
+      "expected": "tool",
+      "expected_reason": "插件名指软件。",
+      "guard_expected": "ask",
+      "alt": {
+        "text": "用 VS Code 的 jeff 插件格式化代码。",
+        "marker_text": "用 VS Code 的 ⟦jeff⟧ 插件格式化代码。",
+        "target_span": {
+          "start": 12,
+          "end": 16,
+          "surface": "jeff"
+        },
+        "occurrences": [
+          {
+            "start": 12,
+            "end": 16,
+            "surface": "jeff"
+          }
+        ],
+        "focus": "用 VS Code 的 jeff 插件格式化代码"
+      }
+    },
+    {
+      "id": "multi-01",
+      "category": "multi_hotword",
+      "text": "先安装 jeff，再配置 jef 插件。",
+      "marker_text": "先安装 ⟦jeff⟧，再配置 jef 插件。",
+      "target_span": {
+        "start": 4,
+        "end": 8,
+        "surface": "jeff"
+      },
+      "target_occurrence_index": 0,
+      "occurrences": [
+        {
+          "start": 4,
+          "end": 8,
+          "surface": "jeff"
+        }
+      ],
+      "focus": "先安装 jeff",
+      "context": "",
+      "expected": "tool",
+      "expected_reason": "jeff/jef 同现；目标是被安装的软件。",
+      "guard_expected": "ask",
+      "alt": {
+        "text": "先安装好 jeff，再去配 jef 插件。",
+        "marker_text": "先安装好 ⟦jeff⟧，再去配 jef 插件。",
+        "target_span": {
+          "start": 5,
+          "end": 9,
+          "surface": "jeff"
+        },
+        "occurrences": [
+          {
+            "start": 5,
+            "end": 9,
+            "surface": "jeff"
+          }
+        ],
+        "focus": "先安装好 jeff"
+      }
+    },
+    {
+      "id": "multi-02",
+      "category": "multi_hotword",
+      "text": "把 jeff 和 jev 两个服务器的日志对比一下。",
+      "marker_text": "把 ⟦jeff⟧ 和 jev 两个服务器的日志对比一下。",
+      "target_span": {
+        "start": 2,
+        "end": 6,
+        "surface": "jeff"
+      },
+      "target_occurrence_index": 0,
+      "occurrences": [
+        {
+          "start": 2,
+          "end": 6,
+          "surface": "jeff"
+        }
+      ],
+      "focus": "把 jeff 和 jev 两个服务器的日志对比一下",
+      "context": "",
+      "expected": "tool",
+      "expected_reason": "jev 是用户常用词，目标 jeff 也是软件。",
+      "guard_expected": "ask",
+      "alt": {
+        "text": "对比一下 jeff 和 jev 两个服务器的日志。",
+        "marker_text": "对比一下 ⟦jeff⟧ 和 jev 两个服务器的日志。",
+        "target_span": {
+          "start": 5,
+          "end": 9,
+          "surface": "jeff"
+        },
+        "occurrences": [
+          {
+            "start": 5,
+            "end": 9,
+            "surface": "jeff"
+          }
+        ],
+        "focus": "对比一下 jeff 和 jev 两个服务器的日志"
+      }
+    },
+    {
+      "id": "multi-03",
+      "category": "multi_hotword",
+      "text": "到底 jeff、jef、jev 哪个写法对？",
+      "marker_text": "到底 ⟦jeff⟧、jef、jev 哪个写法对？",
+      "target_span": {
+        "start": 3,
+        "end": 7,
+        "surface": "jeff"
+      },
+      "target_occurrence_index": 0,
+      "occurrences": [
+        {
+          "start": 3,
+          "end": 7,
+          "surface": "jeff"
+        }
+      ],
+      "focus": "到底 jeff",
+      "context": "",
+      "expected": "unclear",
+      "expected_reason": "在比较几种拼写，目标出现只是词形讨论，不指实体；小句含前导词以便与孤立词 noc-01 的请求载荷区分。",
+      "guard_expected": "skip_no_cue",
+      "alt": {
+        "text": "jeff 和 jef 到底哪个拼写对？",
+        "marker_text": "⟦jeff⟧ 和 jef 到底哪个拼写对？",
+        "target_span": {
+          "start": 0,
+          "end": 4,
+          "surface": "jeff"
+        },
+        "occurrences": [
+          {
+            "start": 0,
+            "end": 4,
+            "surface": "jeff"
+          }
+        ],
+        "focus": "jeff 和 jef 到底哪个拼写对"
+      }
+    },
+    {
+      "id": "multi-04",
+      "category": "multi_hotword",
+      "text": "先打开 jeff，如果不行再切到 jef。",
+      "marker_text": "先打开 ⟦jeff⟧，如果不行再切到 jef。",
+      "target_span": {
+        "start": 4,
+        "end": 8,
+        "surface": "jeff"
+      },
+      "target_occurrence_index": 0,
+      "occurrences": [
+        {
+          "start": 4,
+          "end": 8,
+          "surface": "jeff"
+        }
+      ],
+      "focus": "先打开 jeff",
+      "context": "",
+      "expected": "tool",
+      "expected_reason": "打开的是软件。",
+      "guard_expected": "ask",
+      "alt": {
+        "text": "先启动 jeff，不行再换 jef。",
+        "marker_text": "先启动 ⟦jeff⟧，不行再换 jef。",
+        "target_span": {
+          "start": 4,
+          "end": 8,
+          "surface": "jeff"
+        },
+        "occurrences": [
+          {
+            "start": 4,
+            "end": 8,
+            "surface": "jeff"
+          }
+        ],
+        "focus": "先启动 jeff"
+      }
+    },
+    {
+      "id": "multi-05",
+      "category": "multi_hotword",
+      "text": "我们把 jeff 和别的工具做了对比测试。",
+      "marker_text": "我们把 ⟦jeff⟧ 和别的工具做了对比测试。",
+      "target_span": {
+        "start": 4,
+        "end": 8,
+        "surface": "jeff"
+      },
+      "target_occurrence_index": 0,
+      "occurrences": [
+        {
+          "start": 4,
+          "end": 8,
+          "surface": "jeff"
+        }
+      ],
+      "focus": "我们把 jeff 和别的工具做了对比测试",
+      "context": "",
+      "expected": "tool",
+      "expected_reason": "与其他工具并列，目标也是软件。",
+      "guard_expected": "ask",
+      "alt": {
+        "text": "把 jeff 和其他工具放在一起测试。",
+        "marker_text": "把 ⟦jeff⟧ 和其他工具放在一起测试。",
+        "target_span": {
+          "start": 2,
+          "end": 6,
+          "surface": "jeff"
+        },
+        "occurrences": [
+          {
+            "start": 2,
+            "end": 6,
+            "surface": "jeff"
+          }
+        ],
+        "focus": "把 jeff 和其他工具放在一起测试"
+      }
+    },
+    {
+      "id": "noc-01",
+      "category": "no_context",
+      "text": "jeff",
+      "marker_text": "⟦jeff⟧",
+      "target_span": {
+        "start": 0,
+        "end": 4,
+        "surface": "jeff"
+      },
+      "target_occurrence_index": 0,
+      "occurrences": [
+        {
+          "start": 0,
+          "end": 4,
+          "surface": "jeff"
+        }
+      ],
+      "focus": "jeff",
+      "context": "",
+      "expected": "unclear",
+      "expected_reason": "孤立词，无任何语境，合理弃权。",
+      "guard_expected": "skip_no_cue",
+      "alt": {
+        "text": "Jeff。",
+        "marker_text": "⟦Jeff⟧。",
+        "target_span": {
+          "start": 0,
+          "end": 4,
+          "surface": "Jeff"
+        },
+        "occurrences": [
+          {
+            "start": 0,
+            "end": 4,
+            "surface": "Jeff"
+          }
+        ],
+        "focus": "Jeff"
+      }
+    },
+    {
+      "id": "noc-02",
+      "category": "no_context",
+      "text": "jeff 是什么？",
+      "marker_text": "⟦jeff⟧ 是什么？",
+      "target_span": {
+        "start": 0,
+        "end": 4,
+        "surface": "jeff"
+      },
+      "target_occurrence_index": 0,
+      "occurrences": [
+        {
+          "start": 0,
+          "end": 4,
+          "surface": "jeff"
+        }
+      ],
+      "focus": "jeff 是什么",
+      "context": "",
+      "expected": "unclear",
+      "expected_reason": "只问是什么，无法判定人还是软件。",
+      "guard_expected": "skip_no_cue",
+      "alt": {
+        "text": "Jeff 到底是个啥？",
+        "marker_text": "⟦Jeff⟧ 到底是个啥？",
+        "target_span": {
+          "start": 0,
+          "end": 4,
+          "surface": "Jeff"
+        },
+        "occurrences": [
+          {
+            "start": 0,
+            "end": 4,
+            "surface": "Jeff"
+          }
+        ],
+        "focus": "Jeff 到底是个啥"
+      }
+    },
+    {
+      "id": "noc-03",
+      "category": "no_context",
+      "text": "帮我查一下 jeff。",
+      "marker_text": "帮我查一下 ⟦jeff⟧。",
+      "target_span": {
+        "start": 6,
+        "end": 10,
+        "surface": "jeff"
+      },
+      "target_occurrence_index": 0,
+      "occurrences": [
+        {
+          "start": 6,
+          "end": 10,
+          "surface": "jeff"
+        }
+      ],
+      "focus": "帮我查一下 jeff",
+      "context": "",
+      "expected": "unclear",
+      "expected_reason": "没有足够语境判定所指。",
+      "guard_expected": "skip_no_cue",
+      "alt": {
+        "text": "帮我搜一下 Jeff。",
+        "marker_text": "帮我搜一下 ⟦Jeff⟧。",
+        "target_span": {
+          "start": 6,
+          "end": 10,
+          "surface": "Jeff"
+        },
+        "occurrences": [
+          {
+            "start": 6,
+            "end": 10,
+            "surface": "Jeff"
+          }
+        ],
+        "focus": "帮我搜一下 Jeff"
+      }
+    },
+    {
+      "id": "noc-04",
+      "category": "no_context",
+      "text": "关于 jeff 的情况，我不太清楚。",
+      "marker_text": "关于 ⟦jeff⟧ 的情况，我不太清楚。",
+      "target_span": {
+        "start": 3,
+        "end": 7,
+        "surface": "jeff"
+      },
+      "target_occurrence_index": 0,
+      "occurrences": [
+        {
+          "start": 3,
+          "end": 7,
+          "surface": "jeff"
+        }
+      ],
+      "focus": "关于 jeff 的情况",
+      "context": "",
+      "expected": "unclear",
+      "expected_reason": "语境不足，弃权。",
+      "guard_expected": "skip_no_cue",
+      "alt": {
+        "text": "Jeff 的事我回头再说。",
+        "marker_text": "⟦Jeff⟧ 的事我回头再说。",
+        "target_span": {
+          "start": 0,
+          "end": 4,
+          "surface": "Jeff"
+        },
+        "occurrences": [
+          {
+            "start": 0,
+            "end": 4,
+            "surface": "Jeff"
+          }
+        ],
+        "focus": "Jeff 的事我回头再说"
+      }
+    },
+    {
+      "id": "bg-01",
+      "category": "background_negative",
+      "text": "Jeff帮我设置端口1234。",
+      "marker_text": "⟦Jeff⟧帮我设置端口1234。",
+      "target_span": {
+        "start": 0,
+        "end": 4,
+        "surface": "Jeff"
+      },
+      "target_occurrence_index": 0,
+      "occurrences": [
+        {
+          "start": 0,
+          "end": 4,
+          "surface": "Jeff"
+        }
+      ],
+      "focus": "Jeff帮我设置端口1234",
+      "context": "",
+      "expected": "person",
+      "expected_reason": "人名；阿拉伯数字由本机规则处理，不计入模型能力。",
+      "guard_expected": "skip_person",
+      "alt": {
+        "text": "Jeff帮我改一下端口 8080。",
+        "marker_text": "⟦Jeff⟧帮我改一下端口 8080。",
+        "target_span": {
+          "start": 0,
+          "end": 4,
+          "surface": "Jeff"
+        },
+        "occurrences": [
+          {
+            "start": 0,
+            "end": 4,
+            "surface": "Jeff"
+          }
+        ],
+        "focus": "Jeff帮我改一下端口 8080"
+      }
+    },
+    {
+      "id": "bg-02",
+      "category": "background_negative",
+      "text": "让 Jeff 帮忙把服务端口改成 9090。",
+      "marker_text": "让 ⟦Jeff⟧ 帮忙把服务端口改成 9090。",
+      "target_span": {
+        "start": 2,
+        "end": 6,
+        "surface": "Jeff"
+      },
+      "target_occurrence_index": 0,
+      "occurrences": [
+        {
+          "start": 2,
+          "end": 6,
+          "surface": "Jeff"
+        }
+      ],
+      "focus": "让 Jeff 帮忙把服务端口改成 9090",
+      "context": "",
+      "expected": "person",
+      "expected_reason": "人名；端口数字不属于别名判定。",
+      "guard_expected": "skip_person",
+      "alt": {
+        "text": "请 Jeff 帮忙把端口改成 9090。",
+        "marker_text": "请 ⟦Jeff⟧ 帮忙把端口改成 9090。",
+        "target_span": {
+          "start": 2,
+          "end": 6,
+          "surface": "Jeff"
+        },
+        "occurrences": [
+          {
+            "start": 2,
+            "end": 6,
+            "surface": "Jeff"
+          }
+        ],
+        "focus": "请 Jeff 帮忙把端口改成 9090"
+      }
+    },
+    {
+      "id": "bg-03",
+      "category": "background_negative",
+      "text": "端口 1234 是 Jeff 昨天设的。",
+      "marker_text": "端口 1234 是 ⟦Jeff⟧ 昨天设的。",
+      "target_span": {
+        "start": 10,
+        "end": 14,
+        "surface": "Jeff"
+      },
+      "target_occurrence_index": 0,
+      "occurrences": [
+        {
+          "start": 10,
+          "end": 14,
+          "surface": "Jeff"
+        }
+      ],
+      "focus": "端口 1234 是 Jeff 昨天设的",
+      "context": "",
+      "expected": "person",
+      "expected_reason": "人名；数字由本机规则处理。",
+      "guard_expected": "skip_no_cue",
+      "alt": {
+        "text": "端口 8080 是 Jeff 上周配的。",
+        "marker_text": "端口 8080 是 ⟦Jeff⟧ 上周配的。",
+        "target_span": {
+          "start": 10,
+          "end": 14,
+          "surface": "Jeff"
+        },
+        "occurrences": [
+          {
+            "start": 10,
+            "end": 14,
+            "surface": "Jeff"
+          }
+        ],
+        "focus": "端口 8080 是 Jeff 上周配的"
+      }
+    },
+    {
+      "id": "bg-04",
+      "category": "background_negative",
+      "text": "把 jeff 服务器的监听端口从 1234 改成 5678。",
+      "marker_text": "把 ⟦jeff⟧ 服务器的监听端口从 1234 改成 5678。",
+      "target_span": {
+        "start": 2,
+        "end": 6,
+        "surface": "jeff"
+      },
+      "target_occurrence_index": 0,
+      "occurrences": [
+        {
+          "start": 2,
+          "end": 6,
+          "surface": "jeff"
+        }
+      ],
+      "focus": "把 jeff 服务器的监听端口从 1234 改成 5678",
+      "context": "",
+      "expected": "tool",
+      "expected_reason": "软件服务器；端口数字不参与模型判定。",
+      "guard_expected": "ask",
+      "alt": {
+        "text": "把 jeff 服务器的端口换成 9090。",
+        "marker_text": "把 ⟦jeff⟧ 服务器的端口换成 9090。",
+        "target_span": {
+          "start": 2,
+          "end": 6,
+          "surface": "jeff"
+        },
+        "occurrences": [
+          {
+            "start": 2,
+            "end": 6,
+            "surface": "jeff"
+          }
+        ],
+        "focus": "把 jeff 服务器的端口换成 9090"
+      }
+    },
+    {
+      "id": "attach-01",
+      "category": "tool_attached_noun",
+      "text": "jeff工具的参数在文档里有说明。",
+      "marker_text": "⟦jeff⟧工具的参数在文档里有说明。",
+      "target_span": {
+        "start": 0,
+        "end": 4,
+        "surface": "jeff"
+      },
+      "target_occurrence_index": 0,
+      "occurrences": [
+        {
+          "start": 0,
+          "end": 4,
+          "surface": "jeff"
+        }
+      ],
+      "focus": "jeff工具的参数在文档里有说明",
+      "context": "",
+      "expected": "tool",
+      "expected_reason": "“jeff工具”直接修饰。",
+      "guard_expected": "ask",
+      "alt": {
+        "text": "jeff工具的参数改起来很麻烦。",
+        "marker_text": "⟦jeff⟧工具的参数改起来很麻烦。",
+        "target_span": {
+          "start": 0,
+          "end": 4,
+          "surface": "jeff"
+        },
+        "occurrences": [
+          {
+            "start": 0,
+            "end": 4,
+            "surface": "jeff"
+          }
+        ],
+        "focus": "jeff工具的参数改起来很麻烦"
+      }
+    },
+    {
+      "id": "attach-02",
+      "category": "tool_attached_noun",
+      "text": "jeff 的模型文件放在哪个目录？",
+      "marker_text": "⟦jeff⟧ 的模型文件放在哪个目录？",
+      "target_span": {
+        "start": 0,
+        "end": 4,
+        "surface": "jeff"
+      },
+      "target_occurrence_index": 0,
+      "occurrences": [
+        {
+          "start": 0,
+          "end": 4,
+          "surface": "jeff"
+        }
+      ],
+      "focus": "jeff 的模型文件放在哪个目录",
+      "context": "",
+      "expected": "tool",
+      "expected_reason": "“jeff的模型”：软件产物的模型文件。",
+      "guard_expected": "ask",
+      "alt": {
+        "text": "jeff 的模型文件有多大？",
+        "marker_text": "⟦jeff⟧ 的模型文件有多大？",
+        "target_span": {
+          "start": 0,
+          "end": 4,
+          "surface": "jeff"
+        },
+        "occurrences": [
+          {
+            "start": 0,
+            "end": 4,
+            "surface": "jeff"
+          }
+        ],
+        "focus": "jeff 的模型文件有多大"
+      }
+    },
+    {
+      "id": "attach-03",
+      "category": "tool_attached_noun",
+      "text": "jeff软件更新之后好用了很多。",
+      "marker_text": "⟦jeff⟧软件更新之后好用了很多。",
+      "target_span": {
+        "start": 0,
+        "end": 4,
+        "surface": "jeff"
+      },
+      "target_occurrence_index": 0,
+      "occurrences": [
+        {
+          "start": 0,
+          "end": 4,
+          "surface": "jeff"
+        }
+      ],
+      "focus": "jeff软件更新之后好用了很多",
+      "context": "",
+      "expected": "tool",
+      "expected_reason": "“jeff软件”直接修饰。",
+      "guard_expected": "ask",
+      "alt": {
+        "text": "jeff软件升级之后稳定多了。",
+        "marker_text": "⟦jeff⟧软件升级之后稳定多了。",
+        "target_span": {
+          "start": 0,
+          "end": 4,
+          "surface": "jeff"
+        },
+        "occurrences": [
+          {
+            "start": 0,
+            "end": 4,
+            "surface": "jeff"
+          }
+        ],
+        "focus": "jeff软件升级之后稳定多了"
+      }
+    },
+    {
+      "id": "attach-04",
+      "category": "tool_attached_noun",
+      "text": "这个 jeff 插件的快捷键是什么？",
+      "marker_text": "这个 ⟦jeff⟧ 插件的快捷键是什么？",
+      "target_span": {
+        "start": 3,
+        "end": 7,
+        "surface": "jeff"
+      },
+      "target_occurrence_index": 0,
+      "occurrences": [
+        {
+          "start": 3,
+          "end": 7,
+          "surface": "jeff"
+        }
+      ],
+      "focus": "这个 jeff 插件的快捷键是什么",
+      "context": "",
+      "expected": "tool",
+      "expected_reason": "插件名。",
+      "guard_expected": "ask",
+      "alt": {
+        "text": "这个 jeff 插件支持快捷键吗？",
+        "marker_text": "这个 ⟦jeff⟧ 插件支持快捷键吗？",
+        "target_span": {
+          "start": 3,
+          "end": 7,
+          "surface": "jeff"
+        },
+        "occurrences": [
+          {
+            "start": 3,
+            "end": 7,
+            "surface": "jeff"
+          }
+        ],
+        "focus": "这个 jeff 插件支持快捷键吗"
+      }
+    },
+    {
+      "id": "attach-05",
+      "category": "tool_attached_noun",
+      "text": "jeff 服务端和客户端要一起升级。",
+      "marker_text": "⟦jeff⟧ 服务端和客户端要一起升级。",
+      "target_span": {
+        "start": 0,
+        "end": 4,
+        "surface": "jeff"
+      },
+      "target_occurrence_index": 0,
+      "occurrences": [
+        {
+          "start": 0,
+          "end": 4,
+          "surface": "jeff"
+        }
+      ],
+      "focus": "jeff 服务端和客户端要一起升级",
+      "context": "",
+      "expected": "tool",
+      "expected_reason": "服务端/客户端都是软件部分。",
+      "guard_expected": "ask",
+      "alt": {
+        "text": "jeff 服务器和客户端版本要对齐。",
+        "marker_text": "⟦jeff⟧ 服务器和客户端版本要对齐。",
+        "target_span": {
+          "start": 0,
+          "end": 4,
+          "surface": "jeff"
+        },
+        "occurrences": [
+          {
+            "start": 0,
+            "end": 4,
+            "surface": "jeff"
+          }
+        ],
+        "focus": "jeff 服务器和客户端版本要对齐"
+      }
+    },
+    {
+      "id": "guard-repeat-01",
+      "category": "guard_structural",
+      "text": "打开 jeff 之后再关闭 jeff，看看状态还在不在。",
+      "marker_text": "打开 ⟦jeff⟧ 之后再关闭 jeff，看看状态还在不在。",
+      "target_span": {
+        "start": 3,
+        "end": 7,
+        "surface": "jeff"
+      },
+      "target_occurrence_index": 0,
+      "occurrences": [
+        {
+          "start": 3,
+          "end": 7,
+          "surface": "jeff"
+        },
+        {
+          "start": 14,
+          "end": 18,
+          "surface": "jeff"
+        }
+      ],
+      "focus": "打开 jeff 之后再关闭 jeff",
+      "context": "",
+      "expected": "tool",
+      "expected_reason": "同一小句重复同一别名，产品整体弃权；目标所指为软件。",
+      "guard_expected": "skip_repeat_in_clause",
+      "alt": {
+        "text": "先启动 jeff 再停掉 jeff，观察一下状态。",
+        "marker_text": "先启动 ⟦jeff⟧ 再停掉 jeff，观察一下状态。",
+        "target_span": {
+          "start": 4,
+          "end": 8,
+          "surface": "jeff"
+        },
+        "occurrences": [
+          {
+            "start": 4,
+            "end": 8,
+            "surface": "jeff"
+          },
+          {
+            "start": 13,
+            "end": 17,
+            "surface": "jeff"
+          }
+        ],
+        "focus": "先启动 jeff 再停掉 jeff"
+      },
+      "exclude_from_raw_accuracy": true,
+      "exclude_from_raw_accuracy_reason": "同小句内同一别名出现多次，产品不请求也不改写；只保留结构保护重放测试。"
+    },
+    {
+      "id": "guard-protected-01",
+      "category": "guard_structural",
+      "text": "运行 `jeff 工具` 之前先看一遍文档。",
+      "marker_text": "运行 `⟦jeff⟧ 工具` 之前先看一遍文档。",
+      "target_span": {
+        "start": 4,
+        "end": 8,
+        "surface": "jeff"
+      },
+      "target_occurrence_index": 0,
+      "occurrences": [
+        {
+          "start": 4,
+          "end": 8,
+          "surface": "jeff"
+        }
+      ],
+      "focus": "运行 `jeff 工具` 之前先看一遍文档",
+      "context": "",
+      "expected": "tool",
+      "expected_reason": "反引号代码片段受保护，产品不改写；所指为软件。",
+      "guard_expected": "skip_protected",
+      "alt": {
+        "text": "执行 `jeff 程序` 前先读一遍说明。",
+        "marker_text": "执行 `⟦jeff⟧ 程序` 前先读一遍说明。",
+        "target_span": {
+          "start": 4,
+          "end": 8,
+          "surface": "jeff"
+        },
+        "occurrences": [
+          {
+            "start": 4,
+            "end": 8,
+            "surface": "jeff"
+          }
+        ],
+        "focus": "执行 `jeff 程序` 前先读一遍说明"
+      }
+    },
+    {
+      "id": "unclear-01",
+      "category": "genuine_unclear",
+      "text": "jeff 那边有消息了吗？",
+      "marker_text": "⟦jeff⟧ 那边有消息了吗？",
+      "target_span": {
+        "start": 0,
+        "end": 4,
+        "surface": "jeff"
+      },
+      "target_occurrence_index": 0,
+      "occurrences": [
+        {
+          "start": 0,
+          "end": 4,
+          "surface": "jeff"
+        }
+      ],
+      "focus": "jeff 那边有消息了吗",
+      "context": "",
+      "expected": "unclear",
+      "expected_reason": "人和软件都说得通，弃权最合理。",
+      "guard_expected": "skip_no_cue",
+      "alt": {
+        "text": "Jeff 那边有回复了吗？",
+        "marker_text": "⟦Jeff⟧ 那边有回复了吗？",
+        "target_span": {
+          "start": 0,
+          "end": 4,
+          "surface": "Jeff"
+        },
+        "occurrences": [
+          {
+            "start": 0,
+            "end": 4,
+            "surface": "Jeff"
+          }
+        ],
+        "focus": "Jeff 那边有回复了吗"
+      }
+    },
+    {
+      "id": "unclear-02",
+      "category": "genuine_unclear",
+      "text": "关于 jeff，我们晚点再聊。",
+      "marker_text": "关于 ⟦jeff⟧，我们晚点再聊。",
+      "target_span": {
+        "start": 3,
+        "end": 7,
+        "surface": "jeff"
+      },
+      "target_occurrence_index": 0,
+      "occurrences": [
+        {
+          "start": 3,
+          "end": 7,
+          "surface": "jeff"
+        }
+      ],
+      "focus": "关于 jeff",
+      "context": "",
+      "expected": "unclear",
+      "expected_reason": "语境不足。",
+      "guard_expected": "skip_no_cue",
+      "alt": {
+        "text": "Jeff 的事改天再说。",
+        "marker_text": "⟦Jeff⟧ 的事改天再说。",
+        "target_span": {
+          "start": 0,
+          "end": 4,
+          "surface": "Jeff"
+        },
+        "occurrences": [
+          {
+            "start": 0,
+            "end": 4,
+            "surface": "Jeff"
+          }
+        ],
+        "focus": "Jeff 的事改天再说"
+      }
+    },
+    {
+      "id": "unclear-03",
+      "category": "genuine_unclear",
+      "text": "你觉得 jeff 靠谱吗？",
+      "marker_text": "你觉得 ⟦jeff⟧ 靠谱吗？",
+      "target_span": {
+        "start": 4,
+        "end": 8,
+        "surface": "jeff"
+      },
+      "target_occurrence_index": 0,
+      "occurrences": [
+        {
+          "start": 4,
+          "end": 8,
+          "surface": "jeff"
+        }
+      ],
+      "focus": "你觉得 jeff 靠谱吗",
+      "context": "",
+      "expected": "unclear",
+      "expected_reason": "可以问人也可以问软件，弃权。",
+      "guard_expected": "skip_no_cue",
+      "alt": {
+        "text": "你觉得 Jeff 还行吗？",
+        "marker_text": "你觉得 ⟦Jeff⟧ 还行吗？",
+        "target_span": {
+          "start": 4,
+          "end": 8,
+          "surface": "Jeff"
+        },
+        "occurrences": [
+          {
+            "start": 4,
+            "end": 8,
+            "surface": "Jeff"
+          }
+        ],
+        "focus": "你觉得 Jeff 还行吗"
+      }
+    }
+  ],
+  "raw_accuracy_exclusion_policy": {
+    "rule": "同一小句内同一别名出现多次、无法明确指向哪一次的结构跳过样例（guard_expected=skip_repeat_in_clause）不纳入原始 role 准确率；它们仍保留在结构保护重放测试里。",
+    "reason": "产品对这些句子整体弃权、不会发 role 请求，模型答案不是产品会问的问题，计入准确率会虚增难度口径。",
+    "field": "exclude_from_raw_accuracy"
+  }
+}

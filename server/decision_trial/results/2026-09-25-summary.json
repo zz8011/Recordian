@@ -1,0 +1,2293 @@
+{
+  "measured_on": "2026-09-25 Asia/Shanghai",
+  "hardware": "AMD Ryzen AI MAX+ 395 / Radeon 8060S gfx1151, LAN host 192.168.5.111",
+  "scope": "Synthetic Chinese and mixed Chinese-English jeff/jev semantic-role decisions; product structural guards and 0.70/0.20 acceptance gate replay. No audio, IME, concurrency or product deadline execution.",
+  "corpus_sha256": "a67316a08e4a88215b63ac1cfe897015ee30bdbf34a3234f8f1657d8fd2f6f17",
+  "unique_main_and_alt_cases": 198,
+  "repeat_round_used_for_selection": false,
+  "diagnostic_http_timeout_s": 3.0,
+  "replayed_budget_ms": 350,
+  "models": [
+    {
+      "report_file": "semif-baseline-final.json",
+      "report_sha256": "3f7bf3f39553f7d836b36e69968f78f5f5f22abae954140b4431fdcd17cbeee6",
+      "temperature": {
+        "temperature_sent": null,
+        "temperature_sent_note": "顶层 temperature/model 不发送：产品 semif_judge.request_choices 的 payload 只有 state/questions；SemIf、Winnow、Decider 对这两个顶层字段的含义各不相同，不盲目发送。",
+        "effective_temperature": 1.0,
+        "temperature_source": "read-only inspection: serve.py sha256=0e80ff0b7192d51d261bc23d2b8d0ec38d5f9903a88efc21b5c1cf415060a531 applies softmax(raw logits) with no temperature scaling; semif-logits.cpp sha256=0c31f41821936d86881bd1e290726015c055f3e764a5a0fb01094d96dcf8faf7 emits raw last-position logits",
+        "verified": true,
+        "invalid_cli_value": null,
+        "release_configuration_note": "各模型按各自发布配置比较实际产品行为；没有强制统一温度，因此这不是校准精度比较。"
+      },
+      "combined_unique": {
+        "role_correct": 119,
+        "role_eligible": 192,
+        "tool_accepted": 69,
+        "tool_eligible": 92,
+        "false_edits": 9,
+        "negative_cases": 90
+      },
+      "round_metrics": [
+        {
+          "round_type": "cold_unique",
+          "metrics": {
+            "n_cases": 99,
+            "responses": {
+              "final_ok": 99,
+              "final_error": 0,
+              "final_error_rate": 0.0,
+              "timeout": 0,
+              "timeout_rate": 0.0,
+              "first_attempt_ok": 99,
+              "first_attempt_error_rate": 0.0,
+              "recovered_by_retry": 0,
+              "error_kinds": {},
+              "bad_distribution_n": 0,
+              "debug_choice_not_counted_n": 0,
+              "debug_choice_not_counted_ids": []
+            },
+            "model_raw": {
+              "answered_n": 99,
+              "answer_coverage": 1.0,
+              "role_accuracy": 0.615,
+              "role_accuracy_eligible_answered_n": 96,
+              "role_accuracy_all_answered": 0.616,
+              "raw_accuracy_excluded_n": 3,
+              "raw_accuracy_excluded_ids": [
+                "mixed-05",
+                "mixed-06",
+                "guard-repeat-01"
+              ],
+              "dist_valid_n": 99,
+              "dist_invalid_n": 0,
+              "invalid_reasons": {},
+              "confusion": {
+                "tool": {
+                  "tool": 53,
+                  "person": 1
+                },
+                "person": {
+                  "tool": 25,
+                  "person": 8
+                },
+                "unclear": {
+                  "tool": 12
+                }
+              },
+              "per_label": {
+                "tool": {
+                  "support": 54,
+                  "tp": 53,
+                  "fp": 37,
+                  "fn": 1,
+                  "precision": 0.589,
+                  "recall": 0.981,
+                  "f1": 0.736
+                },
+                "person": {
+                  "support": 33,
+                  "tp": 8,
+                  "fp": 1,
+                  "fn": 25,
+                  "precision": 0.889,
+                  "recall": 0.242,
+                  "f1": 0.381
+                },
+                "unclear": {
+                  "support": 12,
+                  "tp": 0,
+                  "fp": 0,
+                  "fn": 12,
+                  "precision": null,
+                  "recall": 0.0,
+                  "f1": null
+                }
+              },
+              "negative_choice_tool_raw_n": 37,
+              "negative_choice_tool_raw_ids": [
+                "person-help-01",
+                "person-help-02",
+                "person-help-03",
+                "person-help-04",
+                "person-help-05",
+                "person-help-06",
+                "person-help-07",
+                "person-help-08",
+                "person-discuss-01",
+                "person-discuss-02",
+                "person-discuss-04",
+                "person-discuss-06",
+                "person-discuss-07",
+                "person-discuss-08",
+                "mixed-01",
+                "mixed-03",
+                "mixed-05",
+                "mixed-07",
+                "case-space-03",
+                "case-space-05",
+                "ctx-person-01",
+                "ctx-person-02",
+                "ctx-person-04",
+                "meta-01",
+                "meta-02",
+                "meta-03",
+                "meta-04",
+                "multi-03",
+                "noc-01",
+                "noc-02",
+                "noc-03",
+                "noc-04",
+                "bg-01",
+                "bg-02",
+                "unclear-01",
+                "unclear-02",
+                "unclear-03"
+              ],
+              "unclear_expected_n": 12,
+              "unclear_answered_unclear": 0,
+              "note": "原始准确率只统计分布合法且有 choice 的回答；坏分布即使带 debug_choice 也不计正确。"
+            },
+            "gate_replay_0_70_0_20": {
+              "scope": "all_requests_counterfactual",
+              "scope_note": "上方 accept_*/reject_weak/unusable_bad_distribution/no_answer_error 的计数范围是本轮全部 HTTP 记录，包含结构保护本会跳过、产品不会发出的反事实请求，因此不等于产品路径结果。产品路径请用 ask_subset_*（guard_replay==ask 子集）与 rewrite_replay，全局数与 ask 子集数不可相加。",
+              "note": "全部请求反事实重放：门槛临时复用产品的保守拒绝规则，不是校准正确率。",
+              "ask_subset_note": "ask_subset_* 只统计 guard_replay==ask 的记录（结构保护之后产品真正会发出的请求），与上方全局反事实计数并列展示，不是它的子集加总。",
+              "accept_tool": 53,
+              "accept_person": 0,
+              "accept_unclear": 0,
+              "reject_weak": 46,
+              "unusable_bad_distribution": 0,
+              "no_answer_error": 0,
+              "ask_subset_n": 61,
+              "ask_subset_accept_tool_n": 39,
+              "ask_subset_accept_person_n": 0,
+              "ask_subset_accept_unclear_n": 0,
+              "ask_subset_reject_weak_n": 22,
+              "ask_subset_unusable_bad_distribution_n": 0,
+              "ask_subset_no_answer_error_n": 0
+            },
+            "structural_guard_replay": {
+              "available": true,
+              "unavailable_n": 0,
+              "unavailable_ids": [],
+              "unavailable_reason": null,
+              "ask_n": 61,
+              "skip_n": 38,
+              "skip_kinds": {
+                "skip_meta": 2,
+                "skip_negation": 6,
+                "skip_no_cue": 12,
+                "skip_person": 14,
+                "skip_protected": 1,
+                "skip_repeat_in_clause": 3
+              },
+              "note": "结构保护来自产品函数重放，不是完整流式 correction / IME 路径。"
+            },
+            "rewrite_replay": {
+              "would_replace_n": 39,
+              "would_replace_correct_n": 34,
+              "would_replace_wrong_n": 5,
+              "would_replace_wrong_ids": [
+                "person-discuss-02",
+                "person-discuss-07",
+                "mixed-07",
+                "ctx-person-01",
+                "ctx-person-04"
+              ],
+              "kept_by_guard_n": 38,
+              "kept_by_gate_n": 22,
+              "without_valid_verdict_n": 0,
+              "unavailable_n": 0,
+              "note": "这是结构保护 + 概率门槛重放结论，不是线上真实改写，也没有运行 IME。"
+            },
+            "expected_tool": {
+              "total_n": 54,
+              "raw_choice_tool_n": 53,
+              "gate_accepted_tool_counterfactual_n": 41,
+              "ask_eligible_n": 46,
+              "ask_eligible_accepted_n": 34,
+              "ask_eligible_accepted_ids": [
+                "tool-install-01",
+                "tool-install-02",
+                "tool-start-01",
+                "tool-start-02",
+                "tool-run-01",
+                "tool-upgrade-01",
+                "tool-uninstall-01",
+                "tool-deploy-01",
+                "tool-model-02",
+                "tool-server-02",
+                "tool-server-03",
+                "tool-model-03",
+                "mixed-02",
+                "mixed-04",
+                "mixed-08",
+                "case-space-01",
+                "case-space-02",
+                "case-space-04",
+                "case-space-06",
+                "ctx-tool-01",
+                "ctx-tool-02",
+                "quote-01",
+                "quote-02",
+                "quote-03",
+                "meta-05",
+                "mix-02",
+                "mix-05",
+                "mix-06",
+                "multi-01",
+                "multi-04",
+                "multi-05",
+                "attach-01",
+                "attach-03",
+                "attach-04"
+              ],
+              "ask_eligible_not_accepted_n": 12,
+              "ask_eligible_no_valid_verdict_n": 0,
+              "ask_eligible_no_valid_verdict_ids": [],
+              "ask_eligible_no_valid_verdict_note": "只计 response 错误或分布不合法；分布合法的弱分布拒绝另计 ask_eligible_weak_rejected_n（不是无有效判定）。",
+              "ask_eligible_weak_rejected_n": 12,
+              "ask_eligible_weak_rejected_ids": [
+                "tool-config-01",
+                "tool-update-01",
+                "tool-model-01",
+                "tool-server-01",
+                "tool-latency-01",
+                "tool-endpoint-01",
+                "tool-log-01",
+                "mix-03",
+                "multi-02",
+                "bg-04",
+                "attach-02",
+                "attach-05"
+              ],
+              "ask_eligible_rejected_non_tool_n": 0,
+              "ask_eligible_rejected_non_tool_ids": [],
+              "guard_skipped_n": 8,
+              "guard_skipped_ids": [
+                "mixed-06",
+                "neg-01",
+                "neg-02",
+                "neg-03",
+                "neg-04",
+                "neg-05",
+                "guard-repeat-01",
+                "guard-protected-01"
+              ],
+              "unavailable_n": 0,
+              "unavailable_ids": [],
+              "guard_skipped_note": "结构保护重放不发请求，因此不算“未修正错误”。",
+              "note": "分母分开：总 tool 数 = guard=ask 子集 + 结构保护跳过 + 不可用；ask 子集内四分：被门槛接受（重放命中改写） + 弱分布拒绝 + 非 tool 合法判定 + 无有效判定（错误/坏分布）。弱分布拒绝是产品的合法保守结果，不计入无有效判定。"
+            },
+            "negatives_person_unclear": {
+              "n": 45,
+              "ask_eligible_n": 15,
+              "effectively_judged_n": 15,
+              "effective_wrong_replay_edit_n": 5,
+              "effective_wrong_replay_edit_ids": [
+                "person-discuss-02",
+                "person-discuss-07",
+                "mixed-07",
+                "ctx-person-01",
+                "ctx-person-04"
+              ],
+              "judged_but_weak_rejected_n": 10,
+              "judged_but_weak_rejected_ids": [
+                "person-help-05",
+                "person-help-06",
+                "person-help-07",
+                "person-discuss-04",
+                "person-discuss-05",
+                "person-discuss-06",
+                "ctx-person-02",
+                "ctx-person-03",
+                "mix-01",
+                "mix-04"
+              ],
+              "model_correct_abstain_n": 0,
+              "model_correct_abstain_ids": [],
+              "no_valid_verdict_n": 0,
+              "no_valid_verdict_ids": [],
+              "guard_skipped_n": 30,
+              "unavailable_n": 0,
+              "unavailable_ids": [],
+              "safe_keep_n": 40,
+              "kept_correct_n": 40,
+              "safe_keep_weak_rejected_n": 10,
+              "note": "ask_eligible_n 直接按 guard_replay==ask 取负例记录（= 有效判断 + 无有效判定），weak 是有效判断的合法分布子集，不得再加一次。“有效判断误改”只统计分布合法且门槛接受 tool 的负例；合法的弱分布拒绝（reject_weak）计入 safe_keep_n/kept_correct_n（= 安全保留），但那是产品保守门槛兜底，不算模型识别正确（模型识别正确只数 model_correct_abstain_n：分布合法且门槛给出 person/unclear）。错误与坏分布 correctness=null，既不算模型正确弃权，也不算安全保留。"
+            },
+            "budget": {
+              "budget_ms": 350.0,
+              "ask_n": 61,
+              "legal_n": 61,
+              "within_budget_legal_n": 61,
+              "within_budget_legal_ratio_of_ask": 1.0,
+              "within_budget_legal_ratio_of_legal": 1.0,
+              "within_budget_correct_tool_n": 34,
+              "within_budget_correct_tool_ids": [
+                "tool-install-01",
+                "tool-install-02",
+                "tool-start-01",
+                "tool-start-02",
+                "tool-run-01",
+                "tool-upgrade-01",
+                "tool-uninstall-01",
+                "tool-deploy-01",
+                "tool-model-02",
+                "tool-server-02",
+                "tool-server-03",
+                "tool-model-03",
+                "mixed-02",
+                "mixed-04",
+                "mixed-08",
+                "case-space-01",
+                "case-space-02",
+                "case-space-04",
+                "case-space-06",
+                "ctx-tool-01",
+                "ctx-tool-02",
+                "quote-01",
+                "quote-02",
+                "quote-03",
+                "meta-05",
+                "mix-02",
+                "mix-05",
+                "mix-06",
+                "multi-01",
+                "multi-04",
+                "multi-05",
+                "attach-01",
+                "attach-03",
+                "attach-04"
+              ],
+              "within_budget_wrong_replay_edit_n": 5,
+              "within_budget_wrong_replay_edit_ids": [
+                "person-discuss-02",
+                "person-discuss-07",
+                "mixed-07",
+                "ctx-person-01",
+                "ctx-person-04"
+              ],
+              "over_budget_n": 0,
+              "over_budget_ids": [],
+              "error_n": 0,
+              "error_ids": [],
+              "note": "预算只做统计：本工具没有向产品注入 350ms deadline，也没有运行产品的异步 deadline / IME 路径。“合法”= 最终 ok、分布合法、payload 参数核对通过；超时与错误按真实耗时计入 over_budget/error，不会让速度看起来更快。"
+            },
+            "latency": {
+              "successful_requests": {
+                "n": 99,
+                "p50_ms": 149.705,
+                "p95_ms": 163.447,
+                "max_ms": 171.944
+              },
+              "all_requests": {
+                "n": 99,
+                "p50_ms": 149.705,
+                "p95_ms": 163.447,
+                "max_ms": 171.944,
+                "note": "含失败/超时请求的真实耗时，失败不会被剔除，避免速度看起来更快。"
+              },
+              "failed_requests": {
+                "n": 0,
+                "p50_ms": null,
+                "p95_ms": null,
+                "max_ms": null
+              },
+              "all_attempts": {
+                "n": 99,
+                "p50_ms": 149.705,
+                "p95_ms": 163.447,
+                "max_ms": 171.944
+              },
+              "server_engine_ms": {
+                "n": 99,
+                "p50_ms": 102.0,
+                "p95_ms": 116.0,
+                "max_ms": 125.0
+              }
+            },
+            "latency_note": "每句唯一，cold-ish：服务可能已被其他调用预热。",
+            "is_repeat_of_identical_sentences": false
+          }
+        },
+        {
+          "round_type": "warm_new",
+          "metrics": {
+            "n_cases": 99,
+            "responses": {
+              "final_ok": 99,
+              "final_error": 0,
+              "final_error_rate": 0.0,
+              "timeout": 0,
+              "timeout_rate": 0.0,
+              "first_attempt_ok": 99,
+              "first_attempt_error_rate": 0.0,
+              "recovered_by_retry": 0,
+              "error_kinds": {},
+              "bad_distribution_n": 0,
+              "debug_choice_not_counted_n": 0,
+              "debug_choice_not_counted_ids": []
+            },
+            "model_raw": {
+              "answered_n": 99,
+              "answer_coverage": 1.0,
+              "role_accuracy": 0.625,
+              "role_accuracy_eligible_answered_n": 96,
+              "role_accuracy_all_answered": 0.626,
+              "raw_accuracy_excluded_n": 3,
+              "raw_accuracy_excluded_ids": [
+                "mixed-05#alt",
+                "mixed-06#alt",
+                "guard-repeat-01#alt"
+              ],
+              "dist_valid_n": 99,
+              "dist_invalid_n": 0,
+              "invalid_reasons": {},
+              "confusion": {
+                "tool": {
+                  "tool": 54
+                },
+                "person": {
+                  "tool": 26,
+                  "person": 7
+                },
+                "unclear": {
+                  "tool": 11,
+                  "unclear": 1
+                }
+              },
+              "per_label": {
+                "tool": {
+                  "support": 54,
+                  "tp": 54,
+                  "fp": 37,
+                  "fn": 0,
+                  "precision": 0.593,
+                  "recall": 1.0,
+                  "f1": 0.745
+                },
+                "person": {
+                  "support": 33,
+                  "tp": 7,
+                  "fp": 0,
+                  "fn": 26,
+                  "precision": 1.0,
+                  "recall": 0.212,
+                  "f1": 0.35
+                },
+                "unclear": {
+                  "support": 12,
+                  "tp": 1,
+                  "fp": 0,
+                  "fn": 11,
+                  "precision": 1.0,
+                  "recall": 0.083,
+                  "f1": 0.154
+                }
+              },
+              "negative_choice_tool_raw_n": 37,
+              "negative_choice_tool_raw_ids": [
+                "person-help-01#alt",
+                "person-help-02#alt",
+                "person-help-03#alt",
+                "person-help-04#alt",
+                "person-help-05#alt",
+                "person-help-06#alt",
+                "person-help-07#alt",
+                "person-help-08#alt",
+                "person-discuss-01#alt",
+                "person-discuss-02#alt",
+                "person-discuss-04#alt",
+                "person-discuss-06#alt",
+                "person-discuss-07#alt",
+                "person-discuss-08#alt",
+                "mixed-01#alt",
+                "mixed-03#alt",
+                "mixed-05#alt",
+                "mixed-07#alt",
+                "case-space-03#alt",
+                "case-space-05#alt",
+                "ctx-person-01#alt",
+                "ctx-person-02#alt",
+                "ctx-person-04#alt",
+                "meta-01#alt",
+                "meta-02#alt",
+                "meta-03#alt",
+                "meta-04#alt",
+                "mix-04#alt",
+                "noc-01#alt",
+                "noc-02#alt",
+                "noc-03#alt",
+                "noc-04#alt",
+                "bg-01#alt",
+                "bg-02#alt",
+                "unclear-01#alt",
+                "unclear-02#alt",
+                "unclear-03#alt"
+              ],
+              "unclear_expected_n": 12,
+              "unclear_answered_unclear": 1,
+              "note": "原始准确率只统计分布合法且有 choice 的回答；坏分布即使带 debug_choice 也不计正确。"
+            },
+            "gate_replay_0_70_0_20": {
+              "scope": "all_requests_counterfactual",
+              "scope_note": "上方 accept_*/reject_weak/unusable_bad_distribution/no_answer_error 的计数范围是本轮全部 HTTP 记录，包含结构保护本会跳过、产品不会发出的反事实请求，因此不等于产品路径结果。产品路径请用 ask_subset_*（guard_replay==ask 子集）与 rewrite_replay，全局数与 ask 子集数不可相加。",
+              "note": "全部请求反事实重放：门槛临时复用产品的保守拒绝规则，不是校准正确率。",
+              "ask_subset_note": "ask_subset_* 只统计 guard_replay==ask 的记录（结构保护之后产品真正会发出的请求），与上方全局反事实计数并列展示，不是它的子集加总。",
+              "accept_tool": 54,
+              "accept_person": 0,
+              "accept_unclear": 0,
+              "reject_weak": 45,
+              "unusable_bad_distribution": 0,
+              "no_answer_error": 0,
+              "ask_subset_n": 60,
+              "ask_subset_accept_tool_n": 39,
+              "ask_subset_accept_person_n": 0,
+              "ask_subset_accept_unclear_n": 0,
+              "ask_subset_reject_weak_n": 21,
+              "ask_subset_unusable_bad_distribution_n": 0,
+              "ask_subset_no_answer_error_n": 0
+            },
+            "structural_guard_replay": {
+              "available": true,
+              "unavailable_n": 0,
+              "unavailable_ids": [],
+              "unavailable_reason": null,
+              "ask_n": 60,
+              "skip_n": 39,
+              "skip_kinds": {
+                "skip_meta": 2,
+                "skip_negation": 7,
+                "skip_no_cue": 12,
+                "skip_person": 14,
+                "skip_protected": 1,
+                "skip_repeat_in_clause": 3
+              },
+              "note": "结构保护来自产品函数重放，不是完整流式 correction / IME 路径。"
+            },
+            "rewrite_replay": {
+              "would_replace_n": 39,
+              "would_replace_correct_n": 35,
+              "would_replace_wrong_n": 4,
+              "would_replace_wrong_ids": [
+                "person-help-07#alt",
+                "person-discuss-07#alt",
+                "ctx-person-01#alt",
+                "ctx-person-04#alt"
+              ],
+              "kept_by_guard_n": 39,
+              "kept_by_gate_n": 21,
+              "without_valid_verdict_n": 0,
+              "unavailable_n": 0,
+              "note": "这是结构保护 + 概率门槛重放结论，不是线上真实改写，也没有运行 IME。"
+            },
+            "expected_tool": {
+              "total_n": 54,
+              "raw_choice_tool_n": 54,
+              "gate_accepted_tool_counterfactual_n": 41,
+              "ask_eligible_n": 46,
+              "ask_eligible_accepted_n": 35,
+              "ask_eligible_accepted_ids": [
+                "tool-install-01#alt",
+                "tool-install-02#alt",
+                "tool-start-01#alt",
+                "tool-run-01#alt",
+                "tool-upgrade-01#alt",
+                "tool-uninstall-01#alt",
+                "tool-update-01#alt",
+                "tool-model-01#alt",
+                "tool-model-02#alt",
+                "tool-server-02#alt",
+                "tool-model-03#alt",
+                "mixed-02#alt",
+                "mixed-04#alt",
+                "mixed-08#alt",
+                "case-space-01#alt",
+                "case-space-02#alt",
+                "case-space-04#alt",
+                "case-space-06#alt",
+                "ctx-tool-02#alt",
+                "quote-01#alt",
+                "quote-02#alt",
+                "quote-03#alt",
+                "meta-05#alt",
+                "mix-02#alt",
+                "mix-05#alt",
+                "mix-06#alt",
+                "multi-01#alt",
+                "multi-02#alt",
+                "multi-04#alt",
+                "multi-05#alt",
+                "bg-04#alt",
+                "attach-01#alt",
+                "attach-03#alt",
+                "attach-04#alt",
+                "attach-05#alt"
+              ],
+              "ask_eligible_not_accepted_n": 11,
+              "ask_eligible_no_valid_verdict_n": 0,
+              "ask_eligible_no_valid_verdict_ids": [],
+              "ask_eligible_no_valid_verdict_note": "只计 response 错误或分布不合法；分布合法的弱分布拒绝另计 ask_eligible_weak_rejected_n（不是无有效判定）。",
+              "ask_eligible_weak_rejected_n": 11,
+              "ask_eligible_weak_rejected_ids": [
+                "tool-start-02#alt",
+                "tool-config-01#alt",
+                "tool-deploy-01#alt",
+                "tool-server-01#alt",
+                "tool-server-03#alt",
+                "tool-latency-01#alt",
+                "tool-endpoint-01#alt",
+                "tool-log-01#alt",
+                "ctx-tool-01#alt",
+                "mix-03#alt",
+                "attach-02#alt"
+              ],
+              "ask_eligible_rejected_non_tool_n": 0,
+              "ask_eligible_rejected_non_tool_ids": [],
+              "guard_skipped_n": 8,
+              "guard_skipped_ids": [
+                "mixed-06#alt",
+                "neg-01#alt",
+                "neg-02#alt",
+                "neg-03#alt",
+                "neg-04#alt",
+                "neg-05#alt",
+                "guard-repeat-01#alt",
+                "guard-protected-01#alt"
+              ],
+              "unavailable_n": 0,
+              "unavailable_ids": [],
+              "guard_skipped_note": "结构保护重放不发请求，因此不算“未修正错误”。",
+              "note": "分母分开：总 tool 数 = guard=ask 子集 + 结构保护跳过 + 不可用；ask 子集内四分：被门槛接受（重放命中改写） + 弱分布拒绝 + 非 tool 合法判定 + 无有效判定（错误/坏分布）。弱分布拒绝是产品的合法保守结果，不计入无有效判定。"
+            },
+            "negatives_person_unclear": {
+              "n": 45,
+              "ask_eligible_n": 14,
+              "effectively_judged_n": 14,
+              "effective_wrong_replay_edit_n": 4,
+              "effective_wrong_replay_edit_ids": [
+                "person-help-07#alt",
+                "person-discuss-07#alt",
+                "ctx-person-01#alt",
+                "ctx-person-04#alt"
+              ],
+              "judged_but_weak_rejected_n": 10,
+              "judged_but_weak_rejected_ids": [
+                "person-help-06#alt",
+                "person-discuss-02#alt",
+                "person-discuss-04#alt",
+                "person-discuss-05#alt",
+                "person-discuss-06#alt",
+                "mixed-07#alt",
+                "ctx-person-02#alt",
+                "ctx-person-03#alt",
+                "mix-01#alt",
+                "mix-04#alt"
+              ],
+              "model_correct_abstain_n": 0,
+              "model_correct_abstain_ids": [],
+              "no_valid_verdict_n": 0,
+              "no_valid_verdict_ids": [],
+              "guard_skipped_n": 31,
+              "unavailable_n": 0,
+              "unavailable_ids": [],
+              "safe_keep_n": 41,
+              "kept_correct_n": 41,
+              "safe_keep_weak_rejected_n": 10,
+              "note": "ask_eligible_n 直接按 guard_replay==ask 取负例记录（= 有效判断 + 无有效判定），weak 是有效判断的合法分布子集，不得再加一次。“有效判断误改”只统计分布合法且门槛接受 tool 的负例；合法的弱分布拒绝（reject_weak）计入 safe_keep_n/kept_correct_n（= 安全保留），但那是产品保守门槛兜底，不算模型识别正确（模型识别正确只数 model_correct_abstain_n：分布合法且门槛给出 person/unclear）。错误与坏分布 correctness=null，既不算模型正确弃权，也不算安全保留。"
+            },
+            "budget": {
+              "budget_ms": 350.0,
+              "ask_n": 60,
+              "legal_n": 60,
+              "within_budget_legal_n": 60,
+              "within_budget_legal_ratio_of_ask": 1.0,
+              "within_budget_legal_ratio_of_legal": 1.0,
+              "within_budget_correct_tool_n": 35,
+              "within_budget_correct_tool_ids": [
+                "tool-install-01#alt",
+                "tool-install-02#alt",
+                "tool-start-01#alt",
+                "tool-run-01#alt",
+                "tool-upgrade-01#alt",
+                "tool-uninstall-01#alt",
+                "tool-update-01#alt",
+                "tool-model-01#alt",
+                "tool-model-02#alt",
+                "tool-server-02#alt",
+                "tool-model-03#alt",
+                "mixed-02#alt",
+                "mixed-04#alt",
+                "mixed-08#alt",
+                "case-space-01#alt",
+                "case-space-02#alt",
+                "case-space-04#alt",
+                "case-space-06#alt",
+                "ctx-tool-02#alt",
+                "quote-01#alt",
+                "quote-02#alt",
+                "quote-03#alt",
+                "meta-05#alt",
+                "mix-02#alt",
+                "mix-05#alt",
+                "mix-06#alt",
+                "multi-01#alt",
+                "multi-02#alt",
+                "multi-04#alt",
+                "multi-05#alt",
+                "bg-04#alt",
+                "attach-01#alt",
+                "attach-03#alt",
+                "attach-04#alt",
+                "attach-05#alt"
+              ],
+              "within_budget_wrong_replay_edit_n": 4,
+              "within_budget_wrong_replay_edit_ids": [
+                "person-help-07#alt",
+                "person-discuss-07#alt",
+                "ctx-person-01#alt",
+                "ctx-person-04#alt"
+              ],
+              "over_budget_n": 0,
+              "over_budget_ids": [],
+              "error_n": 0,
+              "error_ids": [],
+              "note": "预算只做统计：本工具没有向产品注入 350ms deadline，也没有运行产品的异步 deadline / IME 路径。“合法”= 最终 ok、分布合法、payload 参数核对通过；超时与错误按真实耗时计入 over_budget/error，不会让速度看起来更快。"
+            },
+            "latency": {
+              "successful_requests": {
+                "n": 99,
+                "p50_ms": 150.988,
+                "p95_ms": 165.521,
+                "max_ms": 174.398
+              },
+              "all_requests": {
+                "n": 99,
+                "p50_ms": 150.988,
+                "p95_ms": 165.521,
+                "max_ms": 174.398,
+                "note": "含失败/超时请求的真实耗时，失败不会被剔除，避免速度看起来更快。"
+              },
+              "failed_requests": {
+                "n": 0,
+                "p50_ms": null,
+                "p95_ms": null,
+                "max_ms": null
+              },
+              "all_attempts": {
+                "n": 99,
+                "p50_ms": 150.988,
+                "p95_ms": 165.521,
+                "max_ms": 174.398
+              },
+              "server_engine_ms": {
+                "n": 99,
+                "p50_ms": 102.0,
+                "p95_ms": 116.1,
+                "max_ms": 126.0
+              }
+            },
+            "latency_note": "alt 新句子 + 服务已热：新句子延迟参考。",
+            "is_repeat_of_identical_sentences": false
+          }
+        }
+      ]
+    },
+    {
+      "report_file": "winnow-benchmark-final.json",
+      "report_sha256": "f655a819d317edb7427f83e0548b574dfffc63dcaa715a9c43b46ec393e0a13a",
+      "temperature": {
+        "temperature_sent": null,
+        "temperature_sent_note": "顶层 temperature/model 不发送：产品 semif_judge.request_choices 的 payload 只有 state/questions；SemIf、Winnow、Decider 对这两个顶层字段的含义各不相同，不盲目发送。",
+        "effective_temperature": 1.0,
+        "temperature_source": "official config EldanRing/Winnow-12B decision_temperature=1.0, fitted_posthoc_map=false (cited in reports/model-runtime-feasibility.json winnow.decision_temperature); corroborated by live HTTP answers.pick.winnow.temperature=1.0 in reports/winnow-probes.json and llama-server temperature_diagnostics=1.0 / temperature_sent=false in reports/winnow-deployment.json",
+        "verified": true,
+        "invalid_cli_value": null,
+        "release_configuration_note": "每个模型按各自发布配置（含各自发布温度）对照实际产品行为，不强制统一温度；温度不同不禁止对照实际接受/误改/延迟，但概率值不能跨模型当作相同真实置信度，相同温度也不意味着概率已校准。因此这不是校准精度比较。"
+      },
+      "combined_unique": {
+        "role_correct": 124,
+        "role_eligible": 192,
+        "tool_accepted": 70,
+        "tool_eligible": 92,
+        "false_edits": 5,
+        "negative_cases": 90
+      },
+      "round_metrics": [
+        {
+          "round_type": "cold_unique",
+          "metrics": {
+            "n_cases": 99,
+            "responses": {
+              "final_ok": 99,
+              "final_error": 0,
+              "final_error_rate": 0.0,
+              "timeout": 0,
+              "timeout_rate": 0.0,
+              "first_attempt_ok": 99,
+              "first_attempt_error_rate": 0.0,
+              "recovered_by_retry": 0,
+              "error_kinds": {},
+              "bad_distribution_n": 0,
+              "debug_choice_not_counted_n": 0,
+              "debug_choice_not_counted_ids": []
+            },
+            "model_raw": {
+              "answered_n": 99,
+              "answer_coverage": 1.0,
+              "role_accuracy": 0.625,
+              "role_accuracy_eligible_answered_n": 96,
+              "role_accuracy_all_answered": 0.616,
+              "raw_accuracy_excluded_n": 3,
+              "raw_accuracy_excluded_ids": [
+                "mixed-05",
+                "mixed-06",
+                "guard-repeat-01"
+              ],
+              "dist_valid_n": 99,
+              "dist_invalid_n": 0,
+              "invalid_reasons": {},
+              "confusion": {
+                "tool": {
+                  "tool": 47,
+                  "unclear": 5,
+                  "person": 2
+                },
+                "person": {
+                  "person": 8,
+                  "unclear": 16,
+                  "tool": 9
+                },
+                "unclear": {
+                  "tool": 6,
+                  "unclear": 6
+                }
+              },
+              "per_label": {
+                "tool": {
+                  "support": 54,
+                  "tp": 47,
+                  "fp": 15,
+                  "fn": 7,
+                  "precision": 0.758,
+                  "recall": 0.87,
+                  "f1": 0.81
+                },
+                "person": {
+                  "support": 33,
+                  "tp": 8,
+                  "fp": 2,
+                  "fn": 25,
+                  "precision": 0.8,
+                  "recall": 0.242,
+                  "f1": 0.372
+                },
+                "unclear": {
+                  "support": 12,
+                  "tp": 6,
+                  "fp": 21,
+                  "fn": 6,
+                  "precision": 0.222,
+                  "recall": 0.5,
+                  "f1": 0.308
+                }
+              },
+              "negative_choice_tool_raw_n": 15,
+              "negative_choice_tool_raw_ids": [
+                "person-help-05",
+                "person-help-06",
+                "person-discuss-02",
+                "person-discuss-07",
+                "mixed-05",
+                "mixed-07",
+                "case-space-05",
+                "ctx-person-01",
+                "meta-01",
+                "meta-02",
+                "meta-03",
+                "meta-04",
+                "noc-02",
+                "bg-01",
+                "unclear-01"
+              ],
+              "unclear_expected_n": 12,
+              "unclear_answered_unclear": 6,
+              "note": "原始准确率只统计分布合法且有 choice 的回答；坏分布即使带 debug_choice 也不计正确。"
+            },
+            "gate_replay_0_70_0_20": {
+              "scope": "all_requests_counterfactual",
+              "scope_note": "上方 accept_*/reject_weak/unusable_bad_distribution/no_answer_error 的计数范围是本轮全部 HTTP 记录，包含结构保护本会跳过、产品不会发出的反事实请求，因此不等于产品路径结果。产品路径请用 ask_subset_*（guard_replay==ask 子集）与 rewrite_replay，全局数与 ask 子集数不可相加。",
+              "note": "全部请求反事实重放：门槛临时复用产品的保守拒绝规则，不是校准正确率。",
+              "ask_subset_note": "ask_subset_* 只统计 guard_replay==ask 的记录（结构保护之后产品真正会发出的请求），与上方全局反事实计数并列展示，不是它的子集加总。",
+              "accept_tool": 47,
+              "accept_person": 1,
+              "accept_unclear": 14,
+              "reject_weak": 37,
+              "unusable_bad_distribution": 0,
+              "no_answer_error": 0,
+              "ask_subset_n": 61,
+              "ask_subset_accept_tool_n": 37,
+              "ask_subset_accept_person_n": 0,
+              "ask_subset_accept_unclear_n": 2,
+              "ask_subset_reject_weak_n": 22,
+              "ask_subset_unusable_bad_distribution_n": 0,
+              "ask_subset_no_answer_error_n": 0
+            },
+            "structural_guard_replay": {
+              "available": true,
+              "unavailable_n": 0,
+              "unavailable_ids": [],
+              "unavailable_reason": null,
+              "ask_n": 61,
+              "skip_n": 38,
+              "skip_kinds": {
+                "skip_meta": 2,
+                "skip_negation": 6,
+                "skip_no_cue": 12,
+                "skip_person": 14,
+                "skip_protected": 1,
+                "skip_repeat_in_clause": 3
+              },
+              "note": "结构保护来自产品函数重放，不是完整流式 correction / IME 路径。"
+            },
+            "rewrite_replay": {
+              "would_replace_n": 37,
+              "would_replace_correct_n": 35,
+              "would_replace_wrong_n": 2,
+              "would_replace_wrong_ids": [
+                "person-help-05",
+                "ctx-person-01"
+              ],
+              "kept_by_guard_n": 38,
+              "kept_by_gate_n": 24,
+              "without_valid_verdict_n": 0,
+              "unavailable_n": 0,
+              "note": "这是结构保护 + 概率门槛重放结论，不是线上真实改写，也没有运行 IME。"
+            },
+            "expected_tool": {
+              "total_n": 54,
+              "raw_choice_tool_n": 47,
+              "gate_accepted_tool_counterfactual_n": 42,
+              "ask_eligible_n": 46,
+              "ask_eligible_accepted_n": 35,
+              "ask_eligible_accepted_ids": [
+                "tool-install-01",
+                "tool-install-02",
+                "tool-start-01",
+                "tool-start-02",
+                "tool-run-01",
+                "tool-upgrade-01",
+                "tool-uninstall-01",
+                "tool-config-01",
+                "tool-deploy-01",
+                "tool-model-01",
+                "tool-server-01",
+                "tool-server-03",
+                "tool-model-03",
+                "mixed-02",
+                "mixed-04",
+                "mixed-08",
+                "case-space-01",
+                "case-space-02",
+                "case-space-04",
+                "case-space-06",
+                "quote-01",
+                "quote-02",
+                "quote-03",
+                "meta-05",
+                "mix-02",
+                "mix-05",
+                "mix-06",
+                "multi-01",
+                "multi-04",
+                "multi-05",
+                "bg-04",
+                "attach-01",
+                "attach-03",
+                "attach-04",
+                "attach-05"
+              ],
+              "ask_eligible_not_accepted_n": 11,
+              "ask_eligible_no_valid_verdict_n": 0,
+              "ask_eligible_no_valid_verdict_ids": [],
+              "ask_eligible_no_valid_verdict_note": "只计 response 错误或分布不合法；分布合法的弱分布拒绝另计 ask_eligible_weak_rejected_n（不是无有效判定）。",
+              "ask_eligible_weak_rejected_n": 11,
+              "ask_eligible_weak_rejected_ids": [
+                "tool-update-01",
+                "tool-model-02",
+                "tool-server-02",
+                "tool-latency-01",
+                "tool-endpoint-01",
+                "tool-log-01",
+                "ctx-tool-01",
+                "ctx-tool-02",
+                "mix-03",
+                "multi-02",
+                "attach-02"
+              ],
+              "ask_eligible_rejected_non_tool_n": 0,
+              "ask_eligible_rejected_non_tool_ids": [],
+              "guard_skipped_n": 8,
+              "guard_skipped_ids": [
+                "mixed-06",
+                "neg-01",
+                "neg-02",
+                "neg-03",
+                "neg-04",
+                "neg-05",
+                "guard-repeat-01",
+                "guard-protected-01"
+              ],
+              "unavailable_n": 0,
+              "unavailable_ids": [],
+              "guard_skipped_note": "结构保护重放不发请求，因此不算“未修正错误”。",
+              "note": "分母分开：总 tool 数 = guard=ask 子集 + 结构保护跳过 + 不可用；ask 子集内四分：被门槛接受（重放命中改写） + 弱分布拒绝 + 非 tool 合法判定 + 无有效判定（错误/坏分布）。弱分布拒绝是产品的合法保守结果，不计入无有效判定。"
+            },
+            "negatives_person_unclear": {
+              "n": 45,
+              "ask_eligible_n": 15,
+              "effectively_judged_n": 15,
+              "effective_wrong_replay_edit_n": 2,
+              "effective_wrong_replay_edit_ids": [
+                "person-help-05",
+                "ctx-person-01"
+              ],
+              "judged_but_weak_rejected_n": 11,
+              "judged_but_weak_rejected_ids": [
+                "person-help-06",
+                "person-help-07",
+                "person-discuss-02",
+                "person-discuss-06",
+                "person-discuss-07",
+                "mixed-07",
+                "ctx-person-02",
+                "ctx-person-03",
+                "ctx-person-04",
+                "mix-01",
+                "mix-04"
+              ],
+              "model_correct_abstain_n": 2,
+              "model_correct_abstain_ids": [
+                "person-discuss-04",
+                "person-discuss-05"
+              ],
+              "no_valid_verdict_n": 0,
+              "no_valid_verdict_ids": [],
+              "guard_skipped_n": 30,
+              "unavailable_n": 0,
+              "unavailable_ids": [],
+              "safe_keep_n": 43,
+              "kept_correct_n": 43,
+              "safe_keep_weak_rejected_n": 11,
+              "note": "ask_eligible_n 直接按 guard_replay==ask 取负例记录（= 有效判断 + 无有效判定），weak 是有效判断的合法分布子集，不得再加一次。“有效判断误改”只统计分布合法且门槛接受 tool 的负例；合法的弱分布拒绝（reject_weak）计入 safe_keep_n/kept_correct_n（= 安全保留），但那是产品保守门槛兜底，不算模型识别正确（模型识别正确只数 model_correct_abstain_n：分布合法且门槛给出 person/unclear）。错误与坏分布 correctness=null，既不算模型正确弃权，也不算安全保留。"
+            },
+            "budget": {
+              "budget_ms": 350.0,
+              "ask_n": 61,
+              "legal_n": 61,
+              "within_budget_legal_n": 61,
+              "within_budget_legal_ratio_of_ask": 1.0,
+              "within_budget_legal_ratio_of_legal": 1.0,
+              "within_budget_correct_tool_n": 35,
+              "within_budget_correct_tool_ids": [
+                "tool-install-01",
+                "tool-install-02",
+                "tool-start-01",
+                "tool-start-02",
+                "tool-run-01",
+                "tool-upgrade-01",
+                "tool-uninstall-01",
+                "tool-config-01",
+                "tool-deploy-01",
+                "tool-model-01",
+                "tool-server-01",
+                "tool-server-03",
+                "tool-model-03",
+                "mixed-02",
+                "mixed-04",
+                "mixed-08",
+                "case-space-01",
+                "case-space-02",
+                "case-space-04",
+                "case-space-06",
+                "quote-01",
+                "quote-02",
+                "quote-03",
+                "meta-05",
+                "mix-02",
+                "mix-05",
+                "mix-06",
+                "multi-01",
+                "multi-04",
+                "multi-05",
+                "bg-04",
+                "attach-01",
+                "attach-03",
+                "attach-04",
+                "attach-05"
+              ],
+              "within_budget_wrong_replay_edit_n": 2,
+              "within_budget_wrong_replay_edit_ids": [
+                "person-help-05",
+                "ctx-person-01"
+              ],
+              "over_budget_n": 0,
+              "over_budget_ids": [],
+              "error_n": 0,
+              "error_ids": [],
+              "note": "预算只做统计：本工具没有向产品注入 350ms deadline，也没有运行产品的异步 deadline / IME 路径。“合法”= 最终 ok、分布合法、payload 参数核对通过；超时与错误按真实耗时计入 over_budget/error，不会让速度看起来更快。"
+            },
+            "latency": {
+              "successful_requests": {
+                "n": 99,
+                "p50_ms": 303.746,
+                "p95_ms": 321.487,
+                "max_ms": 340.346
+              },
+              "all_requests": {
+                "n": 99,
+                "p50_ms": 303.746,
+                "p95_ms": 321.487,
+                "max_ms": 340.346,
+                "note": "含失败/超时请求的真实耗时，失败不会被剔除，避免速度看起来更快。"
+              },
+              "failed_requests": {
+                "n": 0,
+                "p50_ms": null,
+                "p95_ms": null,
+                "max_ms": null
+              },
+              "all_attempts": {
+                "n": 99,
+                "p50_ms": 303.746,
+                "p95_ms": 321.487,
+                "max_ms": 340.346
+              },
+              "server_engine_ms": {
+                "n": 0,
+                "p50_ms": null,
+                "p95_ms": null,
+                "max_ms": null
+              }
+            },
+            "latency_note": "每句唯一，cold-ish：服务可能已被其他调用预热。",
+            "is_repeat_of_identical_sentences": false
+          }
+        },
+        {
+          "round_type": "warm_new",
+          "metrics": {
+            "n_cases": 99,
+            "responses": {
+              "final_ok": 99,
+              "final_error": 0,
+              "final_error_rate": 0.0,
+              "timeout": 0,
+              "timeout_rate": 0.0,
+              "first_attempt_ok": 99,
+              "first_attempt_error_rate": 0.0,
+              "recovered_by_retry": 0,
+              "error_kinds": {},
+              "bad_distribution_n": 0,
+              "debug_choice_not_counted_n": 0,
+              "debug_choice_not_counted_ids": []
+            },
+            "model_raw": {
+              "answered_n": 99,
+              "answer_coverage": 1.0,
+              "role_accuracy": 0.667,
+              "role_accuracy_eligible_answered_n": 96,
+              "role_accuracy_all_answered": 0.657,
+              "raw_accuracy_excluded_n": 3,
+              "raw_accuracy_excluded_ids": [
+                "mixed-05#alt",
+                "mixed-06#alt",
+                "guard-repeat-01#alt"
+              ],
+              "dist_valid_n": 99,
+              "dist_invalid_n": 0,
+              "invalid_reasons": {},
+              "confusion": {
+                "tool": {
+                  "tool": 48,
+                  "unclear": 3,
+                  "person": 3
+                },
+                "person": {
+                  "tool": 11,
+                  "unclear": 14,
+                  "person": 8
+                },
+                "unclear": {
+                  "tool": 3,
+                  "unclear": 9
+                }
+              },
+              "per_label": {
+                "tool": {
+                  "support": 54,
+                  "tp": 48,
+                  "fp": 14,
+                  "fn": 6,
+                  "precision": 0.774,
+                  "recall": 0.889,
+                  "f1": 0.828
+                },
+                "person": {
+                  "support": 33,
+                  "tp": 8,
+                  "fp": 3,
+                  "fn": 25,
+                  "precision": 0.727,
+                  "recall": 0.242,
+                  "f1": 0.364
+                },
+                "unclear": {
+                  "support": 12,
+                  "tp": 9,
+                  "fp": 17,
+                  "fn": 3,
+                  "precision": 0.346,
+                  "recall": 0.75,
+                  "f1": 0.474
+                }
+              },
+              "negative_choice_tool_raw_n": 14,
+              "negative_choice_tool_raw_ids": [
+                "person-help-01#alt",
+                "person-help-05#alt",
+                "person-help-06#alt",
+                "person-help-08#alt",
+                "person-discuss-02#alt",
+                "person-discuss-07#alt",
+                "mixed-01#alt",
+                "case-space-05#alt",
+                "ctx-person-01#alt",
+                "ctx-person-04#alt",
+                "meta-01#alt",
+                "meta-02#alt",
+                "meta-03#alt",
+                "bg-01#alt"
+              ],
+              "unclear_expected_n": 12,
+              "unclear_answered_unclear": 9,
+              "note": "原始准确率只统计分布合法且有 choice 的回答；坏分布即使带 debug_choice 也不计正确。"
+            },
+            "gate_replay_0_70_0_20": {
+              "scope": "all_requests_counterfactual",
+              "scope_note": "上方 accept_*/reject_weak/unusable_bad_distribution/no_answer_error 的计数范围是本轮全部 HTTP 记录，包含结构保护本会跳过、产品不会发出的反事实请求，因此不等于产品路径结果。产品路径请用 ask_subset_*（guard_replay==ask 子集）与 rewrite_replay，全局数与 ask 子集数不可相加。",
+              "note": "全部请求反事实重放：门槛临时复用产品的保守拒绝规则，不是校准正确率。",
+              "ask_subset_note": "ask_subset_* 只统计 guard_replay==ask 的记录（结构保护之后产品真正会发出的请求），与上方全局反事实计数并列展示，不是它的子集加总。",
+              "accept_tool": 48,
+              "accept_person": 1,
+              "accept_unclear": 14,
+              "reject_weak": 36,
+              "unusable_bad_distribution": 0,
+              "no_answer_error": 0,
+              "ask_subset_n": 60,
+              "ask_subset_accept_tool_n": 38,
+              "ask_subset_accept_person_n": 0,
+              "ask_subset_accept_unclear_n": 2,
+              "ask_subset_reject_weak_n": 20,
+              "ask_subset_unusable_bad_distribution_n": 0,
+              "ask_subset_no_answer_error_n": 0
+            },
+            "structural_guard_replay": {
+              "available": true,
+              "unavailable_n": 0,
+              "unavailable_ids": [],
+              "unavailable_reason": null,
+              "ask_n": 60,
+              "skip_n": 39,
+              "skip_kinds": {
+                "skip_meta": 2,
+                "skip_negation": 7,
+                "skip_no_cue": 12,
+                "skip_person": 14,
+                "skip_protected": 1,
+                "skip_repeat_in_clause": 3
+              },
+              "note": "结构保护来自产品函数重放，不是完整流式 correction / IME 路径。"
+            },
+            "rewrite_replay": {
+              "would_replace_n": 38,
+              "would_replace_correct_n": 35,
+              "would_replace_wrong_n": 3,
+              "would_replace_wrong_ids": [
+                "person-help-06#alt",
+                "person-discuss-07#alt",
+                "ctx-person-01#alt"
+              ],
+              "kept_by_guard_n": 39,
+              "kept_by_gate_n": 22,
+              "without_valid_verdict_n": 0,
+              "unavailable_n": 0,
+              "note": "这是结构保护 + 概率门槛重放结论，不是线上真实改写，也没有运行 IME。"
+            },
+            "expected_tool": {
+              "total_n": 54,
+              "raw_choice_tool_n": 48,
+              "gate_accepted_tool_counterfactual_n": 41,
+              "ask_eligible_n": 46,
+              "ask_eligible_accepted_n": 35,
+              "ask_eligible_accepted_ids": [
+                "tool-install-01#alt",
+                "tool-install-02#alt",
+                "tool-start-01#alt",
+                "tool-run-01#alt",
+                "tool-upgrade-01#alt",
+                "tool-uninstall-01#alt",
+                "tool-deploy-01#alt",
+                "tool-update-01#alt",
+                "tool-model-01#alt",
+                "tool-server-01#alt",
+                "tool-server-02#alt",
+                "tool-server-03#alt",
+                "tool-model-03#alt",
+                "tool-endpoint-01#alt",
+                "mixed-02#alt",
+                "mixed-04#alt",
+                "mixed-08#alt",
+                "case-space-01#alt",
+                "case-space-02#alt",
+                "case-space-06#alt",
+                "quote-01#alt",
+                "quote-02#alt",
+                "quote-03#alt",
+                "meta-05#alt",
+                "mix-02#alt",
+                "mix-05#alt",
+                "mix-06#alt",
+                "multi-01#alt",
+                "multi-04#alt",
+                "multi-05#alt",
+                "bg-04#alt",
+                "attach-01#alt",
+                "attach-03#alt",
+                "attach-04#alt",
+                "attach-05#alt"
+              ],
+              "ask_eligible_not_accepted_n": 11,
+              "ask_eligible_no_valid_verdict_n": 0,
+              "ask_eligible_no_valid_verdict_ids": [],
+              "ask_eligible_no_valid_verdict_note": "只计 response 错误或分布不合法；分布合法的弱分布拒绝另计 ask_eligible_weak_rejected_n（不是无有效判定）。",
+              "ask_eligible_weak_rejected_n": 11,
+              "ask_eligible_weak_rejected_ids": [
+                "tool-start-02#alt",
+                "tool-config-01#alt",
+                "tool-model-02#alt",
+                "tool-latency-01#alt",
+                "tool-log-01#alt",
+                "case-space-04#alt",
+                "ctx-tool-01#alt",
+                "ctx-tool-02#alt",
+                "mix-03#alt",
+                "multi-02#alt",
+                "attach-02#alt"
+              ],
+              "ask_eligible_rejected_non_tool_n": 0,
+              "ask_eligible_rejected_non_tool_ids": [],
+              "guard_skipped_n": 8,
+              "guard_skipped_ids": [
+                "mixed-06#alt",
+                "neg-01#alt",
+                "neg-02#alt",
+                "neg-03#alt",
+                "neg-04#alt",
+                "neg-05#alt",
+                "guard-repeat-01#alt",
+                "guard-protected-01#alt"
+              ],
+              "unavailable_n": 0,
+              "unavailable_ids": [],
+              "guard_skipped_note": "结构保护重放不发请求，因此不算“未修正错误”。",
+              "note": "分母分开：总 tool 数 = guard=ask 子集 + 结构保护跳过 + 不可用；ask 子集内四分：被门槛接受（重放命中改写） + 弱分布拒绝 + 非 tool 合法判定 + 无有效判定（错误/坏分布）。弱分布拒绝是产品的合法保守结果，不计入无有效判定。"
+            },
+            "negatives_person_unclear": {
+              "n": 45,
+              "ask_eligible_n": 14,
+              "effectively_judged_n": 14,
+              "effective_wrong_replay_edit_n": 3,
+              "effective_wrong_replay_edit_ids": [
+                "person-help-06#alt",
+                "person-discuss-07#alt",
+                "ctx-person-01#alt"
+              ],
+              "judged_but_weak_rejected_n": 9,
+              "judged_but_weak_rejected_ids": [
+                "person-help-07#alt",
+                "person-discuss-02#alt",
+                "person-discuss-04#alt",
+                "person-discuss-05#alt",
+                "ctx-person-02#alt",
+                "ctx-person-03#alt",
+                "ctx-person-04#alt",
+                "mix-01#alt",
+                "mix-04#alt"
+              ],
+              "model_correct_abstain_n": 2,
+              "model_correct_abstain_ids": [
+                "person-discuss-06#alt",
+                "mixed-07#alt"
+              ],
+              "no_valid_verdict_n": 0,
+              "no_valid_verdict_ids": [],
+              "guard_skipped_n": 31,
+              "unavailable_n": 0,
+              "unavailable_ids": [],
+              "safe_keep_n": 42,
+              "kept_correct_n": 42,
+              "safe_keep_weak_rejected_n": 9,
+              "note": "ask_eligible_n 直接按 guard_replay==ask 取负例记录（= 有效判断 + 无有效判定），weak 是有效判断的合法分布子集，不得再加一次。“有效判断误改”只统计分布合法且门槛接受 tool 的负例；合法的弱分布拒绝（reject_weak）计入 safe_keep_n/kept_correct_n（= 安全保留），但那是产品保守门槛兜底，不算模型识别正确（模型识别正确只数 model_correct_abstain_n：分布合法且门槛给出 person/unclear）。错误与坏分布 correctness=null，既不算模型正确弃权，也不算安全保留。"
+            },
+            "budget": {
+              "budget_ms": 350.0,
+              "ask_n": 60,
+              "legal_n": 60,
+              "within_budget_legal_n": 60,
+              "within_budget_legal_ratio_of_ask": 1.0,
+              "within_budget_legal_ratio_of_legal": 1.0,
+              "within_budget_correct_tool_n": 35,
+              "within_budget_correct_tool_ids": [
+                "tool-install-01#alt",
+                "tool-install-02#alt",
+                "tool-start-01#alt",
+                "tool-run-01#alt",
+                "tool-upgrade-01#alt",
+                "tool-uninstall-01#alt",
+                "tool-deploy-01#alt",
+                "tool-update-01#alt",
+                "tool-model-01#alt",
+                "tool-server-01#alt",
+                "tool-server-02#alt",
+                "tool-server-03#alt",
+                "tool-model-03#alt",
+                "tool-endpoint-01#alt",
+                "mixed-02#alt",
+                "mixed-04#alt",
+                "mixed-08#alt",
+                "case-space-01#alt",
+                "case-space-02#alt",
+                "case-space-06#alt",
+                "quote-01#alt",
+                "quote-02#alt",
+                "quote-03#alt",
+                "meta-05#alt",
+                "mix-02#alt",
+                "mix-05#alt",
+                "mix-06#alt",
+                "multi-01#alt",
+                "multi-04#alt",
+                "multi-05#alt",
+                "bg-04#alt",
+                "attach-01#alt",
+                "attach-03#alt",
+                "attach-04#alt",
+                "attach-05#alt"
+              ],
+              "within_budget_wrong_replay_edit_n": 3,
+              "within_budget_wrong_replay_edit_ids": [
+                "person-help-06#alt",
+                "person-discuss-07#alt",
+                "ctx-person-01#alt"
+              ],
+              "over_budget_n": 0,
+              "over_budget_ids": [],
+              "error_n": 0,
+              "error_ids": [],
+              "note": "预算只做统计：本工具没有向产品注入 350ms deadline，也没有运行产品的异步 deadline / IME 路径。“合法”= 最终 ok、分布合法、payload 参数核对通过；超时与错误按真实耗时计入 over_budget/error，不会让速度看起来更快。"
+            },
+            "latency": {
+              "successful_requests": {
+                "n": 99,
+                "p50_ms": 304.969,
+                "p95_ms": 323.094,
+                "max_ms": 337.47
+              },
+              "all_requests": {
+                "n": 99,
+                "p50_ms": 304.969,
+                "p95_ms": 323.094,
+                "max_ms": 337.47,
+                "note": "含失败/超时请求的真实耗时，失败不会被剔除，避免速度看起来更快。"
+              },
+              "failed_requests": {
+                "n": 0,
+                "p50_ms": null,
+                "p95_ms": null,
+                "max_ms": null
+              },
+              "all_attempts": {
+                "n": 99,
+                "p50_ms": 304.969,
+                "p95_ms": 323.094,
+                "max_ms": 337.47
+              },
+              "server_engine_ms": {
+                "n": 0,
+                "p50_ms": null,
+                "p95_ms": null,
+                "max_ms": null
+              }
+            },
+            "latency_note": "alt 新句子 + 服务已热：新句子延迟参考。",
+            "is_repeat_of_identical_sentences": false
+          }
+        }
+      ]
+    },
+    {
+      "report_file": "decider-benchmark-final.json",
+      "report_sha256": "6260e4284477eb629107ca4ec4c456d53b00eed859eff7f9e018cddbee6d6d6a",
+      "temperature": {
+        "temperature_sent": null,
+        "temperature_sent_note": "顶层 temperature/model 不发送：产品 semif_judge.request_choices 的 payload 只有 state/questions；SemIf、Winnow、Decider 对这两个顶层字段的含义各不相同，不盲目发送。",
+        "effective_temperature": 1.935,
+        "temperature_source": "reports/decider-deployment.json temperature.effective=1.935; source=decider_config.json temperature + DECIDER_TEMPERATURE env (config version 4b-v2, layout plain, schema_first false); deployment owner read-only verified during deploy on 2026-09-24T20:37Z and recorded in reports/decider-deployment.json (this run additionally re-verified live GET /health 200 device=cuda and GET /v1/models name=decider-4b-v2)",
+        "verified": true,
+        "invalid_cli_value": null,
+        "release_configuration_note": "每个模型按各自发布配置（含各自发布温度）对照实际产品行为，不强制统一温度；温度不同不禁止对照实际接受/误改/延迟，但概率值不能跨模型当作相同真实置信度，相同温度也不意味着概率已校准。因此这不是校准精度比较。"
+      },
+      "combined_unique": {
+        "role_correct": 152,
+        "role_eligible": 192,
+        "tool_accepted": 68,
+        "tool_eligible": 92,
+        "false_edits": 2,
+        "negative_cases": 90
+      },
+      "round_metrics": [
+        {
+          "round_type": "cold_unique",
+          "metrics": {
+            "n_cases": 99,
+            "responses": {
+              "final_ok": 99,
+              "final_error": 0,
+              "final_error_rate": 0.0,
+              "timeout": 0,
+              "timeout_rate": 0.0,
+              "first_attempt_ok": 99,
+              "first_attempt_error_rate": 0.0,
+              "recovered_by_retry": 0,
+              "error_kinds": {},
+              "bad_distribution_n": 0,
+              "debug_choice_not_counted_n": 0,
+              "debug_choice_not_counted_ids": []
+            },
+            "model_raw": {
+              "answered_n": 99,
+              "answer_coverage": 1.0,
+              "role_accuracy": 0.802,
+              "role_accuracy_eligible_answered_n": 96,
+              "role_accuracy_all_answered": 0.808,
+              "raw_accuracy_excluded_n": 3,
+              "raw_accuracy_excluded_ids": [
+                "mixed-05",
+                "mixed-06",
+                "guard-repeat-01"
+              ],
+              "dist_valid_n": 99,
+              "dist_invalid_n": 0,
+              "invalid_reasons": {},
+              "confusion": {
+                "tool": {
+                  "tool": 48,
+                  "person": 6
+                },
+                "person": {
+                  "person": 29,
+                  "tool": 4
+                },
+                "unclear": {
+                  "unclear": 3,
+                  "tool": 4,
+                  "person": 5
+                }
+              },
+              "per_label": {
+                "tool": {
+                  "support": 54,
+                  "tp": 48,
+                  "fp": 8,
+                  "fn": 6,
+                  "precision": 0.857,
+                  "recall": 0.889,
+                  "f1": 0.873
+                },
+                "person": {
+                  "support": 33,
+                  "tp": 29,
+                  "fp": 11,
+                  "fn": 4,
+                  "precision": 0.725,
+                  "recall": 0.879,
+                  "f1": 0.795
+                },
+                "unclear": {
+                  "support": 12,
+                  "tp": 3,
+                  "fp": 0,
+                  "fn": 9,
+                  "precision": 1.0,
+                  "recall": 0.25,
+                  "f1": 0.4
+                }
+              },
+              "negative_choice_tool_raw_n": 8,
+              "negative_choice_tool_raw_ids": [
+                "person-help-08",
+                "case-space-05",
+                "ctx-person-03",
+                "ctx-person-04",
+                "meta-02",
+                "meta-03",
+                "meta-04",
+                "noc-04"
+              ],
+              "unclear_expected_n": 12,
+              "unclear_answered_unclear": 3,
+              "note": "原始准确率只统计分布合法且有 choice 的回答；坏分布即使带 debug_choice 也不计正确。"
+            },
+            "gate_replay_0_70_0_20": {
+              "scope": "all_requests_counterfactual",
+              "scope_note": "上方 accept_*/reject_weak/unusable_bad_distribution/no_answer_error 的计数范围是本轮全部 HTTP 记录，包含结构保护本会跳过、产品不会发出的反事实请求，因此不等于产品路径结果。产品路径请用 ask_subset_*（guard_replay==ask 子集）与 rewrite_replay，全局数与 ask 子集数不可相加。",
+              "note": "全部请求反事实重放：门槛临时复用产品的保守拒绝规则，不是校准正确率。",
+              "ask_subset_note": "ask_subset_* 只统计 guard_replay==ask 的记录（结构保护之后产品真正会发出的请求），与上方全局反事实计数并列展示，不是它的子集加总。",
+              "accept_tool": 46,
+              "accept_person": 28,
+              "accept_unclear": 0,
+              "reject_weak": 25,
+              "unusable_bad_distribution": 0,
+              "no_answer_error": 0,
+              "ask_subset_n": 61,
+              "ask_subset_accept_tool_n": 37,
+              "ask_subset_accept_person_n": 13,
+              "ask_subset_accept_unclear_n": 0,
+              "ask_subset_reject_weak_n": 11,
+              "ask_subset_unusable_bad_distribution_n": 0,
+              "ask_subset_no_answer_error_n": 0
+            },
+            "structural_guard_replay": {
+              "available": true,
+              "unavailable_n": 0,
+              "unavailable_ids": [],
+              "unavailable_reason": null,
+              "ask_n": 61,
+              "skip_n": 38,
+              "skip_kinds": {
+                "skip_meta": 2,
+                "skip_negation": 6,
+                "skip_no_cue": 12,
+                "skip_person": 14,
+                "skip_protected": 1,
+                "skip_repeat_in_clause": 3
+              },
+              "note": "结构保护来自产品函数重放，不是完整流式 correction / IME 路径。"
+            },
+            "rewrite_replay": {
+              "would_replace_n": 37,
+              "would_replace_correct_n": 36,
+              "would_replace_wrong_n": 1,
+              "would_replace_wrong_ids": [
+                "ctx-person-04"
+              ],
+              "kept_by_guard_n": 38,
+              "kept_by_gate_n": 24,
+              "without_valid_verdict_n": 0,
+              "unavailable_n": 0,
+              "note": "这是结构保护 + 概率门槛重放结论，不是线上真实改写，也没有运行 IME。"
+            },
+            "expected_tool": {
+              "total_n": 54,
+              "raw_choice_tool_n": 48,
+              "gate_accepted_tool_counterfactual_n": 44,
+              "ask_eligible_n": 46,
+              "ask_eligible_accepted_n": 36,
+              "ask_eligible_accepted_ids": [
+                "tool-install-01",
+                "tool-install-02",
+                "tool-start-01",
+                "tool-run-01",
+                "tool-upgrade-01",
+                "tool-uninstall-01",
+                "tool-deploy-01",
+                "tool-update-01",
+                "tool-model-01",
+                "tool-model-02",
+                "tool-server-01",
+                "tool-server-03",
+                "tool-model-03",
+                "mixed-02",
+                "mixed-04",
+                "mixed-08",
+                "case-space-01",
+                "case-space-04",
+                "case-space-06",
+                "ctx-tool-02",
+                "quote-01",
+                "quote-02",
+                "quote-03",
+                "meta-05",
+                "mix-02",
+                "mix-05",
+                "mix-06",
+                "multi-01",
+                "multi-02",
+                "multi-04",
+                "multi-05",
+                "bg-04",
+                "attach-01",
+                "attach-03",
+                "attach-04",
+                "attach-05"
+              ],
+              "ask_eligible_not_accepted_n": 10,
+              "ask_eligible_no_valid_verdict_n": 0,
+              "ask_eligible_no_valid_verdict_ids": [],
+              "ask_eligible_no_valid_verdict_note": "只计 response 错误或分布不合法；分布合法的弱分布拒绝另计 ask_eligible_weak_rejected_n（不是无有效判定）。",
+              "ask_eligible_weak_rejected_n": 8,
+              "ask_eligible_weak_rejected_ids": [
+                "tool-config-01",
+                "tool-server-02",
+                "tool-latency-01",
+                "tool-log-01",
+                "case-space-02",
+                "ctx-tool-01",
+                "mix-03",
+                "attach-02"
+              ],
+              "ask_eligible_rejected_non_tool_n": 2,
+              "ask_eligible_rejected_non_tool_ids": [
+                "tool-start-02",
+                "tool-endpoint-01"
+              ],
+              "guard_skipped_n": 8,
+              "guard_skipped_ids": [
+                "mixed-06",
+                "neg-01",
+                "neg-02",
+                "neg-03",
+                "neg-04",
+                "neg-05",
+                "guard-repeat-01",
+                "guard-protected-01"
+              ],
+              "unavailable_n": 0,
+              "unavailable_ids": [],
+              "guard_skipped_note": "结构保护重放不发请求，因此不算“未修正错误”。",
+              "note": "分母分开：总 tool 数 = guard=ask 子集 + 结构保护跳过 + 不可用；ask 子集内四分：被门槛接受（重放命中改写） + 弱分布拒绝 + 非 tool 合法判定 + 无有效判定（错误/坏分布）。弱分布拒绝是产品的合法保守结果，不计入无有效判定。"
+            },
+            "negatives_person_unclear": {
+              "n": 45,
+              "ask_eligible_n": 15,
+              "effectively_judged_n": 15,
+              "effective_wrong_replay_edit_n": 1,
+              "effective_wrong_replay_edit_ids": [
+                "ctx-person-04"
+              ],
+              "judged_but_weak_rejected_n": 3,
+              "judged_but_weak_rejected_ids": [
+                "ctx-person-01",
+                "ctx-person-02",
+                "ctx-person-03"
+              ],
+              "model_correct_abstain_n": 11,
+              "model_correct_abstain_ids": [
+                "person-help-05",
+                "person-help-06",
+                "person-help-07",
+                "person-discuss-02",
+                "person-discuss-04",
+                "person-discuss-05",
+                "person-discuss-06",
+                "person-discuss-07",
+                "mixed-07",
+                "mix-01",
+                "mix-04"
+              ],
+              "no_valid_verdict_n": 0,
+              "no_valid_verdict_ids": [],
+              "guard_skipped_n": 30,
+              "unavailable_n": 0,
+              "unavailable_ids": [],
+              "safe_keep_n": 44,
+              "kept_correct_n": 44,
+              "safe_keep_weak_rejected_n": 3,
+              "note": "ask_eligible_n 直接按 guard_replay==ask 取负例记录（= 有效判断 + 无有效判定），weak 是有效判断的合法分布子集，不得再加一次。“有效判断误改”只统计分布合法且门槛接受 tool 的负例；合法的弱分布拒绝（reject_weak）计入 safe_keep_n/kept_correct_n（= 安全保留），但那是产品保守门槛兜底，不算模型识别正确（模型识别正确只数 model_correct_abstain_n：分布合法且门槛给出 person/unclear）。错误与坏分布 correctness=null，既不算模型正确弃权，也不算安全保留。"
+            },
+            "budget": {
+              "budget_ms": 350.0,
+              "ask_n": 61,
+              "legal_n": 61,
+              "within_budget_legal_n": 61,
+              "within_budget_legal_ratio_of_ask": 1.0,
+              "within_budget_legal_ratio_of_legal": 1.0,
+              "within_budget_correct_tool_n": 36,
+              "within_budget_correct_tool_ids": [
+                "tool-install-01",
+                "tool-install-02",
+                "tool-start-01",
+                "tool-run-01",
+                "tool-upgrade-01",
+                "tool-uninstall-01",
+                "tool-deploy-01",
+                "tool-update-01",
+                "tool-model-01",
+                "tool-model-02",
+                "tool-server-01",
+                "tool-server-03",
+                "tool-model-03",
+                "mixed-02",
+                "mixed-04",
+                "mixed-08",
+                "case-space-01",
+                "case-space-04",
+                "case-space-06",
+                "ctx-tool-02",
+                "quote-01",
+                "quote-02",
+                "quote-03",
+                "meta-05",
+                "mix-02",
+                "mix-05",
+                "mix-06",
+                "multi-01",
+                "multi-02",
+                "multi-04",
+                "multi-05",
+                "bg-04",
+                "attach-01",
+                "attach-03",
+                "attach-04",
+                "attach-05"
+              ],
+              "within_budget_wrong_replay_edit_n": 1,
+              "within_budget_wrong_replay_edit_ids": [
+                "ctx-person-04"
+              ],
+              "over_budget_n": 0,
+              "over_budget_ids": [],
+              "error_n": 0,
+              "error_ids": [],
+              "note": "预算只做统计：本工具没有向产品注入 350ms deadline，也没有运行产品的异步 deadline / IME 路径。“合法”= 最终 ok、分布合法、payload 参数核对通过；超时与错误按真实耗时计入 over_budget/error，不会让速度看起来更快。"
+            },
+            "latency": {
+              "successful_requests": {
+                "n": 99,
+                "p50_ms": 120.597,
+                "p95_ms": 129.935,
+                "max_ms": 133.322
+              },
+              "all_requests": {
+                "n": 99,
+                "p50_ms": 120.597,
+                "p95_ms": 129.935,
+                "max_ms": 133.322,
+                "note": "含失败/超时请求的真实耗时，失败不会被剔除，避免速度看起来更快。"
+              },
+              "failed_requests": {
+                "n": 0,
+                "p50_ms": null,
+                "p95_ms": null,
+                "max_ms": null
+              },
+              "all_attempts": {
+                "n": 99,
+                "p50_ms": 120.597,
+                "p95_ms": 129.935,
+                "max_ms": 133.322
+              },
+              "server_engine_ms": {
+                "n": 0,
+                "p50_ms": null,
+                "p95_ms": null,
+                "max_ms": null
+              }
+            },
+            "latency_note": "每句唯一，cold-ish：服务可能已被其他调用预热。",
+            "is_repeat_of_identical_sentences": false
+          }
+        },
+        {
+          "round_type": "warm_new",
+          "metrics": {
+            "n_cases": 99,
+            "responses": {
+              "final_ok": 99,
+              "final_error": 0,
+              "final_error_rate": 0.0,
+              "timeout": 0,
+              "timeout_rate": 0.0,
+              "first_attempt_ok": 99,
+              "first_attempt_error_rate": 0.0,
+              "recovered_by_retry": 0,
+              "error_kinds": {},
+              "bad_distribution_n": 0,
+              "debug_choice_not_counted_n": 0,
+              "debug_choice_not_counted_ids": []
+            },
+            "model_raw": {
+              "answered_n": 99,
+              "answer_coverage": 1.0,
+              "role_accuracy": 0.781,
+              "role_accuracy_eligible_answered_n": 96,
+              "role_accuracy_all_answered": 0.768,
+              "raw_accuracy_excluded_n": 3,
+              "raw_accuracy_excluded_ids": [
+                "mixed-05#alt",
+                "mixed-06#alt",
+                "guard-repeat-01#alt"
+              ],
+              "dist_valid_n": 99,
+              "dist_invalid_n": 0,
+              "invalid_reasons": {},
+              "confusion": {
+                "tool": {
+                  "tool": 47,
+                  "person": 7
+                },
+                "person": {
+                  "person": 28,
+                  "tool": 5
+                },
+                "unclear": {
+                  "person": 10,
+                  "tool": 1,
+                  "unclear": 1
+                }
+              },
+              "per_label": {
+                "tool": {
+                  "support": 54,
+                  "tp": 47,
+                  "fp": 6,
+                  "fn": 7,
+                  "precision": 0.887,
+                  "recall": 0.87,
+                  "f1": 0.879
+                },
+                "person": {
+                  "support": 33,
+                  "tp": 28,
+                  "fp": 17,
+                  "fn": 5,
+                  "precision": 0.622,
+                  "recall": 0.848,
+                  "f1": 0.718
+                },
+                "unclear": {
+                  "support": 12,
+                  "tp": 1,
+                  "fp": 0,
+                  "fn": 11,
+                  "precision": 1.0,
+                  "recall": 0.083,
+                  "f1": 0.154
+                }
+              },
+              "negative_choice_tool_raw_n": 6,
+              "negative_choice_tool_raw_ids": [
+                "person-help-05#alt",
+                "mixed-05#alt",
+                "case-space-05#alt",
+                "ctx-person-01#alt",
+                "ctx-person-04#alt",
+                "meta-02#alt"
+              ],
+              "unclear_expected_n": 12,
+              "unclear_answered_unclear": 1,
+              "note": "原始准确率只统计分布合法且有 choice 的回答；坏分布即使带 debug_choice 也不计正确。"
+            },
+            "gate_replay_0_70_0_20": {
+              "scope": "all_requests_counterfactual",
+              "scope_note": "上方 accept_*/reject_weak/unusable_bad_distribution/no_answer_error 的计数范围是本轮全部 HTTP 记录，包含结构保护本会跳过、产品不会发出的反事实请求，因此不等于产品路径结果。产品路径请用 ask_subset_*（guard_replay==ask 子集）与 rewrite_replay，全局数与 ask 子集数不可相加。",
+              "note": "全部请求反事实重放：门槛临时复用产品的保守拒绝规则，不是校准正确率。",
+              "ask_subset_note": "ask_subset_* 只统计 guard_replay==ask 的记录（结构保护之后产品真正会发出的请求），与上方全局反事实计数并列展示，不是它的子集加总。",
+              "accept_tool": 42,
+              "accept_person": 32,
+              "accept_unclear": 0,
+              "reject_weak": 25,
+              "unusable_bad_distribution": 0,
+              "no_answer_error": 0,
+              "ask_subset_n": 60,
+              "ask_subset_accept_tool_n": 33,
+              "ask_subset_accept_person_n": 11,
+              "ask_subset_accept_unclear_n": 0,
+              "ask_subset_reject_weak_n": 16,
+              "ask_subset_unusable_bad_distribution_n": 0,
+              "ask_subset_no_answer_error_n": 0
+            },
+            "structural_guard_replay": {
+              "available": true,
+              "unavailable_n": 0,
+              "unavailable_ids": [],
+              "unavailable_reason": null,
+              "ask_n": 60,
+              "skip_n": 39,
+              "skip_kinds": {
+                "skip_meta": 2,
+                "skip_negation": 7,
+                "skip_no_cue": 12,
+                "skip_person": 14,
+                "skip_protected": 1,
+                "skip_repeat_in_clause": 3
+              },
+              "note": "结构保护来自产品函数重放，不是完整流式 correction / IME 路径。"
+            },
+            "rewrite_replay": {
+              "would_replace_n": 33,
+              "would_replace_correct_n": 32,
+              "would_replace_wrong_n": 1,
+              "would_replace_wrong_ids": [
+                "ctx-person-04#alt"
+              ],
+              "kept_by_guard_n": 39,
+              "kept_by_gate_n": 27,
+              "without_valid_verdict_n": 0,
+              "unavailable_n": 0,
+              "note": "这是结构保护 + 概率门槛重放结论，不是线上真实改写，也没有运行 IME。"
+            },
+            "expected_tool": {
+              "total_n": 54,
+              "raw_choice_tool_n": 47,
+              "gate_accepted_tool_counterfactual_n": 38,
+              "ask_eligible_n": 46,
+              "ask_eligible_accepted_n": 32,
+              "ask_eligible_accepted_ids": [
+                "tool-install-01#alt",
+                "tool-install-02#alt",
+                "tool-start-01#alt",
+                "tool-start-02#alt",
+                "tool-run-01#alt",
+                "tool-upgrade-01#alt",
+                "tool-uninstall-01#alt",
+                "tool-deploy-01#alt",
+                "tool-update-01#alt",
+                "tool-model-01#alt",
+                "tool-model-02#alt",
+                "tool-model-03#alt",
+                "mixed-02#alt",
+                "mixed-04#alt",
+                "case-space-01#alt",
+                "case-space-04#alt",
+                "case-space-06#alt",
+                "ctx-tool-02#alt",
+                "quote-01#alt",
+                "quote-03#alt",
+                "meta-05#alt",
+                "mix-02#alt",
+                "mix-05#alt",
+                "mix-06#alt",
+                "multi-01#alt",
+                "multi-04#alt",
+                "multi-05#alt",
+                "bg-04#alt",
+                "attach-01#alt",
+                "attach-03#alt",
+                "attach-04#alt",
+                "attach-05#alt"
+              ],
+              "ask_eligible_not_accepted_n": 14,
+              "ask_eligible_no_valid_verdict_n": 0,
+              "ask_eligible_no_valid_verdict_ids": [],
+              "ask_eligible_no_valid_verdict_note": "只计 response 错误或分布不合法；分布合法的弱分布拒绝另计 ask_eligible_weak_rejected_n（不是无有效判定）。",
+              "ask_eligible_weak_rejected_n": 14,
+              "ask_eligible_weak_rejected_ids": [
+                "tool-config-01#alt",
+                "tool-server-01#alt",
+                "tool-server-02#alt",
+                "tool-server-03#alt",
+                "tool-latency-01#alt",
+                "tool-endpoint-01#alt",
+                "tool-log-01#alt",
+                "mixed-08#alt",
+                "case-space-02#alt",
+                "ctx-tool-01#alt",
+                "quote-02#alt",
+                "mix-03#alt",
+                "multi-02#alt",
+                "attach-02#alt"
+              ],
+              "ask_eligible_rejected_non_tool_n": 0,
+              "ask_eligible_rejected_non_tool_ids": [],
+              "guard_skipped_n": 8,
+              "guard_skipped_ids": [
+                "mixed-06#alt",
+                "neg-01#alt",
+                "neg-02#alt",
+                "neg-03#alt",
+                "neg-04#alt",
+                "neg-05#alt",
+                "guard-repeat-01#alt",
+                "guard-protected-01#alt"
+              ],
+              "unavailable_n": 0,
+              "unavailable_ids": [],
+              "guard_skipped_note": "结构保护重放不发请求，因此不算“未修正错误”。",
+              "note": "分母分开：总 tool 数 = guard=ask 子集 + 结构保护跳过 + 不可用；ask 子集内四分：被门槛接受（重放命中改写） + 弱分布拒绝 + 非 tool 合法判定 + 无有效判定（错误/坏分布）。弱分布拒绝是产品的合法保守结果，不计入无有效判定。"
+            },
+            "negatives_person_unclear": {
+              "n": 45,
+              "ask_eligible_n": 14,
+              "effectively_judged_n": 14,
+              "effective_wrong_replay_edit_n": 1,
+              "effective_wrong_replay_edit_ids": [
+                "ctx-person-04#alt"
+              ],
+              "judged_but_weak_rejected_n": 2,
+              "judged_but_weak_rejected_ids": [
+                "ctx-person-01#alt",
+                "ctx-person-03#alt"
+              ],
+              "model_correct_abstain_n": 11,
+              "model_correct_abstain_ids": [
+                "person-help-06#alt",
+                "person-help-07#alt",
+                "person-discuss-02#alt",
+                "person-discuss-04#alt",
+                "person-discuss-05#alt",
+                "person-discuss-06#alt",
+                "person-discuss-07#alt",
+                "mixed-07#alt",
+                "ctx-person-02#alt",
+                "mix-01#alt",
+                "mix-04#alt"
+              ],
+              "no_valid_verdict_n": 0,
+              "no_valid_verdict_ids": [],
+              "guard_skipped_n": 31,
+              "unavailable_n": 0,
+              "unavailable_ids": [],
+              "safe_keep_n": 44,
+              "kept_correct_n": 44,
+              "safe_keep_weak_rejected_n": 2,
+              "note": "ask_eligible_n 直接按 guard_replay==ask 取负例记录（= 有效判断 + 无有效判定），weak 是有效判断的合法分布子集，不得再加一次。“有效判断误改”只统计分布合法且门槛接受 tool 的负例；合法的弱分布拒绝（reject_weak）计入 safe_keep_n/kept_correct_n（= 安全保留），但那是产品保守门槛兜底，不算模型识别正确（模型识别正确只数 model_correct_abstain_n：分布合法且门槛给出 person/unclear）。错误与坏分布 correctness=null，既不算模型正确弃权，也不算安全保留。"
+            },
+            "budget": {
+              "budget_ms": 350.0,
+              "ask_n": 60,
+              "legal_n": 60,
+              "within_budget_legal_n": 60,
+              "within_budget_legal_ratio_of_ask": 1.0,
+              "within_budget_legal_ratio_of_legal": 1.0,
+              "within_budget_correct_tool_n": 32,
+              "within_budget_correct_tool_ids": [
+                "tool-install-01#alt",
+                "tool-install-02#alt",
+                "tool-start-01#alt",
+                "tool-start-02#alt",
+                "tool-run-01#alt",
+                "tool-upgrade-01#alt",
+                "tool-uninstall-01#alt",
+                "tool-deploy-01#alt",
+                "tool-update-01#alt",
+                "tool-model-01#alt",
+                "tool-model-02#alt",
+                "tool-model-03#alt",
+                "mixed-02#alt",
+                "mixed-04#alt",
+                "case-space-01#alt",
+                "case-space-04#alt",
+                "case-space-06#alt",
+                "ctx-tool-02#alt",
+                "quote-01#alt",
+                "quote-03#alt",
+                "meta-05#alt",
+                "mix-02#alt",
+                "mix-05#alt",
+                "mix-06#alt",
+                "multi-01#alt",
+                "multi-04#alt",
+                "multi-05#alt",
+                "bg-04#alt",
+                "attach-01#alt",
+                "attach-03#alt",
+                "attach-04#alt",
+                "attach-05#alt"
+              ],
+              "within_budget_wrong_replay_edit_n": 1,
+              "within_budget_wrong_replay_edit_ids": [
+                "ctx-person-04#alt"
+              ],
+              "over_budget_n": 0,
+              "over_budget_ids": [],
+              "error_n": 0,
+              "error_ids": [],
+              "note": "预算只做统计：本工具没有向产品注入 350ms deadline，也没有运行产品的异步 deadline / IME 路径。“合法”= 最终 ok、分布合法、payload 参数核对通过；超时与错误按真实耗时计入 over_budget/error，不会让速度看起来更快。"
+            },
+            "latency": {
+              "successful_requests": {
+                "n": 99,
+                "p50_ms": 120.462,
+                "p95_ms": 124.228,
+                "max_ms": 130.699
+              },
+              "all_requests": {
+                "n": 99,
+                "p50_ms": 120.462,
+                "p95_ms": 124.228,
+                "max_ms": 130.699,
+                "note": "含失败/超时请求的真实耗时，失败不会被剔除，避免速度看起来更快。"
+              },
+              "failed_requests": {
+                "n": 0,
+                "p50_ms": null,
+                "p95_ms": null,
+                "max_ms": null
+              },
+              "all_attempts": {
+                "n": 99,
+                "p50_ms": 120.462,
+                "p95_ms": 124.228,
+                "max_ms": 130.699
+              },
+              "server_engine_ms": {
+                "n": 0,
+                "p50_ms": null,
+                "p95_ms": null,
+                "max_ms": null
+              }
+            },
+            "latency_note": "alt 新句子 + 服务已热：新句子延迟参考。",
+            "is_repeat_of_identical_sentences": false
+          }
+        }
+      ]
+    }
+  ],
+  "sources": {
+    "leaderboard": "https://huggingface.co/spaces/multimodalart/jev-decision-index",
+    "decider": "https://huggingface.co/Mapika/decider-4b",
+    "decider_source": "https://github.com/Mapika/decider",
+    "winnow": "https://huggingface.co/EldanRing/Winnow-12B"
+  },
+  "followup_evidence": {
+    "decider-warmup-final.json": {
+      "sha256": "88af99a659e18629f340732537ea4d9f1c6397c7c7d42768d4944b44f228db09",
+      "status": "ready",
+      "cases_total": null,
+      "cases_passed": null,
+      "failed_ids": null
+    },
+    "streaming-decider-probe.json": {
+      "sha256": "ff64be438886586c5d2a102c3521dd8c725c0cc202f92ec839d40e7ef8b487d5",
+      "status": "executed",
+      "cases_total": 5,
+      "cases_passed": 4,
+      "failed_ids": [
+        "person_jeff_with_software_context"
+      ]
+    },
+    "root-final-live-state.json": {
+      "sha256": "05ed53b77943ea8aaa44a2e07efc92bc8c013784596f4f07216fcb7d5f97b4f4",
+      "status": null,
+      "cases_total": null,
+      "cases_passed": null,
+      "failed_ids": null
+    }
+  },
+  "promotion_status": "Trial candidate only; user configuration remains SemIf on 42032. A real streaming probe reproduced a context-person false edit; tracked as Recordian-5fn."
+}
