@@ -49,7 +49,7 @@ python server/confucius_streaming_server.py \
   --model-dir /path/to/models/Confucius4-R2T2 \
   --r2t2-source /path/to/Confucius4-R2T2 \
   --host 127.0.0.1 --port 8321 \
-  --gpu-memory-utilization 0.70 --max-model-len 4096
+  --gpu-memory-utilization 0.60 --max-model-len 4096
 # 日志出现 [confucius-server ...] READY 127.0.0.1:8321 即就绪
 # （--port 0 时 READY 与 ready 文件写的是实际绑定的端口）
 
@@ -81,18 +81,24 @@ Recordian 的 Confucius 听写客户端会在约 25 秒通过正常停止/EOS �
 
 ## 8GB GPU 实测参数依据（RTX 4070 Laptop, 2026-09-24）
 
-本机桌面启动配置为 `gpu_memory_utilization=0.70` + `max_model_len=4096` +
+本机桌面启动配置为 `gpu_memory_utilization=0.60` + `max_model_len=4096` +
 `max_num_seqs=1` + `limit_mm_per_prompt={"audio":1}` + eager。上游默认
 `max_seq_len=65536` 需要 7.0 GiB KV cache，8GB 卡无法启动；默认多模态
 profiling 按 21 条音频探测会再吃掉 ~3.3 GiB。
 
 前一轮公开样本在 0.80 档测得峰值 6836 MiB、热态单 chunk 32–137 ms；
 随后真实多次听写时，桌面总显存占用达到 7716 MiB，驱动报告仅剩 92 MiB。
-因此本机启动脚本改为 0.70。重启、预热及公开的 6.74 秒样本验证后，实测
-占用 6002 MiB、可用 1806 MiB，识别结果与该样本既有结果一致。这些是单机
-观测，不能作为所有录音的峰值或中英混合准确率保证。
+初次降到 0.70 后，短公开样本检查测得占用 6002 MiB、可用 1806 MiB；
+随后实际连续使用时，占用继续增至 7184 MiB、可用只剩 624 MiB。就绪时或
+短样本后的读数不能代替持续使用后的显存检查。
 
-服务程序的内置显存比例默认值仍为 0.80；上述启动命令显式指定 0.70。
+最终本机启动脚本采用 0.60。约 7 秒公开样本检查后，又按真实节奏输入
+同一公开音频重复三次形成的 20.82 秒样本：正常完成，输出包含三次原句
+（去标点比较一致），完成耗时约 20.88 秒，EOS 后收尾约 83 ms。结束及静置后
+显存占用 6082 MiB、驱动可用 1726 MiB。两档读数来自不同负载场景，不能
+当作严格性能对照，也不是所有录音的峰值或中英混合准确率保证。
+
+服务程序的内置显存比例默认值仍为 0.80；上述启动命令显式指定 0.60。
 本机桌面入口和 `recordian-confucius-asr.service` 的使用方法见
 [日常使用说明](../docs/DESKTOP-QUICKSTART.zh-CN.md)。
 
