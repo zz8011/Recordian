@@ -85,6 +85,8 @@ Grok 使用真实 loopback 复现并复查 ASR 结束判定。普通 reset 后�
 
 `ruff check src/ tests/`全部通过；本轮修改的 `server/qwen_streaming_server.py` 与 `server/confucius_streaming_server.py`也通过。未修改的旧 `server/test_asr_server.py`存在两处基线F541提示，已原样对照确认。
 
+交付检查另发现旧Qwen启动脚本需要继续优先使用已有本地权重。Grok将默认值修正为项目模型目录的绝对路径，保留环境变量及显式命令行覆盖，并在进入项目目录失败时退出。`sh -n`和私有假Python参数探针通过，覆盖带空格的项目路径、环境变量、显式模型、参数转发及目录切换失败；这是启动参数验证，没有再次加载Qwen模型或测量网络行为。原始证据为 `grok-launcher-absolute.report.md` 与对应validation日志。
+
 类型整理补充了动态调用和候选跨度的类型边界，将两处保序去重推导式改成等价循环，并显式标注close code。协调者审阅了这些局部差异，未发现业务行为改变。其后全量回归复验通过；没有重跑GPU性能测量，真实模型/输入框的测量证据仍明确对应R4/R8版本。服务端与C++源码在这一轮没有变化。
 
 当前mypy仍报告10项，不能写成类型检查全通过：缺少requests类型存根3处（含新SemIf导入处）、Gtk动态类型名称6处、旧绘图字体参数1处。CI对mypy配置为continue-on-error。类型报告的临时目录基线没有携带同一份pyproject配置，因此9/10的基线差异不作为最终增量判定依据；最终结论采用当前逐条原始输出。剩余质量工作记录为 `Recordian-ded`。
