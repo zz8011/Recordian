@@ -1,8 +1,8 @@
 # Recordian — Project Index
 
-> Voice dictation daemon for Linux. Records audio → ASR → text refinement → clipboard paste.
+> Voice dictation for Linux. Audio → ASR → hotword correction → input-method commit, with optional text refinement.
 
-**Last updated:** 2026-07-20
+**Last updated:** 2026-09-24
 
 ## Module Map
 
@@ -38,6 +38,8 @@
 | `voice_wake.py` | Wake-word activation |
 | `postprocess_pipeline.py` | Text refinement pipeline |
 | `tray_app.py` | System tray GUI |
+| `tray_settings.py` / `tray_menu.py` | Daily settings, advanced options, and tray actions |
+| `recommended_profile.py` | Local Confucius profile, display labels, and endpoint validation |
 | `waveform_renderer.py` | Recording overlay window + state machine (pyglet) |
 | `orb_shader.py` | Liquid-glass voice orb GLSL shader (voiceWave preset, ported from LerSent001/orb, MIT) |
 | `backend_manager.py` | Backend lifecycle management |
@@ -65,10 +67,10 @@
 
 ```
 Audio capture (hotkey / wake word)
-  → ASR (http-cloud / qwen_asr oneshot file transcription)
+  → ASR (Confucius streaming / HTTP service / local Qwen)
   → hotword_corrector (常用词 + 显式替换 + ASCII/拼音)
   → Text refinement pipeline (cloud LLM or local, 热词纠错目标 + 保护)
-  → clipboard paste after key release
+  → Fcitx preedit + final commit, or configured non-streaming output backend
 ```
 
 Streaming type-on-screen stays off by default (`enable_streaming_commit=false`). A true
@@ -87,17 +89,11 @@ limits in `server/README-confucius.md`; design/acceptance in `docs/STREAMING-IME
 ## Common Tasks
 
 ```bash
-# Run dictation (hotkey mode)
-python -m recordian.cli --mode hotkey
-
-# Run with wake word
-python -m recordian.cli --mode wake
-
-# Run with LLM refinement
-python -m recordian.cli --mode hotkey --refine
+# Run the hotkey daemon using the saved settings
+recordian-hotkey-dictate --config-path "$HOME/.config/recordian/hotkey.json"
 
 # Run tray GUI
-python -m recordian.tray_app
+recordian-tray --config-path "$HOME/.config/recordian/hotkey.json"
 
 # Run benchmarks
 python -m recordian.benchmark
@@ -105,6 +101,11 @@ python -m recordian.benchmark
 # Type check
 mypy src/recordian/
 ```
+
+The hotkey daemon and tray are separate entry points from `recordian`, which
+handles single-shot files. Configure optional voice wake and refinement in the
+tray settings. A Confucius model service must be ready before dictation starts;
+`recordian-tray` alone does not launch that service.
 
 ## Archived
 

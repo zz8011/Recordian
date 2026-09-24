@@ -49,12 +49,12 @@ python server/confucius_streaming_server.py \
   --model-dir /path/to/models/Confucius4-R2T2 \
   --r2t2-source /path/to/Confucius4-R2T2 \
   --host 127.0.0.1 --port 8321 \
-  --gpu-memory-utilization 0.80 --max-model-len 4096
+  --gpu-memory-utilization 0.70 --max-model-len 4096
 # 日志出现 [confucius-server ...] READY 127.0.0.1:8321 即就绪
 # （--port 0 时 READY 与 ready 文件写的是实际绑定的端口）
 
 # 停止
-kill <pid>          # 无 systemd/看门狗；前台进程直接 Ctrl-C 亦可
+kill <pid>          # 仅限上面手动启动的进程；前台进程直接 Ctrl-C 亦可
 ```
 
 Recordian 侧配置（热键守护进程 `recordian-hotkey-dictate --config-path <file>`
@@ -75,17 +75,26 @@ token 是本地私有值，不要提交进 git（仓库 `.gitignore` 已对历�
 
 单会话音频预算默认 30 秒（`--max-session-seconds`）：流式每 chunk 重喂累计
 音频，成本随时长增长，超限服务端显式报错并以非 1000 关闭，**不是**无限长流；
-长输入请分段（松键再按）。
+Recordian 的 Confucius 听写客户端会在约 25 秒通过正常停止/EOS 路径收尾，
+并通知用户重新按键开始下一段。该限制覆盖按住说话、单击录音和超长固定时长
+录音；尚不支持无缝续录。预算按音频采样数计算，与模型推理耗时不同。
 
 ## 8GB GPU 实测参数依据（RTX 4070 Laptop, 2026-09-24）
 
-默认值不是拍脑袋：`gpu_memory_utilization=0.80` + `max_model_len=4096` +
+本机桌面启动配置为 `gpu_memory_utilization=0.70` + `max_model_len=4096` +
 `max_num_seqs=1` + `limit_mm_per_prompt={"audio":1}` + eager。上游默认
 `max_seq_len=65536` 需要 7.0 GiB KV cache，8GB 卡无法启动；默认多模态
-profiling 按 21 条音频探测会再吃掉 ~3.3 GiB。上述组合实测峰值 6836 MiB
-（含桌面 Xorg 基线），给桌面留约 1.35 GB。热态单 chunk 推理 32–137 ms
-（160 ms 节奏无积压）。单会话 30 s 预算对应流式重喂全量音频的成本增长与
-4096 token 上下文预算；长于此预算请分段（松键再按），不要当作无限长流。
+profiling 按 21 条音频探测会再吃掉 ~3.3 GiB。
+
+前一轮公开样本在 0.80 档测得峰值 6836 MiB、热态单 chunk 32–137 ms；
+随后真实多次听写时，桌面总显存占用达到 7716 MiB，驱动报告仅剩 92 MiB。
+因此本机启动脚本改为 0.70。重启、预热及公开的 6.74 秒样本验证后，实测
+占用 6002 MiB、可用 1806 MiB，识别结果与该样本既有结果一致。这些是单机
+观测，不能作为所有录音的峰值或中英混合准确率保证。
+
+服务程序的内置显存比例默认值仍为 0.80；上述启动命令显式指定 0.70。
+本机桌面入口和 `recordian-confucius-asr.service` 的使用方法见
+[日常使用说明](../docs/DESKTOP-QUICKSTART.zh-CN.md)。
 
 ## 测试
 

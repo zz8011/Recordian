@@ -46,9 +46,20 @@ sudo cp -a /usr/share/fcitx5/addon/recordian-commit.conf \
 sudo cmake --install /tmp/recordian-commit-build
 ```
 
-Fcitx5 在进程启动时加载插件。替换 `.so` 之后需要**你自己**重载输入法会话
-（本文档不代为执行）：在已有图形会话里运行 `fcitx5-remote -r`
-（本机二进制为 `/usr/bin/fcitx5-remote`），或退出并重新登录。
+Fcitx5 在进程启动时加载插件。替换 `.so` 后，先结束当前输入，再在已有
+图形会话里重启 Fcitx5（也可退出并重新登录）：
+
+```sh
+gdbus call --session --dest org.fcitx.Fcitx5 --object-path /controller \
+  --method org.fcitx.Fcitx.Controller1.Restart
+# 等待输入法重新出现后验证新插件：
+gdbus call --session --dest org.fcitx.Fcitx5 --object-path /recordian \
+  --method org.fcitx.Fcitx.Recordian1.Ping
+# 预期：('ok',)
+```
+
+`fcitx5-remote -r` 只重新加载配置，不能作为新插件已经加载的证据。
+2026-09-24 本机实装时，通过上面的重启方法及 `Ping` 验证了插件加载。
 
 回滚：
 
@@ -57,7 +68,8 @@ sudo cp -a /usr/lib/x86_64-linux-gnu/fcitx5/librecordian-commit.so.bak \
   /usr/lib/x86_64-linux-gnu/fcitx5/librecordian-commit.so
 sudo cp -a /usr/share/fcitx5/addon/recordian-commit.conf.bak \
   /usr/share/fcitx5/addon/recordian-commit.conf
-fcitx5-remote -r
+gdbus call --session --dest org.fcitx.Fcitx5 --object-path /controller \
+  --method org.fcitx.Fcitx.Controller1.Restart
 ```
 
 不在这里假设 `~/.local` 或其他用户级库搜索路径；上面只使用 CMake

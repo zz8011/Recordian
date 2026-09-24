@@ -5,6 +5,7 @@ from typing import Any
 
 from recordian.config import ConfigManager
 from recordian.preset_manager import PresetManager
+from recordian.recommended_profile import DICTATION_BUSY_STATUSES, status_headline
 from recordian.tray_utils import truncate
 
 
@@ -49,45 +50,93 @@ def list_tray_refine_presets() -> list[str]:
     return ordered if ordered else ["default"]
 
 
+def backend_toggle_label(running: bool) -> str:
+    return "暂停听写" if running else "开始听写"
+
+
+def _begin_menu_sync(app: Any) -> None:
+    depth = int(getattr(app, "_menu_sync_depth", 0)) + 1
+    app._menu_sync_depth = depth
+    app._menu_syncing = True
+
+
+def _end_menu_sync(app: Any) -> None:
+    depth = max(0, int(getattr(app, "_menu_sync_depth", 1)) - 1)
+    app._menu_sync_depth = depth
+    app._menu_syncing = depth > 0
+
+
+def _menu_syncing(app: Any) -> bool:
+    return bool(getattr(app, "_menu_syncing", False))
+
+
+def _dictation_busy(app: Any) -> bool:
+    state = getattr(app, "state", None)
+    return str(getattr(state, "status", "")) in DICTATION_BUSY_STATUSES
+
+
+def _block_restart_while_busy(app: Any) -> bool:
+    """Stop a menu action that would restart the service during live dictation."""
+    if not _dictation_busy(app):
+        return False
+    events = getattr(app, "events", None)
+    if events is not None and hasattr(events, "put"):
+        try:
+            events.put({"event": "log", "message": "请先结束当前听写，再保存设置"})
+        except Exception:
+            pass
+    return True
+
+
+def _set_check_active(app: Any, item: Any, active: bool) -> None:
+    if item is None:
+        return
+    _begin_menu_sync(app)
+    try:
+        if bool(item.get_active()) != bool(active):
+            item.set_active(bool(active))
+    finally:
+        _end_menu_sync(app)
+
+
+def _queue_check_restore(app: Any, item: Any, active: bool) -> None:
+    """Restore a check item once. Direct when GLib is absent; one-shot idle otherwise."""
+
+    def _restore() -> bool:
+        _set_check_active(app, item, active)
+        return False
+
+    glib = getattr(app, "_glib", None)
+    if glib is None:
+        _set_check_active(app, item, active)
+        return
+    glib.idle_add(_restore)
+
+
 def build_appindicator_menu(
     app: Any,
     AppIndicator3: Any,
     Gtk: Any,
     GLib: Any,
 ) -> Any:
-    """Build the AppIndicator3 menu with all items and callbacks.
+    """Build the AppIndicator3 menu with daily actions and an advanced submenu."""
+    del AppIndicator3, GLib  # Kept so existing callers pass the GTK modules.
 
-    Parameters
-    ----------
-    app : TrayApp
-        The TrayApp instance to bind callbacks to.
-    AppIndicator3 : module
-        The gi.repository.AppIndicator3 module.
-    Gtk : module
-        The gi.repository.Gtk module.
-    GLib : module
-        The gi.repository.GLib module.
-
-    Returns
-    -------
-    Gtk.Menu
-        The constructed menu.
-    """
     menu = Gtk.Menu()
+    config = app._get_cached_config()
 
-    # 状态栏：仅显示时间
-    time_label = status_summary_label(app.state)
-    status_item = Gtk.MenuItem(label=time_label)
+    status_item = Gtk.MenuItem(label=status_summary_label(app.state, config))
     status_item.set_sensitive(False)
     menu.append(status_item)
     app._appindicator_status_item = status_item
 
     menu.append(Gtk.SeparatorMenuItem())
 
-    # 启动/停止后端：单项，随运行状态切换标签
-    backend_toggle_item = Gtk.MenuItem(label="启动后端")
+    backend_toggle_item = Gtk.MenuItem(label=backend_toggle_label(bool(app.state.backend_running)))
 
     def _on_backend_toggle(_item: Any) -> None:
+        if _menu_syncing(app):
+            return
         if app.state.backend_running:
             app.root.after(0, app.backend.stop)
         else:
@@ -97,34 +146,38 @@ def build_appindicator_menu(
     menu.append(backend_toggle_item)
     app._appindicator_backend_toggle_item = backend_toggle_item
 
+    streaming_item = Gtk.CheckMenuItem(label="边说边出字")
+    streaming_enabled = bool(config.get("enable_streaming_commit", False))
+    _begin_menu_sync(app)
+    try:
+        streaming_item.set_active(streaming_enabled)
+    finally:
+        _end_menu_sync(app)
+
+    def _on_streaming_toggled(item: Any) -> None:
+        if _menu_syncing(app):
+            return
+        if _block_restart_while_busy(app):
+            wanted = bool(app._get_cached_config().get("enable_streaming_commit", False))
+            _queue_check_restore(app, item, wanted)
+            return
+        app.root.after(0, lambda: app.toggle_streaming_commit(bool(item.get_active())))
+
+    streaming_item.connect("toggled", _on_streaming_toggled)
+    menu.append(streaming_item)
+    app._appindicator_streaming_item = streaming_item
+
     menu.append(Gtk.SeparatorMenuItem())
 
-    # Text refine toggle
-    text_refine_item = Gtk.CheckMenuItem(label="文本精炼（关闭 = 快速模式）")
-    config = app._get_cached_config()
-    text_refine_enabled = bool(config.get("enable_text_refine", True))
-    text_refine_item.set_active(text_refine_enabled)
-    text_refine_item.connect("toggled", lambda item: app.root.after(0, lambda: app.toggle_text_refine(item.get_active())))
-    menu.append(text_refine_item)
-    app._appindicator_text_refine_item = text_refine_item
+    context_item = Gtk.MenuItem(label="常用词...")
+    context_item.connect("activate", lambda _: app.root.after(0, app.open_context_editor))
+    menu.append(context_item)
 
-    voice_wake_item = Gtk.CheckMenuItem(label="语音唤醒模式")
-    voice_wake_enabled = bool(config.get("enable_voice_wake", False))
-    voice_wake_item.set_active(voice_wake_enabled)
-    voice_wake_item.connect("toggled", lambda item: app.root.after(0, lambda: app.toggle_voice_wake(item.get_active())))
-    menu.append(voice_wake_item)
-    app._appindicator_voice_wake_item = voice_wake_item
+    settings_item = Gtk.MenuItem(label="设置...")
+    settings_item.connect("activate", lambda _: app.root.after(0, app.open_settings))
+    menu.append(settings_item)
 
-    # 预设子菜单
-    preset_menu_item = Gtk.MenuItem(label="切换预设")
-    preset_submenu = Gtk.Menu()
-    app._appindicator_preset_submenu = preset_submenu
-    preset_menu_item.set_submenu(preset_submenu)
-    menu.append(preset_menu_item)
-    refresh_appindicator_preset_submenu(app, Gtk)
-
-    # Copy last text
-    copy_text_item = Gtk.MenuItem(label="复制最后识别的文本")
+    copy_text_item = Gtk.MenuItem(label="复制上次文字")
     copy_text_item.connect("activate", lambda _: app.root.after(0, app.copy_last_text))
     copy_text_item.set_sensitive(bool(app.state.last_run.text))
     menu.append(copy_text_item)
@@ -132,25 +185,66 @@ def build_appindicator_menu(
 
     menu.append(Gtk.SeparatorMenuItem())
 
-    # 常用词管理
-    context_item = Gtk.MenuItem(label="常用词管理...")
-    context_item.connect("activate", lambda _: app.root.after(0, app.open_context_editor))
-    menu.append(context_item)
-
-    # 设置
-    settings_item = Gtk.MenuItem(label="设置...")
-    settings_item.connect("activate", lambda _: app.root.after(0, app.open_settings))
-    menu.append(settings_item)
-
-    # 更多：低频入口（声纹向导、诊断）
     more_item = Gtk.MenuItem(label="更多")
     more_submenu = Gtk.Menu()
 
-    speaker_enroll_item = Gtk.MenuItem(label="声纹注册向导...")
+    text_refine_enabled = bool(config.get("enable_text_refine", False))
+    text_refine_item = Gtk.CheckMenuItem(label="文字润色")
+    _begin_menu_sync(app)
+    try:
+        text_refine_item.set_active(text_refine_enabled)
+    finally:
+        _end_menu_sync(app)
+
+    def _on_refine_toggled(item: Any) -> None:
+        if _menu_syncing(app):
+            return
+        if _block_restart_while_busy(app):
+            wanted = bool(app._get_cached_config().get("enable_text_refine", False))
+            _queue_check_restore(app, item, wanted)
+            return
+        app.root.after(0, lambda: app.toggle_text_refine(bool(item.get_active())))
+
+    text_refine_item.connect("toggled", _on_refine_toggled)
+    more_submenu.append(text_refine_item)
+    app._appindicator_text_refine_item = text_refine_item
+
+    voice_wake_item = Gtk.CheckMenuItem(label="语音唤醒")
+    _begin_menu_sync(app)
+    try:
+        voice_wake_item.set_active(bool(config.get("enable_voice_wake", False)))
+    finally:
+        _end_menu_sync(app)
+
+    def _on_wake_toggled(item: Any) -> None:
+        if _menu_syncing(app):
+            return
+        if _block_restart_while_busy(app):
+            wanted = bool(app._get_cached_config().get("enable_voice_wake", False))
+            _queue_check_restore(app, item, wanted)
+            return
+        app.root.after(0, lambda: app.toggle_voice_wake(bool(item.get_active())))
+
+    voice_wake_item.connect("toggled", _on_wake_toggled)
+    more_submenu.append(voice_wake_item)
+    app._appindicator_voice_wake_item = voice_wake_item
+
+    preset_menu_item = Gtk.MenuItem(label="润色风格")
+    preset_submenu = Gtk.Menu()
+    app._appindicator_preset_submenu = preset_submenu
+    app._appindicator_preset_menu_item = preset_menu_item
+    preset_menu_item.set_submenu(preset_submenu)
+    preset_menu_item.set_sensitive(text_refine_enabled)
+    more_submenu.append(preset_menu_item)
+    refresh_appindicator_preset_submenu(app, Gtk)
+
+    more_submenu.append(Gtk.SeparatorMenuItem())
+
+    speaker_enroll_item = Gtk.MenuItem(label="声纹注册...")
     speaker_enroll_item.connect("activate", lambda _: app.root.after(0, app.open_speaker_enrollment_wizard))
     more_submenu.append(speaker_enroll_item)
 
-    diagnostics_item = Gtk.MenuItem(label="诊断状态...")
+    diagnostics_item = Gtk.MenuItem(label="诊断...")
     diagnostics_item.connect("activate", lambda _: app.root.after(0, app.open_diagnostics))
     more_submenu.append(diagnostics_item)
 
@@ -159,7 +253,6 @@ def build_appindicator_menu(
 
     menu.append(Gtk.SeparatorMenuItem())
 
-    # 退出
     quit_item = Gtk.MenuItem(label="退出")
     quit_item.connect("activate", lambda _: app.root.after(0, app.quit))
     menu.append(quit_item)
@@ -180,6 +273,7 @@ def refresh_appindicator_preset_submenu(app: Any, Gtk: Any) -> None:
     presets = list_tray_refine_presets()
     config = ConfigManager.load(app.config_path)
     current_preset = str(config.get("refine_preset", "default")).strip() or "default"
+    refine_on = bool(config.get("enable_text_refine", False))
     preset_labels = {
         "default": "默认",
         "intent": "意图整理",
@@ -191,18 +285,38 @@ def refresh_appindicator_preset_submenu(app: Any, Gtk: Any) -> None:
 
     radio_group = None
     item_map: dict[str, Any] = {}
-    for preset in presets:
-        preset_item = Gtk.RadioMenuItem(group=radio_group, label=preset_labels.get(preset, preset))
-        if radio_group is None:
-            radio_group = preset_item
-        if preset == current_preset:
-            preset_item.set_active(True)
-        preset_item.connect(
-            "activate",
-            lambda item, p=preset: app.root.after(0, lambda: app.switch_preset(p)) if item.get_active() else None,
-        )
-        preset_submenu.append(preset_item)
-        item_map[preset] = preset_item
+    _begin_menu_sync(app)
+    try:
+        for preset in presets:
+            preset_item = Gtk.RadioMenuItem(group=radio_group, label=preset_labels.get(preset, preset))
+            if radio_group is None:
+                radio_group = preset_item
+            if preset == current_preset:
+                preset_item.set_active(True)
+
+            def _on_preset_toggled(item: Any, chosen: str = preset) -> None:
+                if _menu_syncing(app) or not bool(item.get_active()):
+                    return
+                cached = app._get_cached_config()
+                if not bool(cached.get("enable_text_refine", False)):
+                    return
+                if _block_restart_while_busy(app):
+                    _set_check_active(app, item, False)
+                    current_name = str(cached.get("refine_preset", "default")).strip() or "default"
+                    current_item = getattr(app, "_appindicator_preset_items", {}).get(current_name)
+                    _set_check_active(app, current_item, True)
+                    return
+                app.root.after(0, lambda name=chosen: app.switch_preset(name))
+
+            preset_item.connect("toggled", _on_preset_toggled)
+            preset_submenu.append(preset_item)
+            item_map[preset] = preset_item
+    finally:
+        _end_menu_sync(app)
+
+    preset_menu_item = getattr(app, "_appindicator_preset_menu_item", None)
+    if preset_menu_item is not None:
+        preset_menu_item.set_sensitive(refine_on)
 
     app._appindicator_preset_items = item_map
     app._appindicator_preset_names = presets
@@ -228,13 +342,19 @@ def sync_appindicator_preset_submenu(app: Any) -> None:
 
     config = ConfigManager.load(app.config_path)
     current_preset = str(config.get("refine_preset", "default")).strip() or "default"
+    refine_on = bool(config.get("enable_text_refine", False))
+    preset_menu_item = getattr(app, "_appindicator_preset_menu_item", None)
+    if preset_menu_item is not None:
+        preset_menu_item.set_sensitive(refine_on)
+    if not refine_on:
+        return
     item = app._appindicator_preset_items.get(current_preset)
     if item is not None and not bool(item.get_active()):
-        item.set_active(True)
+        _set_check_active(app, item, True)
 
 
 def update_tray_menu(app: Any) -> None:
-    """Update AppIndicator status and menu items."""
+    """Update AppIndicator status and menu items without writing config."""
     indicator = getattr(app, "indicator", None)
     if indicator is None:
         return
@@ -247,36 +367,44 @@ def update_tray_menu(app: Any) -> None:
         if logo_path.exists():
             cache[status] = icon_path
         else:
-            # Fallback to idle logo
             cache[status] = cache.get("idle", icon_path)
     icon_path = cache[status]
 
-    # Gtk operations must run on the Gtk thread — use GLib.idle_add
     glib = getattr(app, "_glib", None)
     if glib is None:
         return
 
     status_item = getattr(app, "_appindicator_status_item", None)
-    label = status_summary_label(app.state)
 
     def _gtk_update():
+        try:
+            cfg = app._get_cached_config()
+        except Exception:
+            cfg = {}
+        label = status_summary_label(app.state, cfg)
         if status_item is not None:
             status_item.set_label(label)
-        # Update copy text item sensitivity
         copy_text_item = getattr(app, "_appindicator_copy_text_item", None)
         if copy_text_item is not None:
             copy_text_item.set_sensitive(bool(app.state.last_run.text))
-        cfg = app._get_cached_config()
-        text_refine_item = getattr(app, "_appindicator_text_refine_item", None)
-        if text_refine_item is not None:
-            text_refine_item.set_active(bool(cfg.get("enable_text_refine", True)))
-        voice_wake_item = getattr(app, "_appindicator_voice_wake_item", None)
-        if voice_wake_item is not None:
-            voice_wake_item.set_active(bool(cfg.get("enable_voice_wake", False)))
-        # Backend toggle: label follows running state
+        _set_check_active(
+            app,
+            getattr(app, "_appindicator_streaming_item", None),
+            bool(cfg.get("enable_streaming_commit", False)),
+        )
+        refine_on = bool(cfg.get("enable_text_refine", False))
+        _set_check_active(app, getattr(app, "_appindicator_text_refine_item", None), refine_on)
+        _set_check_active(
+            app,
+            getattr(app, "_appindicator_voice_wake_item", None),
+            bool(cfg.get("enable_voice_wake", False)),
+        )
+        preset_menu_item = getattr(app, "_appindicator_preset_menu_item", None)
+        if preset_menu_item is not None:
+            preset_menu_item.set_sensitive(refine_on)
         backend_toggle_item = getattr(app, "_appindicator_backend_toggle_item", None)
         if backend_toggle_item is not None:
-            backend_toggle_item.set_label("停止后端" if app.state.backend_running else "启动后端")
+            backend_toggle_item.set_label(backend_toggle_label(bool(app.state.backend_running)))
         sync_appindicator_preset_submenu(app)
         try:
             indicator.set_icon(icon_path)
@@ -286,20 +414,9 @@ def update_tray_menu(app: Any) -> None:
     glib.idle_add(_gtk_update)
 
 
-def status_summary_label(state: Any) -> str:
-    """Return a short status label for the tray menu status item."""
-    observation = state.last_run
-    if observation.text:
-        return truncate(observation.text, 32)
-    if observation.total_ms > 0:
-        label = f"时间: {observation.total_ms:.0f} ms"
-    else:
-        label = "时间: --"
-    if observation.detected_language:
-        label += f" | 语言: {observation.detected_language}"
-    if observation.asr_path:
-        label += f" | 路径: {observation.asr_path}"
-    return label
+def status_summary_label(state: Any, config: Any = None) -> str:
+    """Return the tray headline for the current app state."""
+    return status_headline(state, config)
 
 
 def collect_recent_runtime_rows(state: Any) -> list[dict[str, str]]:
@@ -324,6 +441,7 @@ def collect_recent_runtime_rows(state: Any) -> list[dict[str, str]]:
 __all__ = [
     "get_logo_path",
     "list_tray_refine_presets",
+    "backend_toggle_label",
     "build_appindicator_menu",
     "refresh_appindicator_preset_submenu",
     "sync_appindicator_preset_submenu",

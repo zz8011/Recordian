@@ -297,6 +297,19 @@ class TrayApp:
             detail = "Recognizing..."
             self.overlay.set_state("processing", detail)
             self._schedule_off_cue_from_overlay("processing", detail)
+        elif et == "recording_duration_limit":
+            # Protective segment limit (duration_guard.py): this segment is
+            # being finalized through the normal stop/EOS path; the mic does
+            # NOT restart by itself — the next segment needs a fresh key press.
+            raw_limit = event.get("limit_s", 0.0) or 0.0
+            limit_s = float(raw_limit) if isinstance(raw_limit, (int, float)) else 0.0
+            self.state.detail = f"已达 {limit_s:.0f} 秒分段上限，正在收尾"
+            self.overlay.set_state("processing", "Segment limit reached — finalizing...")
+            self._notify_backend(
+                "Recordian 分段录音",
+                f"本次录音达到 {limit_s:.0f} 秒保护上限，正在识别收尾；请再次按下快捷键开始下一段。",
+            )
+            self._log_runtime(f"recording_duration_limit limit_s={limit_s:.1f}")
         elif et == "result":
             result = event.get("result")
             observation, commit_info = self._extract_recent_run_observation(result)
@@ -336,10 +349,33 @@ class TrayApp:
                 self.overlay.set_state("idle", detail)
                 self._schedule_off_cue_from_overlay("idle", detail)
             else:
-                self.state.detail = "识别为空"
-                detail = "No speech detected"
-                self.overlay.set_state("idle", detail)
-                self._schedule_off_cue_from_overlay("idle", detail)
+                # Empty text is only "no speech" when nothing failed. A
+                # suppressed/uncertain/stale outcome (e.g. server busy 4429,
+                # session budget exceeded) means the turn was LOST — show a
+                # short actionable failure instead of a misleading
+                # "No speech detected". Never includes transcript/credentials;
+                # fallback suppression protections are unchanged.
+                outcome = str(commit_info.get("outcome", ""))
+                turn_lost = (
+                    outcome in {"uncertain", "stale", "suppressed"}
+                    or "suppressed" in observation.asr_path
+                    or "suppressed" in commit_detail
+                )
+                if turn_lost:
+                    self.state.status = "error"
+                    self.state.detail = "本次听写未完成，请稍后重新说话"
+                    detail = "Dictation incomplete — please speak again"
+                    self.overlay.set_state("error", detail)
+                    self._schedule_off_cue_from_overlay("error", detail)
+                    self._notify_backend("Recordian 听写未完成", "本次听写未完成，请稍后重新说话。")
+                    self._log_runtime(
+                        f"result_incomplete path={observation.asr_path} outcome={outcome} committed={committed}"
+                    )
+                else:
+                    self.state.detail = "识别为空"
+                    detail = "No speech detected"
+                    self.overlay.set_state("idle", detail)
+                    self._schedule_off_cue_from_overlay("idle", detail)
         elif et == "busy":
             self.state.status = "busy"
             self.state.detail = "Busy"
