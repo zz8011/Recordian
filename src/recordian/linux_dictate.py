@@ -5,6 +5,7 @@ import atexit
 import json
 import logging
 import math
+import os
 import queue
 import signal
 import subprocess
@@ -25,6 +26,36 @@ logger = logging.getLogger(__name__)
 
 # 全局进程注册表
 _ACTIVE_PROCESSES: list[subprocess.Popen[Any]] = []
+
+#: 录音 ffmpeg 的 stderr 落盘位置；录音失败（设备忙/被切走）时靠它定位原因。
+RECORD_STDERR_LOG_PATH = Path.home() / ".local" / "share" / "recordian" / "record-ffmpeg.log"
+_record_stderr_log: BinaryIO | None = None
+
+
+def _record_stderr_sink() -> BinaryIO | None:
+    """懒加载一个进程级共享的 ffmpeg stderr 日志文件（追加写）。"""
+    global _record_stderr_log  # noqa: PLW0603
+    if _record_stderr_log is not None:
+        return _record_stderr_log
+    try:
+        path = Path(os.environ.get("RECORDIAN_RECORD_LOG", str(RECORD_STDERR_LOG_PATH))).expanduser()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        _record_stderr_log = open(path, "ab", buffering=0)  # noqa: SIM115
+        atexit.register(_close_record_stderr_log)
+    except OSError:
+        return None
+    return _record_stderr_log
+
+
+def _close_record_stderr_log() -> None:
+    global _record_stderr_log  # noqa: PLW0603
+    sink, _record_stderr_log = _record_stderr_log, None
+    if sink is None:
+        return
+    try:
+        sink.close()
+    except OSError:
+        pass
 
 
 def _cleanup_processes() -> None:
@@ -179,7 +210,7 @@ def add_dictate_args(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument(
         "--commit-backend",
-        choices=["none", "auto", "auto-fallback", "wtype", "xdotool", "xdotool-clipboard", "stdout"],
+        choices=["none", "auto", "auto-fallback", "fcitx", "wtype", "xdotool", "xdotool-clipboard", "stdout"],
         default="auto",
     )
     parser.add_argument(
@@ -213,6 +244,12 @@ def add_dictate_args(parser: argparse.ArgumentParser) -> None:
         help="Enable VAD in utterance ASR provider to suppress silence hallucination",
     )
     parser.add_argument("--hotword", action="append", default=[])
+    parser.add_argument(
+        "--hotword-replacement",
+        action="append",
+        default=[],
+        help="Explicit lexicon replacement SRC→DST (repeatable). Also accepted in --asr-context as '错词 → 正词'.",
+    )
     parser.add_argument(
         "--qwen-language",
         default="Chinese",
@@ -280,6 +317,14 @@ def build_ffmpeg_record_cmd(
         "-hide_banner",
         "-loglevel",
         "error",
+        "-fflags",
+        "nobuffer",
+        "-flags",
+        "low_delay",
+        "-probesize",
+        "32",
+        "-analyzeduration",
+        "0",
         "-y",
         "-f",
         "pulse",
@@ -296,12 +341,22 @@ def build_ffmpeg_record_cmd(
         base.extend(
             [
                 "-filter_complex",
-                "[0:a]asplit=2[record][monitor]",
+                "[0:a]aformat=sample_fmts=flt:sample_rates=16000:channel_layouts=mono,asplit=2[record][monitor]",
                 "-map",
                 "[record]",
             ]
         )
-    monitor_output = ["-map", "[monitor]", "-f", "f32le", "-acodec", "pcm_f32le", "pipe:1"] if enable_monitor else []
+    monitor_output = [
+        "-map",
+        "[monitor]",
+        "-flush_packets",
+        "1",
+        "-f",
+        "f32le",
+        "-acodec",
+        "pcm_f32le",
+        "pipe:1",
+    ] if enable_monitor else []
     if record_format == "ogg":
         return base + ["-c:a", "libopus", "-b:a", "24k", str(output_path), *monitor_output]
     if record_format == "wav":
@@ -424,13 +479,20 @@ def create_provider(args: argparse.Namespace) -> ASRProvider:
     raw_lang = cast(str, getattr(args, "qwen_language", "Chinese"))
     qwen_language: str | None = None if raw_lang == "auto" else raw_lang
 
-    return QwenASRProvider(
+    device = str(getattr(args, "device", "cuda:0") or "cuda:0")
+    if device == "cuda":
+        device = "cuda:0"
+    provider = QwenASRProvider(
         model_name=model,
-        device=getattr(args, "device", "cuda:0"),
+        device=device,
         language=qwen_language,
         max_new_tokens=getattr(args, "qwen_max_new_tokens", 1024),
         context=asr_context,
     )
+    import threading
+
+    threading.Thread(target=provider._lazy_load, name="qwen-asr-load", daemon=True).start()
+    return provider
 
 
 def create_committer(args: argparse.Namespace):
@@ -467,10 +529,20 @@ def start_record_process(
             channels=args.channels,
             input_device=str(getattr(args, "input_device", "default")),
         )
+    stderr_sink = _record_stderr_sink()
+    if stderr_sink is not None:
+        try:
+            header = f"\n=== {time.strftime('%Y-%m-%d %H:%M:%S')} {recorder_backend} {' '.join(record_cmd)} ===\n"
+            stderr_sink.write(header.encode("utf-8", errors="replace"))
+        except OSError:
+            stderr_sink = None
+    if monitor_enabled and which("stdbuf"):
+        record_cmd = ["stdbuf", "-o0", *record_cmd]
     proc = subprocess.Popen(
         record_cmd,
         stdout=subprocess.PIPE if monitor_enabled else None,
-        stderr=subprocess.DEVNULL if monitor_enabled else None,
+        # 以前这里在 monitor 模式下是 DEVNULL，录音失败（设备忙/被切走）完全无迹可查
+        stderr=stderr_sink if stderr_sink is not None else (subprocess.DEVNULL if monitor_enabled else None),
         bufsize=0 if monitor_enabled else -1,
     )
     _ACTIVE_PROCESSES.append(proc)
@@ -588,12 +660,27 @@ def transcribe_and_commit(
     asr = provider.transcribe_file(audio_path, hotwords=hotwords)
     transcribe_latency_ms = (time.perf_counter() - t1) * 1000
     routing = resolve_remote_paste_routing(args)
+    from .hotword_corrector import correct_hotwords, lexicon_from_args
+
+    text = asr.text
+    _, replacements = lexicon_from_args(args)
+    if text.strip() and (hotwords or replacements) and bool(getattr(args, "enable_hotword_correction", True)):
+        try:
+            max_edits = max(0, int(getattr(args, "hotword_correction_edits", 1)))
+        except Exception:
+            max_edits = 1
+        text, _changes = correct_hotwords(
+            text,
+            hotwords,
+            max_ascii_edits=max_edits,
+            replacements=replacements,
+        )
 
     commit_info = {"backend": committer.backend_name, "committed": False, "detail": "disabled"}
-    if asr.text.strip():
+    if text.strip():
         if routing.commit_local:
             try:
-                result = committer.commit(asr.text)
+                result = committer.commit(text)
                 detail = str(result.detail)
                 if result.committed and auto_hard_enter:
                     enter_result = send_hard_enter(committer)
@@ -623,12 +710,12 @@ def transcribe_and_commit(
 
     remote_result = send_remote_paste_from_args(
         args,
-        asr.text,
+        text,
         log=lambda message: logger.info(message),
     )
     if remote_result.get("enabled"):
         commit_info["remote_paste"] = remote_result
-    if asr.text.strip() and not routing.commit_local:
+    if text.strip() and not routing.commit_local:
         commit_info.update(
             {
                 "backend": "remote-paste",
@@ -636,7 +723,7 @@ def transcribe_and_commit(
                 "detail": str(remote_result.get("detail", "")).strip() or "remote_paste_failed",
             }
         )
-    return asr.text, transcribe_latency_ms, getattr(asr, "detected_language", None), commit_info
+    return text, transcribe_latency_ms, getattr(asr, "detected_language", None), commit_info
 
 
 def run_dictate_once(
@@ -670,12 +757,14 @@ def run_dictate_once(
             raise RuntimeError(f"record command failed with exit code={code}")
         record_latency_ms = (time.perf_counter() - t0) * 1000
 
+        from .hotword_corrector import compose_effective_hotwords
+
         text, transcribe_latency_ms, detected_language, commit_info = transcribe_and_commit(
             args=args,
             provider=provider,
             committer=committer,
             audio_path=audio_path,
-            hotwords=args.hotword,
+            hotwords=compose_effective_hotwords(args),
             auto_hard_enter=bool(getattr(args, "auto_hard_enter", False)),
         )
 

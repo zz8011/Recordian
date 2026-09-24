@@ -147,6 +147,7 @@ def test_resolve_streaming_committer_prefers_xdotool_for_clipboard_backend(monke
 
     assert isinstance(streaming_committer, XDoToolCommitter)
     assert streaming_committer.target_window_id == 42
+    assert streaming_committer.streaming is True
 
 
 def test_resolve_streaming_committer_keeps_clipboard_for_electron(monkeypatch):
@@ -565,6 +566,7 @@ def test_resolve_committer_auto_with_electron_window(monkeypatch):
         return False
 
     monkeypatch.setattr("recordian.linux_commit.which", lambda x: "/usr/bin/" + x)
+    monkeypatch.setattr("recordian.linux_commit._fcitx_channel_available", lambda: False)
     monkeypatch.setattr("recordian.linux_commit._is_electron_window", _fake_is_electron)
     monkeypatch.setattr("recordian.linux_commit._is_terminal_window", _fake_is_terminal)
 
@@ -672,3 +674,53 @@ def test_committer_with_fallback_requires_at_least_one_committer():
         raise AssertionError("应该抛出 ValueError")
     except ValueError as e:
         assert "at least one committer" in str(e)
+
+
+def test_fcitx_committer_sends_commit_text(monkeypatch):
+    from recordian.linux_commit import FcitxCommitter
+
+    calls = []
+
+    def _run(cmd, **kwargs):
+        calls.append(cmd)
+        class Result:
+            returncode = 0
+            stdout = 's "gtk3 gedit"'
+            stderr = ""
+        return Result()
+
+    monkeypatch.setattr("recordian.linux_commit.which", lambda name: "/usr/bin/" + name if name == "busctl" else None)
+    monkeypatch.setattr("recordian.linux_commit.subprocess.run", _run)
+
+    result = FcitxCommitter().commit("输入法")
+
+    assert result.committed is True
+    assert result.backend == "fcitx"
+    assert calls[-1][-1] == "输入法"
+    assert "CommitText" in calls[-1]
+
+
+def test_auto_prefers_fcitx_when_channel_is_up(monkeypatch):
+    from recordian.linux_commit import CommitterWithFallback, resolve_committer
+
+    monkeypatch.setattr("recordian.linux_commit.which", lambda name: "/usr/bin/" + name)
+    monkeypatch.setattr("recordian.linux_commit._fcitx_channel_available", lambda: True)
+
+    committer = resolve_committer("auto", target_window_id=7)
+
+    assert isinstance(committer, CommitterWithFallback)
+    assert committer.committers[0][0].backend_name == "fcitx"
+    assert committer.committers[1][0].backend_name == "xdotool-clipboard"
+
+
+def test_streaming_committer_keeps_fcitx_channel(monkeypatch):
+    from recordian.linux_commit import FcitxCommitter, resolve_committer, resolve_streaming_committer
+
+    monkeypatch.setattr("recordian.linux_commit.which", lambda name: "/usr/bin/" + name)
+    monkeypatch.setattr("recordian.linux_commit._fcitx_channel_available", lambda: True)
+
+    streaming = resolve_streaming_committer(resolve_committer("auto", target_window_id=9))
+
+    assert isinstance(streaming, FcitxCommitter)
+    assert streaming.streaming is True
+    assert streaming.target_window_id == 9

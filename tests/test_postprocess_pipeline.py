@@ -298,6 +298,79 @@ def test_run_postprocess_pipeline_logs_when_refine_enabled_without_refiner(tmp_p
     assert payload["refiner_ready"] is False
 
 
+def test_run_postprocess_pipeline_corrects_prefetched_text_before_oneshot_commit(tmp_path: Path, monkeypatch) -> None:
+    audio_path, state_events, result_events, error_events = _base_context(tmp_path)
+
+    class _Provider:
+        def transcribe_file(self, audio_path: Path, hotwords: list[str]):  # noqa: ANN001
+            raise AssertionError("prefetched ASR text should skip re-transcription")
+
+    class _Committer:
+        backend_name = "stdout"
+        target_window_id = None
+
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        def commit(self, text: str) -> SimpleNamespace:
+            self.calls.append(text)
+            return SimpleNamespace(backend="stdout", committed=True, detail=f"committed:{text}")
+
+    committer = _Committer()
+    monkeypatch.setattr(
+        "recordian.postprocess_pipeline.read_wav_mono_f32",
+        lambda path: np.array([0.2, -0.2, 0.2, -0.2], dtype=np.float32),
+    )
+    monkeypatch.setattr(
+        "recordian.postprocess_pipeline.send_remote_paste_from_args",
+        lambda args, text, *, log=None: {"enabled": False},
+    )
+
+    context = PostprocessPipelineContext(
+        args=argparse.Namespace(
+            config_path="",
+            auto_hard_enter=False,
+            debug_diagnostics=False,
+            enable_streaming_refine=False,
+            enable_streaming_commit=False,
+            enable_remote_paste=False,
+            enable_hotword_correction=True,
+            asr_context="CodeX -> Codex",
+            hotword=["Codex"],
+        ),
+        audio_path=audio_path,
+        record_backend="ffmpeg-pulse",
+        record_latency_ms=456.0,
+        owner_filter_enabled=False,
+        owner_seen=False,
+        owner_last_score=-1.0,
+        state={"target_window_id": 77},
+        provider=_Provider(),
+        refiner=None,
+        committer=committer,
+        auto_lexicon=None,
+        refine_postprocess_rule="none",
+        normalize_final_text=lambda text: str(text).strip(),
+        resolve_hotwords=lambda: ["Codex"],
+        on_state=state_events.append,
+        on_result=result_events.append,
+        on_error=error_events.append,
+        prefetched_asr_text="回去开 CodeX",
+        prefetched_detected_language="zh",
+        prefetched_transcribe_latency_ms=123.0,
+        prefetched_commit_info=None,
+    )
+
+    run_postprocess_pipeline(context)
+
+    assert not error_events
+    assert committer.calls == ["回去开 Codex"]
+    payload = result_events[0]["result"]
+    assert payload["text"] == "回去开 Codex"
+    assert payload["asr_path"] == "prefetched"
+    assert any("hotword_corrected" in str(event.get("message", "")) for event in state_events)
+
+
 def test_run_postprocess_pipeline_reuses_prefetched_asr_text_and_commit(tmp_path: Path, monkeypatch) -> None:
     audio_path, state_events, result_events, error_events = _base_context(tmp_path)
 
@@ -558,6 +631,77 @@ def test_run_postprocess_pipeline_streams_asr_commit_when_enabled(tmp_path: Path
     assert committer.calls == ["你", "好"]
     assert result_events[0]["result"]["text"] == "你好"
     assert any(event.get("event") == "stream_partial" for event in state_events)
+
+
+def test_empty_file_stream_falls_back_to_oneshot_commit(tmp_path: Path, monkeypatch) -> None:
+    audio_path, state_events, result_events, error_events = _base_context(tmp_path)
+
+    class _Provider:
+        def transcribe_file_stream(self, audio_path: Path, hotwords: list[str]):  # noqa: ANN001
+            if False:
+                yield ""
+            return
+            yield ""
+
+        def transcribe_file(self, audio_path: Path, hotwords: list[str]):  # noqa: ANN001
+            return SimpleNamespace(text="整句还在")
+
+    class _Committer:
+        backend_name = "fcitx"
+        target_window_id = None
+
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        def commit(self, text: str) -> SimpleNamespace:
+            self.calls.append(text)
+            return SimpleNamespace(backend="fcitx", committed=True, detail="committed")
+
+    committer = _Committer()
+    monkeypatch.setattr(
+        "recordian.postprocess_pipeline.read_wav_mono_f32",
+        lambda path: np.array([0.3, -0.2, 0.1], dtype=np.float32),
+    )
+    monkeypatch.setattr(
+        "recordian.postprocess_pipeline.send_remote_paste_from_args",
+        lambda args, text, *, log=None: {"enabled": False},
+    )
+    context = PostprocessPipelineContext(
+        args=argparse.Namespace(
+            config_path="",
+            auto_hard_enter=False,
+            debug_diagnostics=False,
+            enable_streaming_refine=False,
+            enable_streaming_commit=True,
+            enable_remote_paste=False,
+            enable_hotword_correction=False,
+        ),
+        audio_path=audio_path,
+        record_backend="ffmpeg-pulse",
+        record_latency_ms=111.0,
+        owner_filter_enabled=False,
+        owner_seen=False,
+        owner_last_score=-1.0,
+        state={"target_window_id": 88},
+        provider=_Provider(),
+        refiner=None,
+        committer=committer,
+        auto_lexicon=None,
+        refine_postprocess_rule="none",
+        normalize_final_text=lambda text: str(text).strip(),
+        resolve_hotwords=lambda: [],
+        on_state=state_events.append,
+        on_result=result_events.append,
+        on_error=error_events.append,
+        prefetched_commit_info={"backend": "fcitx", "committed": False, "detail": "realtime_complete"},
+    )
+
+    run_postprocess_pipeline(context)
+
+    assert not error_events
+    assert committer.calls == ["整句还在"]
+    assert result_events[0]["result"]["asr_path"] == "oneshot"
+    assert result_events[0]["result"]["commit"]["committed"] is True
 
 
 def test_run_postprocess_pipeline_streams_asr_commit_with_normalized_growth(tmp_path: Path, monkeypatch) -> None:
@@ -993,3 +1137,284 @@ def test_run_postprocess_pipeline_routes_to_remote_only_when_deskflow_screen_mat
     assert payload["commit"]["committed"] is True
     assert payload["commit"]["detail"] == "ok"
     assert payload["commit"]["remote_paste"]["routing_mode"] == "remote-only"
+
+
+def test_run_postprocess_pipeline_applies_hotword_correction_before_commit(tmp_path: Path, monkeypatch) -> None:
+    audio_path, state_events, result_events, error_events = _base_context(tmp_path)
+
+    class _Provider:
+        provider_name = "mock-asr"
+
+        def transcribe_file(self, audio_path: Path, hotwords: list[str]):  # noqa: ANN001
+            return SimpleNamespace(text="把 Githup 的 CodeX 配置看一下", detected_language="zh")
+
+    class _Committer:
+        backend_name = "stdout"
+        target_window_id = None
+
+        def commit(self, text: str) -> SimpleNamespace:
+            return SimpleNamespace(backend="stdout", committed=True, detail=f"committed:{text}")
+
+    monkeypatch.setattr(
+        "recordian.postprocess_pipeline.read_wav_mono_f32",
+        lambda path: np.array([0.2, -0.2, 0.2, -0.2], dtype=np.float32),
+    )
+
+    context = PostprocessPipelineContext(
+        args=argparse.Namespace(
+            config_path="",
+            auto_hard_enter=False,
+            debug_diagnostics=False,
+            enable_streaming_refine=False,
+            enable_hotword_correction=True,
+            hotword_correction_edits=1,
+        ),
+        audio_path=audio_path,
+        record_backend="ffmpeg-pulse",
+        record_latency_ms=100.0,
+        owner_filter_enabled=False,
+        owner_seen=False,
+        owner_last_score=-1.0,
+        state={},
+        provider=_Provider(),
+        refiner=None,
+        committer=_Committer(),
+        auto_lexicon=None,
+        refine_postprocess_rule="none",
+        normalize_final_text=lambda text: str(text).strip(),
+        resolve_hotwords=lambda: ["github", "Codex"],
+        on_state=state_events.append,
+        on_result=result_events.append,
+        on_error=error_events.append,
+    )
+
+    run_postprocess_pipeline(context)
+
+    assert not error_events
+    payload = result_events[0]["result"]
+    assert payload["text"] == "把 github 的 Codex 配置看一下"
+    assert any(
+        event.get("event") == "log" and "hotword_corrected" in str(event.get("message"))
+        for event in state_events
+    )
+
+
+def test_run_postprocess_pipeline_hotword_correction_can_be_disabled(tmp_path: Path, monkeypatch) -> None:
+    audio_path, state_events, result_events, error_events = _base_context(tmp_path)
+
+    class _Provider:
+        provider_name = "mock-asr"
+
+        def transcribe_file(self, audio_path: Path, hotwords: list[str]):  # noqa: ANN001
+            return SimpleNamespace(text="把 Githup 的配置看一下", detected_language="zh")
+
+    class _Committer:
+        backend_name = "stdout"
+        target_window_id = None
+
+        def commit(self, text: str) -> SimpleNamespace:
+            return SimpleNamespace(backend="stdout", committed=True, detail=f"committed:{text}")
+
+    monkeypatch.setattr(
+        "recordian.postprocess_pipeline.read_wav_mono_f32",
+        lambda path: np.array([0.2, -0.2, 0.2, -0.2], dtype=np.float32),
+    )
+
+    context = PostprocessPipelineContext(
+        args=argparse.Namespace(
+            config_path="",
+            auto_hard_enter=False,
+            debug_diagnostics=False,
+            enable_streaming_refine=False,
+            enable_hotword_correction=False,
+        ),
+        audio_path=audio_path,
+        record_backend="ffmpeg-pulse",
+        record_latency_ms=100.0,
+        owner_filter_enabled=False,
+        owner_seen=False,
+        owner_last_score=-1.0,
+        state={},
+        provider=_Provider(),
+        refiner=None,
+        committer=_Committer(),
+        auto_lexicon=None,
+        refine_postprocess_rule="none",
+        normalize_final_text=lambda text: str(text).strip(),
+        resolve_hotwords=lambda: ["github"],
+        on_state=state_events.append,
+        on_result=result_events.append,
+        on_error=error_events.append,
+    )
+
+    run_postprocess_pipeline(context)
+
+    assert not error_events
+    payload = result_events[0]["result"]
+    assert payload["text"] == "把 Githup 的配置看一下"
+
+
+def test_run_refinement_skips_llm_for_long_text() -> None:
+    from recordian.postprocess_pipeline import _run_refinement
+
+    refine_calls: list[str] = []
+
+    class _Refiner:
+        prompt_template = None
+
+        def refine(self, text: str) -> str:  # noqa: ANN001
+            refine_calls.append(str(text))
+            raise AssertionError("long text should never reach the LLM refiner")
+
+    state_events: list[dict[str, object]] = []
+    args = argparse.Namespace(
+        refine_max_len_llm=50,
+        enable_streaming_refine=False,
+        debug_diagnostics=False,
+        config_path="",
+    )
+    long_text = "要要要把这个功能做出来并且测试通过，然后我们就发布上线。然后然后我们再复查一遍。" * 5
+    assert len(long_text) > 50
+
+    refiner = _Refiner()
+    text, latency_ms = _run_refinement(
+        args=args,
+        refiner=refiner,
+        text=long_text,
+        effective_hotwords=[],
+        refine_postprocess_rule="zh-stutter-lite",
+        on_state=state_events.append,
+    )
+
+    assert refine_calls == []
+    assert latency_ms == 0.0
+    assert refiner.last_refine_skipped is True
+    assert "要把这个功能做出来" in text
+    assert len(text) < len(long_text)
+    assert any("refine_skip_long_text" in str(event.get("message", "")) for event in state_events)
+
+
+def test_run_refinement_still_refines_short_text_below_threshold() -> None:
+    from recordian.postprocess_pipeline import _run_refinement
+
+    refine_calls: list[str] = []
+
+    class _Refiner:
+        prompt_template = None
+
+        def refine(self, text: str) -> str:  # noqa: ANN001
+            refine_calls.append(str(text))
+            return "整理后的短文"
+
+    state_events: list[dict[str, object]] = []
+    args = argparse.Namespace(
+        refine_max_len_llm=800,
+        enable_streaming_refine=False,
+        debug_diagnostics=False,
+        config_path="",
+    )
+    short_text = "这个这个方案要测试通过"
+    assert len(short_text) <= 800
+
+    refiner = _Refiner()
+    text, latency_ms = _run_refinement(
+        args=args,
+        refiner=refiner,
+        text=short_text,
+        effective_hotwords=[],
+        refine_postprocess_rule="none",
+        on_state=state_events.append,
+    )
+
+    assert refine_calls == [short_text]
+    assert refiner.last_refine_skipped is False
+    assert text == "整理后的短文"
+    assert latency_ms >= 0.0
+
+
+def test_should_skip_llm_refine_respects_threshold_and_off_value() -> None:
+    from recordian.postprocess_pipeline import _should_skip_llm_refine
+
+    args = argparse.Namespace(refine_max_len_llm=800)
+    assert _should_skip_llm_refine(args, "短") is False
+    assert _should_skip_llm_refine(args, "长" * 800) is False
+    assert _should_skip_llm_refine(args, "长" * 801) is True
+
+    off_args = argparse.Namespace(refine_max_len_llm=0)
+    assert _should_skip_llm_refine(off_args, "长" * 5000) is False
+
+
+def test_run_postprocess_pipeline_skips_llm_and_commits_cleaned_long_text(tmp_path: Path, monkeypatch) -> None:
+    audio_path, state_events, result_events, error_events = _base_context(tmp_path)
+
+    class _Provider:
+        def transcribe_file(self, audio_path: Path, hotwords: list[str]):  # noqa: ANN001
+            raw = "这个这个方案没问题，然后然后我们按这个执行，确保确保流程顺畅。" * 8
+            return SimpleNamespace(text=raw, detected_language="zh")
+
+    refine_calls: list[str] = []
+
+    class _Refiner:
+        prompt_template = None
+
+        def refine(self, text: str) -> str:  # noqa: ANN001
+            refine_calls.append(str(text))
+            raise AssertionError("long text should skip LLM refine in the full pipeline")
+
+    class _Committer:
+        backend_name = "stdout"
+        target_window_id = None
+
+        def commit(self, text: str) -> SimpleNamespace:
+            return SimpleNamespace(backend="stdout", committed=True, detail=f"committed:{text}")
+
+    monkeypatch.setattr(
+        "recordian.postprocess_pipeline.read_wav_mono_f32",
+        lambda path: np.array([0.3, -0.2, 0.2], dtype=np.float32),
+    )
+    monkeypatch.setattr(
+        "recordian.postprocess_pipeline.send_remote_paste_from_args",
+        lambda args, text, *, log=None: {"enabled": False},
+    )
+
+    context = PostprocessPipelineContext(
+        args=argparse.Namespace(
+            config_path="",
+            auto_hard_enter=False,
+            debug_diagnostics=False,
+            enable_streaming_refine=False,
+            enable_streaming_commit=False,
+            enable_remote_paste=False,
+            refine_max_len_llm=50,
+        ),
+        audio_path=audio_path,
+        record_backend="ffmpeg-pulse",
+        record_latency_ms=100.0,
+        owner_filter_enabled=False,
+        owner_seen=False,
+        owner_last_score=-1.0,
+        state={},
+        provider=_Provider(),
+        refiner=_Refiner(),
+        committer=_Committer(),
+        auto_lexicon=None,
+        refine_postprocess_rule="zh-stutter-lite",
+        normalize_final_text=lambda text: str(text).strip(),
+        resolve_hotwords=lambda: [],
+        on_state=state_events.append,
+        on_result=result_events.append,
+        on_error=error_events.append,
+    )
+
+    run_postprocess_pipeline(context)
+
+    assert not error_events
+    assert refine_calls == []
+    payload = result_events[0]["result"]
+    assert payload["text"]
+    assert payload["refine_latency_ms"] == 0.0
+    assert payload["commit"]["committed"] is True
+    assert "确保流程顺畅" in payload["text"]
+    assert "按这个执行" in payload["text"]
+    assert len(payload["text"]) < 8 * len("这个这个方案没问题，然后然后我们按这个执行，确保确保流程顺畅。")
+    assert any("refine_skip_long_text" in str(event.get("message", "")) for event in state_events)

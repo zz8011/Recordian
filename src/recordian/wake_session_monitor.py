@@ -112,6 +112,53 @@ def _display_audio_level(level: float) -> float:
     return min(1.0, max(0.0, float(level)))
 
 
+class _AdaptiveDisplayLevel:
+    """dB 域自动量程显示电平。
+
+    采集链增益因机器差异很大（话筒 boost 过高时固定映射会整体饱和到
+    1.0，overlay 动画看起来"完全不随语音变化"）。overlay 需要的是
+    "相对当前环境的音量起伏"，所以在 dB 域跟踪噪声基底与语音上限，
+    把 RMS 自适应映射到 0..1。
+
+    速率按监控帧（约 64ms）标定；仅用于显示，不影响 VAD/自动停止。
+    """
+
+    MIN_RANGE_DB = 5.5
+    _LO_RISE_PER_FRAME = 0.02   # 噪声基底上升 ~0.3 dB/s
+    _HI_ATTACK = 0.4            # 语音上限快攻
+    _HI_DECAY_PER_FRAME = 0.03  # 语音上限衰减 ~0.5 dB/s
+    _ATTACK = 0.35
+    _RELEASE = 0.15
+
+    def __init__(self) -> None:
+        self._lo: float | None = None
+        self._hi: float | None = None
+        self._level = 0.0
+
+    def update(self, rms: float) -> float:
+        import math
+
+        db = 20.0 * math.log10(max(float(rms), 1e-5))
+        if self._lo is None or self._hi is None:
+            self._lo = db
+            self._hi = db + self.MIN_RANGE_DB
+        lo, hi = self._lo, self._hi
+        # 噪声基底：即降缓升
+        if db < lo:
+            lo = db
+        else:
+            lo = min(db, lo + self._LO_RISE_PER_FRAME)
+        # 语音上限：快攻慢放，保持最小量程
+        if db > hi:
+            hi += (db - hi) * self._HI_ATTACK
+        else:
+            hi = max(lo + self.MIN_RANGE_DB, hi - self._HI_DECAY_PER_FRAME)
+        self._lo, self._hi = lo, hi
+        raw = min(1.0, max(0.0, (db - lo) / max(hi - lo, 1.0)))
+        alpha = self._ATTACK if raw > self._level else self._RELEASE
+        self._level += (raw - self._level) * alpha
+        return self._level
+
 def _should_extend_last_speech_timestamp(
     *,
     speech_detected_raw: bool,
@@ -165,6 +212,7 @@ def start_wake_session_monitor(context: WakeSessionMonitorContext) -> threading.
 
             noise_floor = 0.0015
             smoothed_level = 0.0
+            display_tracker = _AdaptiveDisplayLevel()
             monitor_stream = getattr(context.record_handle, "monitor_stream", None)
             sample_rate = int(getattr(context.record_handle, "monitor_sample_rate", 16000))
             monitor_channels = max(1, int(getattr(context.record_handle, "monitor_channels", 1)))
@@ -420,7 +468,7 @@ def start_wake_session_monitor(context: WakeSessionMonitorContext) -> threading.
             def _process_audio_frame(mono_frame: Any, *, frames: int, sample_rate: int) -> None:
                 nonlocal noise_floor, smoothed_level, vad, vad_init_attempted, vad_log_emitted
                 nonlocal speech_evidence_s, owner_audio_samples, owner_last_verify_ts, owner_last_active
-                nonlocal owner_pass_streak, owner_fail_streak
+                nonlocal owner_pass_streak, owner_fail_streak, display_tracker
 
                 mono_frame = np.ascontiguousarray(np.asarray(mono_frame, dtype=np.float32).reshape(-1))
                 if mono_frame.size == 0:
@@ -507,7 +555,9 @@ def start_wake_session_monitor(context: WakeSessionMonitorContext) -> threading.
 
                 alpha = 0.28 if level > smoothed_level else 0.12
                 smoothed_level = smoothed_level * (1.0 - alpha) + level * alpha
-                display_level = _display_audio_level(smoothed_level)
+                # 显示电平走 dB 域自适应量程：固定映射在高增益采集链上会
+                # 整体饱和，球体动画就完全不随语音变化。
+                display_level = _display_audio_level(display_tracker.update(rms))
                 gated_level = _owner_gate_level(
                     smoothed_level,
                     owner_filter_enabled=owner_filter_enabled,

@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from .audio import read_wav_mono_f32
+from .hotword_corrector import correct_hotwords, lexicon_from_args
 from .linux_commit import paste_to_enter_delay_seconds, resolve_streaming_committer, send_hard_enter
 from .providers import provider_supports_file_streaming, provider_supports_realtime
 from .refine_capture import append_refine_sample, resolve_refine_capture_path
@@ -199,6 +200,68 @@ def _build_refine_prompt_with_protected_terms(prompt_template: str | None, prote
     return guard + "\n" + prompt_template
 
 
+def _select_refine_correction_terms(text: str, hotwords: list[str], *, max_terms: int = 24) -> list[str]:
+    """Hotwords NOT present in *text* — candidates the ASR may have misrecognized.
+
+    These are handed to the refiner as correction targets so it can rewrite
+    homophone / near-spelling variants (Cloud → Claude, SPARK → SPARC) back to
+    the canonical hotword form.
+    """
+    selected: list[str] = []
+    seen: set[str] = set()
+    for raw in hotwords:
+        token = str(raw).strip()
+        if not token:
+            continue
+        key = token.lower() if token.isascii() else token
+        if key in seen:
+            continue
+        seen.add(key)
+        if len(token) < 2 or len(token) > 32:
+            continue
+        if key in _REFINE_PROTECTED_STOPWORDS:
+            continue
+        if _text_contains_term(text, token):
+            continue
+        selected.append(token)
+        if len(selected) >= max(0, int(max_terms)):
+            break
+    return selected
+
+
+def _build_refine_prompt_with_guards(
+    prompt_template: str | None,
+    protected_terms: list[str],
+    correction_terms: list[str],
+) -> str | None:
+    """Build refine prompt with hotword guards: correction targets + protection."""
+    if not prompt_template:
+        return prompt_template
+    corrections = [str(t).strip() for t in correction_terms if str(t).strip()]
+    if not corrections:
+        return _build_refine_prompt_with_protected_terms(prompt_template, protected_terms)
+
+    sections: list[str] = []
+    correction_line = "、".join(corrections)
+    sections.append(
+        "1. 标准术语表："
+        f"{correction_line}\n"
+        "   原文中如果出现与术语表里某个词发音相同/相近（同音字、近音字）或拼写相近"
+        "（大小写、空格、连字符差异，或个别字母错误）的片段，必须改写为术语表中的标准形式。"
+        "例如原文是 Cloud 而术语表有 Claude 时，输出 Claude。"
+        "注意：只有当片段在语境中确实指该术语时才改写，普通英语单词不要误改。"
+    )
+    protected = [str(t).strip() for t in protected_terms if str(t).strip()]
+    if protected:
+        term_line = "、".join(protected)
+        sections.append(
+            "2. 下列词语已在原文中出现，输出时必须原样保留，不得改写、同义替换或删除："
+            f"{term_line}"
+        )
+    guard = "附加约束（必须遵守）：\n" + "\n".join(sections) + "\n"
+    return guard + "\n" + prompt_template
+
+
 def _preview_text(text: str, max_len: int = 48) -> str:
     normalized = " ".join(text.strip().split())
     if len(normalized) <= max_len:
@@ -368,6 +431,11 @@ def _apply_target_window(committer: Any, state: Mapping[str, object]) -> None:
     wid = state.get("target_window_id")
     if hasattr(committer, "target_window_id"):
         committer.target_window_id = wid if isinstance(wid, int) else None
+    nested = getattr(committer, "committers", None)
+    if isinstance(nested, list):
+        for entry in nested:
+            if isinstance(entry, tuple) and entry:
+                _apply_target_window(entry[0], state)
 
 
 def _should_skip_owner_gated_asr(
@@ -470,12 +538,13 @@ def _capture_refine_sample(
     )
     refine_enabled = bool(getattr(args, "enable_text_refine", False))
     refiner_ready = refiner is not None
+    refine_skipped = bool(getattr(refiner, "last_refine_skipped", False)) if refiner is not None else False
     append_refine_sample(
         output_path=output_path,
         audio_path=audio_path,
         raw_asr_text=raw_text,
         final_text=final_text,
-        refine_applied=refiner_ready and bool(str(raw_text).strip()),
+        refine_applied=refiner_ready and bool(str(raw_text).strip()) and not refine_skipped,
         refine_changed=str(raw_text).strip() != str(final_text).strip(),
         refine_preset=str(getattr(args, "refine_preset", "default")).strip() or "default",
         refine_provider=str(getattr(args, "refine_provider", "")).strip(),
@@ -489,6 +558,28 @@ def _capture_refine_sample(
     )
     if getattr(args, "debug_diagnostics", False):
         on_state({"event": "log", "message": f"diag refine_sample_captured={output_path}"})
+
+
+def _resolve_refine_llm_max_len(args: argparse.Namespace) -> int:
+    """Chars threshold above which the LLM rewrite is skipped (0 = always refine)."""
+    try:
+        return max(0, int(getattr(args, "refine_max_len_llm", 0)))
+    except Exception:
+        return 0
+
+
+def _should_skip_llm_refine(args: argparse.Namespace, text: str) -> bool:
+    """Long-text fast path: skip the whole-document LLM rewrite and only clean locally.
+
+    Refinement regenerates roughly the full input length, so cost grows linearly with
+    the utterance and the single cloud request can exceed its HTTP timeout. Above the
+    configured threshold the deterministic postprocess cleanup (de-dup / filler words)
+    is still applied without paying LLM time.
+    """
+    threshold = _resolve_refine_llm_max_len(args)
+    if threshold <= 0:
+        return False
+    return len(str(text or "")) > threshold
 
 
 def _sync_refiner_preset(args: argparse.Namespace, refiner: Any, on_state: EventCallback) -> None:
@@ -517,16 +608,42 @@ def _run_refinement(
     refine_postprocess_rule: str,
     on_state: EventCallback,
 ) -> tuple[str, float]:
+    threshold = _resolve_refine_llm_max_len(args)
+    if threshold > 0 and len(text) > threshold:
+        refiner.last_refine_skipped = True
+        on_state(
+            {
+                "event": "log",
+                "message": (
+                    f"refine_skip_long_text: len={len(text)} max_len_llm={threshold}"
+                    f" rule={refine_postprocess_rule or 'none'}"
+                    " — 长文跳过 LLM 精炼，仅做确定性清洗"
+                ),
+            }
+        )
+        cleaned = _apply_refine_postprocess(text, rule=refine_postprocess_rule)
+        return cleaned, 0.0
+
+    refiner.last_refine_skipped = False
     _sync_refiner_preset(args, refiner, on_state)
 
     t1 = time.perf_counter()
     base_prompt_template = getattr(refiner, "prompt_template", None)
     protected_terms = _select_refine_protected_terms(text, effective_hotwords)
-    prompt_with_guards = _build_refine_prompt_with_protected_terms(base_prompt_template, protected_terms)
+    correction_terms = _select_refine_correction_terms(text, effective_hotwords)
+    prompt_with_guards = _build_refine_prompt_with_guards(base_prompt_template, protected_terms, correction_terms)
     if prompt_with_guards != base_prompt_template:
         refiner.prompt_template = prompt_with_guards
-    if args.debug_diagnostics and protected_terms:
-        on_state({"event": "log", "message": f"diag refine_protected_terms={protected_terms}"})
+    if args.debug_diagnostics and (protected_terms or correction_terms):
+        on_state(
+            {
+                "event": "log",
+                "message": (
+                    f"diag refine_protected_terms={protected_terms}"
+                    f" refine_correction_terms={correction_terms}"
+                ),
+            }
+        )
 
     on_state({"event": "log", "message": f"ASR 原始输出: {text}"})
 
@@ -545,7 +662,15 @@ def _run_refinement(
         else:
             refined_text = refiner.refine(text)
     except Exception as exc:  # noqa: BLE001
-        on_state({"event": "log", "message": f"text_refine_failed: {type(exc).__name__}: {exc}"})
+        on_state(
+            {
+                "event": "log",
+                "message": (
+                    f"text_refine_failed: {type(exc).__name__}: {exc}"
+                    " — 精炼失败，将按 ASR 原文提交"
+                ),
+            }
+        )
     finally:
         if prompt_with_guards != base_prompt_template:
             refiner.prompt_template = base_prompt_template
@@ -560,6 +685,40 @@ def _run_refinement(
 
 def _streaming_commit_enabled(args: argparse.Namespace) -> bool:
     return bool(getattr(args, "enable_streaming_commit", False))
+
+
+def _apply_hotword_correction(
+    text: str,
+    *,
+    args: argparse.Namespace,
+    hotwords: list[str],
+    on_state: EventCallback,
+    log_changes: bool = True,
+) -> str:
+    if not text.strip():
+        return text
+    if not _coerce_bool(getattr(args, "enable_hotword_correction", True), default=True):
+        return text
+    _hotwords, replacements = lexicon_from_args(args)
+    effective = list(hotwords or _hotwords)
+    if not effective and not replacements:
+        return text
+    try:
+        max_edits = max(0, int(getattr(args, "hotword_correction_edits", 1)))
+    except Exception:
+        max_edits = 1
+    corrected_text, hotword_changes = correct_hotwords(
+        text,
+        effective,
+        max_ascii_edits=max_edits,
+        replacements=replacements,
+    )
+    if hotword_changes:
+        if log_changes:
+            preview = "; ".join(f"{src}→{dst}" for src, dst in hotword_changes[:8])
+            on_state({"event": "log", "message": f"hotword_corrected: {preview}"})
+        return corrected_text
+    return text
 
 
 def _run_asr_streaming_commit(
@@ -577,7 +736,13 @@ def _run_asr_streaming_commit(
     t0 = time.perf_counter()
     for chunk in context.provider.transcribe_file_stream(context.audio_path, hotwords=effective_hotwords):
         raw_streamed_text = _merge_stream_text(raw_streamed_text, str(chunk))
-        normalized_text = context.normalize_final_text(raw_streamed_text)
+        normalized_text = _apply_hotword_correction(
+            context.normalize_final_text(raw_streamed_text),
+            args=context.args,
+            hotwords=effective_hotwords,
+            on_state=context.on_state,
+            log_changes=False,
+        )
         committed_text, delta = _stream_display_delta(committed_text, normalized_text)
         if delta:
             accumulator.append_chunk(delta)
@@ -607,11 +772,20 @@ def _run_refinement_streaming_commit(
 
     base_prompt_template = getattr(refiner, "prompt_template", None)
     protected_terms = _select_refine_protected_terms(text, effective_hotwords)
-    prompt_with_guards = _build_refine_prompt_with_protected_terms(base_prompt_template, protected_terms)
+    correction_terms = _select_refine_correction_terms(text, effective_hotwords)
+    prompt_with_guards = _build_refine_prompt_with_guards(base_prompt_template, protected_terms, correction_terms)
     if prompt_with_guards != base_prompt_template:
         refiner.prompt_template = prompt_with_guards
-    if context.args.debug_diagnostics and protected_terms:
-        context.on_state({"event": "log", "message": f"diag refine_protected_terms={protected_terms}"})
+    if context.args.debug_diagnostics and (protected_terms or correction_terms):
+        context.on_state(
+            {
+                "event": "log",
+                "message": (
+                    f"diag refine_protected_terms={protected_terms}"
+                    f" refine_correction_terms={correction_terms}"
+                ),
+            }
+        )
 
     context.on_state({"event": "log", "message": f"ASR 原始输出: {text}"})
     accumulator = _StreamingCommitAccumulator(resolve_streaming_committer(context.committer))
@@ -755,16 +929,40 @@ def run_postprocess_pipeline(context: PostprocessPipelineContext) -> None:
             _apply_target_window(context.committer, context.state)
 
         streamed_commit = False
-        if routing.commit_local and _streaming_commit_enabled(context.args) and context.refiner is None:
+        realtime_already_committed = bool(
+            isinstance(context.prefetched_commit_info, dict)
+            and context.prefetched_commit_info.get("committed")
+        )
+        # A realtime session may already have typed the utterance. Do not run a
+        # second file-stream commit on key release.
+        realtime_session_ran = isinstance(context.prefetched_commit_info, dict)
+        if (
+            routing.commit_local
+            and _streaming_commit_enabled(context.args)
+            and context.refiner is None
+            and not realtime_already_committed
+            and not realtime_session_ran
+        ):
             try:
                 text, transcribe_latency_ms, commit_info = _run_asr_streaming_commit(
                     context=context,
                     effective_hotwords=effective_hotwords,
                     auto_hard_enter=auto_hard_enter,
                 )
-                raw_text = text
-                streamed_commit = True
-                asr_path = "streaming_commit"
+                if text.strip() and bool(commit_info.get("committed")):
+                    raw_text = text
+                    streamed_commit = True
+                    asr_path = "streaming_commit"
+                else:
+                    context.on_state(
+                        {
+                            "event": "log",
+                            "message": (
+                                "asr_stream_commit_fallback: empty_stream "
+                                f"provider={asr_provider} caps={asr_capabilities}"
+                            ),
+                        }
+                    )
             except Exception as exc:  # noqa: BLE001
                 context.on_state(
                     {
@@ -791,6 +989,16 @@ def run_postprocess_pipeline(context: PostprocessPipelineContext) -> None:
                 detected_language = str(getattr(asr, "detected_language", "") or "").strip()
                 text = context.normalize_final_text(raw_text)
 
+            # Deterministic hotword correction runs before refine so the
+            # refiner sees canonical terms (and protects them), and before
+            # commit when no refiner is configured.
+            text = _apply_hotword_correction(
+                text,
+                args=context.args,
+                hotwords=effective_hotwords,
+                on_state=context.on_state,
+            )
+
             if (
                 routing.commit_local
                 and _streaming_commit_enabled(context.args)
@@ -798,6 +1006,7 @@ def run_postprocess_pipeline(context: PostprocessPipelineContext) -> None:
                 and text.strip()
                 and context.prefetched_commit_info is None
                 and hasattr(context.refiner, "refine_stream")
+                and not _should_skip_llm_refine(context.args, text)
             ):
                 try:
                     text, refine_latency_ms, commit_info = _run_refinement_streaming_commit(
@@ -848,9 +1057,14 @@ def run_postprocess_pipeline(context: PostprocessPipelineContext) -> None:
                         }
                     )
 
-                if routing.commit_local and context.prefetched_commit_info is not None:
-                    commit_info = dict(context.prefetched_commit_info)
-                    streamed_commit = bool(commit_info.get("committed", False))
+                prefetched_commit = context.prefetched_commit_info
+                if (
+                    routing.commit_local
+                    and isinstance(prefetched_commit, dict)
+                    and bool(prefetched_commit.get("committed"))
+                ):
+                    commit_info = dict(prefetched_commit)
+                    streamed_commit = True
                 elif routing.commit_local:
                     commit_info = _commit_text(
                         context.committer,

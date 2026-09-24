@@ -13,20 +13,19 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-from recordian.text_cleanup import (
-    _optimistic_first_partial,
-    _stable_prefix_delta,
-)
+
 
 # NOTE: These imports will be replaced by state_manager imports once that
 #       module is available.  For now they are passed in as parameters.
 from .linux_commit import (
     paste_to_enter_delay_seconds,
     resolve_streaming_committer,
+    send_backspaces,
     send_hard_enter,
 )
 from .linux_dictate import open_monitor_stream_reader
 from .providers import provider_supports_realtime
+
 
 # ---------------------------------------------------------------------------
 # Handle returned by the worker starter
@@ -132,6 +131,9 @@ class _RealtimeCommitAccumulator:
     error: str = ""
     pending_text: str = ""
     last_flush_started_at: float = 0.0
+    previous_hypothesis: str = ""
+    hotwords: list[str] | None = None
+    raw_text: str = ""
 
     # -- flush policy -------------------------------------------------------
 
@@ -158,7 +160,9 @@ class _RealtimeCommitAccumulator:
         try:
             result = self.committer.commit(token)
         except Exception as exc:  # noqa: BLE001
-            self.error = str(exc)
+            # A single missed focus must not silence the rest of the utterance.
+            self.pending_text = token
+            self.error = ""
             return
         self.committed_text += token
         self.chunk_count += 1
@@ -186,6 +190,36 @@ class _RealtimeCommitAccumulator:
         ):
             self._flush_pending()
 
+    def sync_to(self, hypothesis: str) -> None:
+        """Make the input match the ASR stream text, with no extra rewriting."""
+        if self.error:
+            return
+        self._flush_pending()
+        current = str(hypothesis)
+        if not current or current == self.committed_text:
+            return
+        if current.startswith(self.committed_text):
+            self.append_text(current[len(self.committed_text):])
+            self._flush_pending()
+            return
+        prefix_len = 0
+        limit = min(len(self.committed_text), len(current))
+        while prefix_len < limit and self.committed_text[prefix_len] == current[prefix_len]:
+            prefix_len += 1
+        if prefix_len < 2:
+            return
+        delete_n = len(self.committed_text) - prefix_len
+        if delete_n <= 0:
+            return
+        result = send_backspaces(self.committer, delete_n)
+        if not bool(getattr(result, "committed", False)):
+            return
+        self.committed_text = self.committed_text[:prefix_len]
+        extra = current[prefix_len:]
+        if extra:
+            self.append_text(extra)
+            self._flush_pending()
+
     def finalize(self, *, final_text: str, auto_hard_enter: bool) -> dict[str, object]:
         """Flush remaining buffered text and optionally send a hard Enter.
 
@@ -202,11 +236,8 @@ class _RealtimeCommitAccumulator:
             Summary with ``backend``, ``committed``, and ``detail`` keys.
         """
         self._flush_pending()
-        if final_text.startswith(self.committed_text):
-            tail = final_text[len(self.committed_text):]
-            if tail:
-                self.append_text(tail)
-                self._flush_pending()
+        if final_text and final_text != self.committed_text and not self.error:
+            self.sync_to(final_text)
         elif self.error and not self.any_committed and final_text.strip():
             return _commit_text(self.committer, final_text, auto_hard_enter=auto_hard_enter)
 
@@ -229,6 +260,7 @@ class _RealtimeCommitAccumulator:
             "backend": backend,
             "committed": self.any_committed,
             "detail": detail,
+            "committed_text": self.committed_text,
         }
 
 
@@ -305,12 +337,11 @@ def _start_realtime_asr_worker(
         streaming_committer = resolve_streaming_committer(committer)
         supports_realtime_local_commit = (
             enable_local_commit
+            and bool(getattr(args, "enable_streaming_commit", False))
             and str(getattr(streaming_committer, "backend_name", "")).strip().lower() != "xdotool-clipboard"
         )
         accumulator = _RealtimeCommitAccumulator(streaming_committer) if supports_realtime_local_commit else None
         preview_text = ""
-        last_hypothesis = ""
-        committed_preview = ""
         try:
             if (
                 enable_local_commit
@@ -327,13 +358,14 @@ def _start_realtime_asr_worker(
                         ),
                     }
                 )
-            session = provider.start_realtime_session(hotwords=resolve_hotwords())
+            session_hotwords = resolve_hotwords()
+            if accumulator is not None:
+                accumulator.hotwords = list(session_hotwords)
+            session = provider.start_realtime_session(hotwords=session_hotwords)
             worker.cancel_session = session.cancel
-            while True:
-                raw = reader.read(chunk_bytes)
-                if not raw:
-                    break
-                response = session.push_audio(raw)
+
+            def _show_partial(response: dict[str, object]) -> None:
+                nonlocal preview_text
                 current_text = normalize_final_text(str(response.get("text", "")))
                 if current_text and current_text != preview_text:
                     preview_text = current_text
@@ -345,19 +377,19 @@ def _start_realtime_asr_worker(
                         }
                     )
                     if accumulator is not None:
-                        if not committed_preview and not last_hypothesis:
-                            optimistic = _optimistic_first_partial(current_text)
-                            committed_preview = optimistic
-                            delta = optimistic
-                        else:
-                            committed_preview, delta = _stable_prefix_delta(
-                                previous_hypothesis=last_hypothesis,
-                                committed_text=committed_preview,
-                                current_hypothesis=current_text,
-                            )
-                        if delta:
-                            accumulator.append_text(delta)
-                    last_hypothesis = current_text
+                        accumulator.sync_to(current_text)
+
+            while True:
+                raw = reader.read(chunk_bytes)
+                if not raw:
+                    break
+                while len(raw) < chunk_bytes:
+                    more = reader.read(chunk_bytes - len(raw))
+                    if not more:
+                        break
+                    raw += more
+                response = session.push_audio(raw)
+                _show_partial(response)
             final_result = session.finish()
             worker.final_text = normalize_final_text(final_result.text)
             worker.detected_language = str(getattr(final_result, "detected_language", "") or "").strip()
@@ -368,8 +400,18 @@ def _start_realtime_asr_worker(
                 )
         except Exception as exc:  # noqa: BLE001
             worker.error = f"{type(exc).__name__}: {exc}"
+            if not worker.final_text and preview_text:
+                worker.final_text = preview_text
             if session is not None:
                 session.cancel()
+            if accumulator is not None and worker.commit_info is None:
+                try:
+                    worker.commit_info = accumulator.finalize(
+                        final_text=worker.final_text,
+                        auto_hard_enter=auto_hard_enter,
+                    )
+                except Exception:
+                    pass
         finally:
             try:
                 reader.close()

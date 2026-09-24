@@ -42,6 +42,22 @@ def test_normalize_runtime_config_centralizes_compatibility_mappings() -> None:
     assert normalized["wake_owner_profile"] == str(Path("~/.config/recordian/profile.json").expanduser())
     assert normalized["wake_owner_sample"] == str(Path("~/owner.wav").expanduser())
     assert normalized["auto_lexicon_db"] == str(Path("~/lexicon.db").expanduser())
+    assert normalized["enable_streaming_commit"] is False
+    assert normalized["asr_realtime_endpoint"] == ""
+
+
+def test_normalize_runtime_config_defaults_streaming_off() -> None:
+    normalized = normalize_runtime_config(
+        {"enable_streaming_commit": True, "asr_realtime_endpoint": "  http://127.0.0.1:40002  "},
+        include_sound_defaults=False,
+        allow_auto_fallback_commit=True,
+    )
+    assert normalized["enable_streaming_commit"] is True
+    assert normalized["asr_realtime_endpoint"] == "http://127.0.0.1:40002"
+
+    defaults = normalize_runtime_config({}, include_sound_defaults=False)
+    assert defaults["enable_streaming_commit"] is False
+    assert defaults["asr_realtime_endpoint"] == ""
 
 
 def test_normalize_runtime_config_fills_sound_defaults_from_legacy_beep() -> None:

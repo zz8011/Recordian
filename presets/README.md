@@ -14,6 +14,8 @@
 - `Japanese.md` - 翻译成日语
 - `Korean.md` - 翻译成韩语
 - `Arabic.md` - 翻译成阿拉伯语
+- `Indonesian.md` - 翻译成印尼语
+- `Uyghur.md` - 翻译成维吾尔语
 - `Extended.md` - 在原意基础上适度扩写
 
 ### 使用方法

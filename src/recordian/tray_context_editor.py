@@ -61,14 +61,16 @@ def open_context_editor(app: TrayApp) -> None:
         root_box.pack_start(title_label, False, False, 0)
 
         # 说明
-        hint_label = Gtk.Label(label="添加常用词可以提高语音识别的准确率。多个词用逗号分隔。")
+        hint_label = Gtk.Label(
+            label="添加常用词会同时用于识别偏置和上屏前自动修正。多个词用逗号或换行分隔。显式替换写成：张征 → 张拯"
+        )
         hint_label.set_xalign(0.0)
         hint_label.set_opacity(0.75)
         hint_label.set_line_wrap(True)
         root_box.pack_start(hint_label, False, False, 0)
 
         # 示例
-        example_label = Gtk.Label(label="示例: Recordian, Claude, Python, 张三, 李四, 机器学习")
+        example_label = Gtk.Label(label="示例: Recordian, Claude, 张拯\n张征 → 张拯")
         example_label.set_xalign(0.0)
         example_label.set_opacity(0.6)
         example_label.set_line_wrap(True)

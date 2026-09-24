@@ -31,7 +31,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--log-file", default="")
     parser.add_argument(
         "--commit-backend",
-        choices=["auto", "auto-fallback", "wtype", "xdotool", "xdotool-clipboard", "stdout", "none"],
+        choices=["auto", "auto-fallback", "fcitx", "wtype", "xdotool", "xdotool-clipboard", "stdout", "none"],
         default="auto",
     )
     return parser

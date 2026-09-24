@@ -17,6 +17,11 @@ _ACTIVE_BACKEND_PROCESSES: list[subprocess.Popen[str]] = []
 _ORPHAN_RECORDER_PATH_TOKEN = "/tmp/recordian-ptt-"
 
 
+def _is_hotkey_dictate_command(command: str) -> bool:
+    lowered = str(command).strip().lower()
+    return "recordian.hotkey_dictate" in lowered and "python" in lowered
+
+
 def _is_recordian_recorder_command(command: str) -> bool:
     normalized = str(command).strip()
     if not normalized:
@@ -58,7 +63,7 @@ def _list_orphan_recordian_recorder_pids(*, exclude_pids: set[int] | None = None
             continue
         if pid in excluded:
             continue
-        if _is_recordian_recorder_command(command):
+        if _is_recordian_recorder_command(command) or _is_hotkey_dictate_command(command):
             pids.append(pid)
     return pids
 
@@ -167,6 +172,9 @@ class BackendManager:
         self._on_menu_update = on_menu_update
         self.proc: subprocess.Popen[str] | None = None
         self._threads: list[threading.Thread] = []
+        # 标记「我们主动停的后端」，用于区分崩溃/被误退出与正常停止，
+        # 让托盘只在非预期退出时自动重启。
+        self._intentional_stop = False
 
     def _cmd(self) -> list[str]:
         return [
@@ -182,6 +190,7 @@ class BackendManager:
     def start(self) -> None:
         if self.proc is not None and self.proc.poll() is None:
             return
+        self._intentional_stop = False
         cleaned = _cleanup_orphan_recordian_recorders()
         if cleaned:
             self._events.put({"event": "log", "message": f"cleaned_orphan_recorders:{cleaned}"})
@@ -202,7 +211,7 @@ class BackendManager:
         assert self.proc.stderr is not None
         t_out = threading.Thread(target=self._read_stream, args=(self.proc.stdout, False), daemon=True)
         t_err = threading.Thread(target=self._read_stream, args=(self.proc.stderr, True), daemon=True)
-        t_wait = threading.Thread(target=self._wait, daemon=True)
+        t_wait = threading.Thread(target=self._wait, args=(self.proc,), daemon=True)
         self._threads = [t_out, t_err, t_wait]
         for t in self._threads:
             t.start()
@@ -211,6 +220,7 @@ class BackendManager:
         proc = self.proc
         if proc is None:
             return
+        self._intentional_stop = True
         if proc.poll() is None:
             _terminate_backend_process(proc)
         # 从注册表移除
@@ -218,6 +228,22 @@ class BackendManager:
             _ACTIVE_BACKEND_PROCESSES.remove(proc)
         self.proc = None
         self._events.put({"event": "stopped"})
+
+    def request_stop_recording(self) -> bool:
+        """请求后端停止当前录音（overlay 点击停止）。
+
+        通过 SIGUSR1 通知后端进程；后端在 hotkey_dictate 中注册了处理器，
+        收到信号后走与松开热键相同的停止流程。仅发给后端主进程，不广播
+        进程组（避免 SIGUSR1 默认动作误杀 ffmpeg 等子进程）。
+        """
+        proc = self.proc
+        if proc is None or proc.poll() is not None:
+            return False
+        try:
+            os.kill(proc.pid, signal.SIGUSR1)
+        except OSError:
+            return False
+        return True
 
     def restart(self) -> None:
         self.stop()
@@ -234,9 +260,18 @@ class BackendManager:
                     self._events.put({"event": "log", "message": text})
         stream.close()
 
-    def _wait(self) -> None:
-        proc = self.proc
-        if proc is None:
+    def _wait(self, proc: subprocess.Popen[str] | None = None) -> None:
+        target = proc if proc is not None else self.proc
+        if target is None:
             return
-        code = proc.wait()
-        self._events.put({"event": "backend_exited", "code": code})
+        code = target.wait()
+        # 「主动停止」有两种：用户点了停止后端，或我们自己 restart（此时 self.proc
+        # 已经换成新进程）。只有进程自己退出且没被替换，才算非预期退出。
+        intentional = self._intentional_stop or target is not self.proc
+        self._events.put(
+            {
+                "event": "backend_exited",
+                "code": code,
+                "intentional": intentional,
+            }
+        )

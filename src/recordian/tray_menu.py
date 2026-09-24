@@ -84,17 +84,18 @@ def build_appindicator_menu(
 
     menu.append(Gtk.SeparatorMenuItem())
 
-    # 启动后端
-    start_item = Gtk.MenuItem(label="启动后端")
-    start_item.connect("activate", lambda _: app.root.after(0, app.backend.start))
-    menu.append(start_item)
-    app._appindicator_start_item = start_item
+    # 启动/停止后端：单项，随运行状态切换标签
+    backend_toggle_item = Gtk.MenuItem(label="启动后端")
 
-    # 停止后端
-    stop_item = Gtk.MenuItem(label="停止后端")
-    stop_item.connect("activate", lambda _: app.root.after(0, app.backend.stop))
-    menu.append(stop_item)
-    app._appindicator_stop_item = stop_item
+    def _on_backend_toggle(_item: Any) -> None:
+        if app.state.backend_running:
+            app.root.after(0, app.backend.stop)
+        else:
+            app.root.after(0, app.backend.start)
+
+    backend_toggle_item.connect("activate", _on_backend_toggle)
+    menu.append(backend_toggle_item)
+    app._appindicator_backend_toggle_item = backend_toggle_item
 
     menu.append(Gtk.SeparatorMenuItem())
 
@@ -114,27 +115,6 @@ def build_appindicator_menu(
     menu.append(voice_wake_item)
     app._appindicator_voice_wake_item = voice_wake_item
 
-    auto_hard_enter_item = Gtk.CheckMenuItem(label="自动硬回车")
-    auto_hard_enter_enabled = bool(config.get("auto_hard_enter", False))
-    auto_hard_enter_item.set_active(auto_hard_enter_enabled)
-    auto_hard_enter_item.connect("toggled", lambda item: app.root.after(0, lambda: app.toggle_auto_hard_enter(item.get_active())))
-    menu.append(auto_hard_enter_item)
-    app._appindicator_auto_hard_enter_item = auto_hard_enter_item
-
-    streaming_commit_item = Gtk.CheckMenuItem(label="流式上屏")
-    streaming_commit_enabled = bool(config.get("enable_streaming_commit", False))
-    streaming_commit_item.set_active(streaming_commit_enabled)
-    streaming_commit_item.connect("toggled", lambda item: app.root.after(0, lambda: app.toggle_streaming_commit(item.get_active())))
-    menu.append(streaming_commit_item)
-    app._appindicator_streaming_commit_item = streaming_commit_item
-
-    # Copy last text
-    copy_text_item = Gtk.MenuItem(label="复制最后识别的文本")
-    copy_text_item.connect("activate", lambda _: app.root.after(0, app.copy_last_text))
-    copy_text_item.set_sensitive(bool(app.state.last_run.text))
-    menu.append(copy_text_item)
-    app._appindicator_copy_text_item = copy_text_item
-
     # 预设子菜单
     preset_menu_item = Gtk.MenuItem(label="切换预设")
     preset_submenu = Gtk.Menu()
@@ -143,24 +123,39 @@ def build_appindicator_menu(
     menu.append(preset_menu_item)
     refresh_appindicator_preset_submenu(app, Gtk)
 
+    # Copy last text
+    copy_text_item = Gtk.MenuItem(label="复制最后识别的文本")
+    copy_text_item.connect("activate", lambda _: app.root.after(0, app.copy_last_text))
+    copy_text_item.set_sensitive(bool(app.state.last_run.text))
+    menu.append(copy_text_item)
+    app._appindicator_copy_text_item = copy_text_item
+
+    menu.append(Gtk.SeparatorMenuItem())
+
     # 常用词管理
     context_item = Gtk.MenuItem(label="常用词管理...")
     context_item.connect("activate", lambda _: app.root.after(0, app.open_context_editor))
     menu.append(context_item)
-
-    # 声纹注册向导
-    speaker_enroll_item = Gtk.MenuItem(label="声纹注册向导...")
-    speaker_enroll_item.connect("activate", lambda _: app.root.after(0, app.open_speaker_enrollment_wizard))
-    menu.append(speaker_enroll_item)
 
     # 设置
     settings_item = Gtk.MenuItem(label="设置...")
     settings_item.connect("activate", lambda _: app.root.after(0, app.open_settings))
     menu.append(settings_item)
 
+    # 更多：低频入口（声纹向导、诊断）
+    more_item = Gtk.MenuItem(label="更多")
+    more_submenu = Gtk.Menu()
+
+    speaker_enroll_item = Gtk.MenuItem(label="声纹注册向导...")
+    speaker_enroll_item.connect("activate", lambda _: app.root.after(0, app.open_speaker_enrollment_wizard))
+    more_submenu.append(speaker_enroll_item)
+
     diagnostics_item = Gtk.MenuItem(label="诊断状态...")
     diagnostics_item.connect("activate", lambda _: app.root.after(0, app.open_diagnostics))
-    menu.append(diagnostics_item)
+    more_submenu.append(diagnostics_item)
+
+    more_item.set_submenu(more_submenu)
+    menu.append(more_item)
 
     menu.append(Gtk.SeparatorMenuItem())
 
@@ -278,19 +273,10 @@ def update_tray_menu(app: Any) -> None:
         voice_wake_item = getattr(app, "_appindicator_voice_wake_item", None)
         if voice_wake_item is not None:
             voice_wake_item.set_active(bool(cfg.get("enable_voice_wake", False)))
-        auto_hard_enter_item = getattr(app, "_appindicator_auto_hard_enter_item", None)
-        if auto_hard_enter_item is not None:
-            auto_hard_enter_item.set_active(bool(cfg.get("auto_hard_enter", False)))
-        streaming_commit_item = getattr(app, "_appindicator_streaming_commit_item", None)
-        if streaming_commit_item is not None:
-            streaming_commit_item.set_active(bool(cfg.get("enable_streaming_commit", False)))
-        # R6: start/stop button sensitivity
-        start_item = getattr(app, "_appindicator_start_item", None)
-        if start_item is not None:
-            start_item.set_sensitive(not app.state.backend_running)
-        stop_item = getattr(app, "_appindicator_stop_item", None)
-        if stop_item is not None:
-            stop_item.set_sensitive(app.state.backend_running)
+        # Backend toggle: label follows running state
+        backend_toggle_item = getattr(app, "_appindicator_backend_toggle_item", None)
+        if backend_toggle_item is not None:
+            backend_toggle_item.set_label("停止后端" if app.state.backend_running else "启动后端")
         sync_appindicator_preset_submenu(app)
         try:
             indicator.set_icon(icon_path)

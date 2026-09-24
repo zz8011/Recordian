@@ -12,6 +12,7 @@ from recordian.hotkey_dictate import (
     _adaptive_vad_threshold,
     _apply_refine_postprocess,
     _apply_target_window,
+    _build_refine_prompt_with_guards,
     _build_refine_prompt_with_protected_terms,
     _cleanup_repeat_lite_text,
     _cleanup_stutter_text,
@@ -32,6 +33,8 @@ from recordian.hotkey_dictate import (
     _RealtimeASRWorkerHandle,
     _resample_audio_for_vad,
     _resolve_auto_hard_enter,
+    _revision_delta,
+    _select_refine_correction_terms,
     _select_refine_protected_terms,
     _should_skip_owner_gated_asr,
     _stable_prefix_delta,
@@ -159,6 +162,10 @@ def test_start_realtime_asr_worker_commits_append_only_partial_text() -> None:
             self.calls.append(text)
             return SimpleNamespace(backend="stdout", committed=True, detail=f"typed:{text}")
 
+        def delete_chars(self, count: int) -> SimpleNamespace:
+            self.calls.append(f"<bs:{count}>")
+            return SimpleNamespace(backend="stdout", committed=True, detail=f"bs:{count}")
+
     record_handle = RecordProcessHandle(
         process=SimpleNamespace(),
         monitor_stream=io.BytesIO(b"\x00\x00\x00\x00" * 3),
@@ -185,7 +192,7 @@ def test_start_realtime_asr_worker_commits_append_only_partial_text() -> None:
     assert worker.detected_language == "zh"
     assert worker.transcribe_latency_ms == 321.0
     assert worker.commit_info is not None
-    assert committer.calls == ["你", "好啊"]
+    assert committer.calls == ["你", "好", "啊"]
     assert [event.get("text") for event in events if event.get("event") == "realtime_asr_partial"] == ["你", "你好"]
 
 
@@ -242,6 +249,10 @@ def test_realtime_asr_worker_uses_streaming_committer_override(monkeypatch) -> N
             self.calls.append(text)
             return SimpleNamespace(backend="xdotool", committed=True, detail=f"typed:{text}")
 
+        def delete_chars(self, count: int) -> SimpleNamespace:
+            self.calls.append(f"<bs:{count}>")
+            return SimpleNamespace(backend="xdotool", committed=True, detail=f"bs:{count}")
+
     record_handle = RecordProcessHandle(
         process=SimpleNamespace(),
         monitor_stream=io.BytesIO(b"\x00\x00\x00\x00" * 3),
@@ -271,7 +282,7 @@ def test_realtime_asr_worker_uses_streaming_committer_override(monkeypatch) -> N
     assert fast_committer.calls == ["你", "好"]
 
 
-def test_start_realtime_asr_worker_commits_stable_prefix_when_partial_revises_tail() -> None:
+def test_start_realtime_asr_worker_retypes_tail_when_partial_revises() -> None:
     events: list[dict[str, object]] = []
 
     class _FakeRealtimeSession:
@@ -310,6 +321,10 @@ def test_start_realtime_asr_worker_commits_stable_prefix_when_partial_revises_ta
             self.calls.append(text)
             return SimpleNamespace(backend="stdout", committed=True, detail=f"typed:{text}")
 
+        def delete_chars(self, count: int) -> SimpleNamespace:
+            self.calls.append(f"<bs:{count}>")
+            return SimpleNamespace(backend="stdout", committed=True, detail=f"bs:{count}")
+
     record_handle = RecordProcessHandle(
         process=SimpleNamespace(),
         monitor_stream=io.BytesIO(b"\x00\x00\x00\x00" * 3),
@@ -333,7 +348,15 @@ def test_start_realtime_asr_worker_commits_stable_prefix_when_partial_revises_ta
     worker.thread.join(timeout=1.0)
 
     assert worker.final_text == "你好，主人，我是露露。"
-    assert committer.calls == ["你好", "，主人", "，我是露露。"]
+    assert committer.calls == [
+        "你好。",
+        "<bs:1>",
+        "，主人。",
+        "<bs:1>",
+        "，我是。",
+        "<bs:1>",
+        "露露。",
+    ]
 
 
 def test_start_realtime_asr_worker_skips_realtime_local_commit_for_clipboard_backend(monkeypatch) -> None:
@@ -402,6 +425,70 @@ def test_start_realtime_asr_worker_skips_realtime_local_commit_for_clipboard_bac
     assert worker.commit_info is None
 
 
+def test_start_realtime_asr_worker_previews_without_streaming_commit() -> None:
+    events: list[dict[str, object]] = []
+
+    class _FakeRealtimeSession:
+        elapsed_ms = 50.0
+
+        def __init__(self) -> None:
+            self._texts = iter(["你", "你好", "你好"])
+
+        def push_audio(self, payload: bytes) -> dict[str, object]:
+            return {"text": next(self._texts)}
+
+        def finish(self):
+            return SimpleNamespace(text="你好啊", detected_language="zh")
+
+        def cancel(self) -> None:
+            return None
+
+    class _FakeProvider:
+        realtime_chunk_size_sec = 0.25
+
+        def supports_realtime_transcription(self) -> bool:
+            return True
+
+        def start_realtime_session(self, *, hotwords: list[str]):
+            return _FakeRealtimeSession()
+
+    class _FakeCommitter:
+        backend_name = "stdout"
+
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        def commit(self, text: str) -> SimpleNamespace:
+            self.calls.append(text)
+            return SimpleNamespace(backend="stdout", committed=True, detail=f"typed:{text}")
+
+        def delete_chars(self, count: int) -> SimpleNamespace:
+            self.calls.append(f"<bs:{count}>")
+            return SimpleNamespace(backend="stdout", committed=True, detail=f"bs:{count}")
+
+    record_handle = RecordProcessHandle(
+        process=SimpleNamespace(),
+        monitor_stream=io.BytesIO(b"\x00\x00\x00\x00" * 3),
+        monitor_sample_rate=4,
+        monitor_channels=1,
+    )
+    committer = _FakeCommitter()
+    worker = _start_realtime_asr_worker(
+        args=argparse.Namespace(enable_streaming_commit=False, sample_rate=4, channels=1),
+        provider=_FakeProvider(),
+        record_handle=record_handle,
+        committer=committer,
+        enable_local_commit=True,
+        auto_hard_enter=False,
+        resolve_hotwords=lambda: [],
+        normalize_final_text=lambda text: str(text).strip(),
+        on_state=events.append,
+    )
+
+    assert worker is None
+    assert committer.calls == []
+
+
 def test_parse_hotkey_spec_aliases() -> None:
     keys = parse_hotkey_spec("<control>+<option>+V")
     assert keys == {"ctrl", "alt", "v"}
@@ -424,6 +511,99 @@ def test_merge_stream_text() -> None:
     assert _merge_stream_text("你", "你好") == "你好"
     assert _merge_stream_text("你好", "好") == "你好"
     assert _merge_stream_text("你好", "世界") == "你好世界"
+
+
+def test_live_sync_appends_without_backspace() -> None:
+    from types import SimpleNamespace
+
+    from recordian.realtime_asr import _RealtimeCommitAccumulator
+
+    class _Committer:
+        backend_name = "fcitx"
+
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        def commit(self, text: str) -> SimpleNamespace:
+            self.calls.append(text)
+            return SimpleNamespace(backend="fcitx", committed=True, detail="ok")
+
+        def delete_chars(self, count: int) -> SimpleNamespace:
+            self.calls.append(("backspace", count))
+            return SimpleNamespace(backend="fcitx", committed=True, detail="backspace")
+
+    committer = _Committer()
+    accumulator = _RealtimeCommitAccumulator(committer)
+    accumulator.sync_to("现在可以流逝")
+    accumulator.sync_to("现在可以流式上屏")
+    accumulator.sync_to("现在可以流式上屏了")
+
+    assert committer.calls == ["现在可以流逝", ("backspace", 1), "式上屏", "了"]
+    assert accumulator.committed_text == "现在可以流式上屏了"
+
+
+def test_semif_keep_does_not_delete_the_tail() -> None:
+    from types import SimpleNamespace
+
+    from recordian.realtime_asr import _RealtimeCommitAccumulator
+
+    class _Committer:
+        backend_name = "fcitx"
+
+        def __init__(self) -> None:
+            self.calls: list[object] = []
+
+        def commit(self, text: str) -> SimpleNamespace:
+            self.calls.append(text)
+            return SimpleNamespace(backend="fcitx", committed=True, detail="ok")
+
+        def delete_chars(self, count: int) -> SimpleNamespace:
+            self.calls.append(("backspace", count))
+            return SimpleNamespace(backend="fcitx", committed=True, detail="backspace")
+
+    committer = _Committer()
+    accumulator = _RealtimeCommitAccumulator(committer)
+    accumulator.sync_to("现在可以流逝")
+    accumulator.sync_to("现在可以流式上屏了")
+
+    assert accumulator.committed_text == "现在可以流式上屏了"
+    assert ("backspace", 1) in committer.calls
+
+
+def test_finalize_replaces_diverged_partial_with_orb_text() -> None:
+    from types import SimpleNamespace
+
+    from recordian.realtime_asr import _RealtimeCommitAccumulator
+
+    class _Committer:
+        backend_name = "fcitx"
+
+        def __init__(self) -> None:
+            self.calls: list[object] = []
+
+        def commit(self, text: str) -> SimpleNamespace:
+            self.calls.append(text)
+            return SimpleNamespace(backend="fcitx", committed=True, detail="ok")
+
+        def delete_chars(self, count: int) -> SimpleNamespace:
+            self.calls.append(("backspace", count))
+            return SimpleNamespace(backend="fcitx", committed=True, detail="backspace")
+
+    committer = _Committer()
+    accumulator = _RealtimeCommitAccumulator(committer)
+    accumulator.sync_to("我需要优化")
+    accumulator.sync_to("我需要优化一下")
+    accumulator.finalize(final_text="我需要对这件事做一次优化", auto_hard_enter=False)
+
+    assert accumulator.committed_text == "我需要对这件事做一次优化"
+    assert ("backspace", 4) in committer.calls
+
+
+def test_revision_delta_deletes_diverging_tail() -> None:
+    assert _revision_delta("", "你好。") == (0, "你好。")
+    assert _revision_delta("你好。", "你好，主人。") == (1, "，主人。")
+    assert _revision_delta("你好，主人，我是。", "你好，主人，我是露露。") == (1, "露露。")
+    assert _revision_delta("你好", "你好") == (0, "")
 
 
 def test_stable_prefix_delta_handles_partial_tail_revision() -> None:
@@ -520,6 +700,35 @@ def test_build_refine_prompt_with_protected_terms_injects_guard() -> None:
     assert wrapped.endswith(base)
     assert _build_refine_prompt_with_protected_terms(base, []) == base
     assert _build_refine_prompt_with_protected_terms(None, ["Docker"]) is None
+
+
+def test_select_refine_correction_terms_picks_absent_hotwords() -> None:
+    text = "回去开 Cloud 或者用 CodeX 来开发"
+    hotwords = ["Codex", "Claude", "Recordian", "这个"]
+    selected = _select_refine_correction_terms(text, hotwords)
+    # "codex" is present (case-insensitive) so it is protected, not corrected.
+    assert "Codex" not in selected
+    assert "Claude" in selected
+    assert "Recordian" in selected
+    assert "这个" not in selected
+
+
+def test_build_refine_prompt_with_guards_includes_correction_and_protection() -> None:
+    base = "请整理文本：{text}"
+    wrapped = _build_refine_prompt_with_guards(base, ["Codex"], ["Claude", "SPARC"])
+    assert wrapped is not None
+    assert "标准术语表" in wrapped
+    assert "Claude、SPARC" in wrapped
+    assert "原样保留" in wrapped
+    assert "Codex" in wrapped
+    assert wrapped.endswith(base)
+    # No correction terms -> falls back to the protection-only guard.
+    assert _build_refine_prompt_with_guards(base, ["Codex"], []) == _build_refine_prompt_with_protected_terms(
+        base, ["Codex"]
+    )
+    # Empty guards leave the template untouched.
+    assert _build_refine_prompt_with_guards(base, [], []) == base
+    assert _build_refine_prompt_with_guards(None, ["Codex"], ["Claude"]) is None
 
 
 def test_commit_text_handles_generic_exception() -> None:
@@ -1855,3 +2064,28 @@ def test_voice_wake_recording_enables_monitor_stream(monkeypatch) -> None:
     assert start_recording("voice_wake") is True
     assert captured_enable_monitor == [True]
     assert stop_recording() is True
+
+
+def test_build_parser_defaults_refine_timeout_and_long_text_threshold() -> None:
+    from recordian.hotkey_dictate import build_parser
+
+    args = build_parser().parse_args([])
+
+    assert args.refine_timeout == 120.0
+    assert args.refine_max_len_llm == 800
+
+
+def test_parse_args_with_config_loads_refine_timeout_and_long_text_threshold(tmp_path: Path, monkeypatch) -> None:
+    from recordian.hotkey_dictate import _parse_args_with_config, build_parser
+
+    cfg = tmp_path / "hotkey.json"
+    cfg.write_text(
+        json.dumps({"refine_timeout": 90, "refine_max_len_llm": 600}),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr("sys.argv", ["recordian-hotkey-dictate", "--config-path", str(cfg)])
+    args = _parse_args_with_config(build_parser())
+
+    assert args.refine_timeout == 90
+    assert args.refine_max_len_llm == 600

@@ -167,23 +167,24 @@ def open_settings_gtk(
                 app._gtk_settings_window = None
 
         win = Gtk.Window(title="Recordian 设置")
-        win.set_default_size(900, 760)
+        win.set_default_size(780, 680)
         win.set_position(Gtk.WindowPosition.CENTER)
         win.set_keep_above(True)
         app._gtk_settings_window = win
 
-        root_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        root_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         root_box.set_border_width(12)
         win.add(root_box)
 
-        title_label = Gtk.Label(label="Recordian 设置")
-        title_label.set_xalign(0.0)
-        title_label.set_markup("<b>Recordian 设置</b>")
-        root_box.pack_start(title_label, False, False, 0)
-
         config_label = Gtk.Label(label=f"配置文件: {config_path}")
         config_label.set_xalign(0.0)
-        config_label.set_opacity(0.75)
+        config_label.set_opacity(0.55)
+        try:
+            from gi.repository import Pango  # type: ignore
+
+            config_label.set_ellipsize(Pango.EllipsizeMode.MIDDLE)
+        except Exception:
+            pass
         root_box.pack_start(config_label, False, False, 0)
 
         notebook = Gtk.Notebook()
@@ -216,6 +217,20 @@ def open_settings_gtk(
             grid.set_row_spacing(6)
             frame.add(grid)
             parent.pack_start(frame, False, False, 0)
+            return grid
+
+        def _create_collapsible_section(parent: Gtk.Box, title: str) -> Gtk.Grid:
+            """Section hidden behind a collapsed expander — for rarely-touched tuning fields."""
+            expander = Gtk.Expander(label=title)
+            expander.set_expanded(False)
+            expander.set_margin_top(4)
+            expander.set_margin_bottom(6)
+            grid = Gtk.Grid()
+            grid.set_border_width(10)
+            grid.set_column_spacing(12)
+            grid.set_row_spacing(6)
+            expander.add(grid)
+            parent.pack_start(expander, False, False, 0)
             return grid
 
         def _add_field(
@@ -476,7 +491,7 @@ def open_settings_gtk(
             key="asr_realtime_endpoint",
             label="HTTP ASR Realtime",
             value=current.get("asr_realtime_endpoint", ""),
-            hint="仅 asr_provider=http-cloud 时生效。实时增量 ASR 示例：http://192.168.5.111:40002",
+            hint="仅 asr_provider=http-cloud 时生效。配置后说话时浮窗会实时出字。示例：http://192.168.5.111:40002",
         )
         row = _add_field(
             sec_asr,
@@ -657,24 +672,6 @@ def open_settings_gtk(
             kind="combo",
             options=("cuda", "cpu", "auto"),
         )
-        row = _add_field(
-            sec_refine,
-            row,
-            key="capture_refine_samples",
-            label="记录精炼样本",
-            value=current.get("capture_refine_samples", False),
-            kind="bool",
-            default_bool=False,
-            hint="每次口述保存一轮 ASR 和二轮精炼结果，便于后续对比调参。",
-        )
-        row = _add_field(
-            sec_refine,
-            row,
-            key="capture_refine_samples_path",
-            label="样本文件路径",
-            value=current.get("capture_refine_samples_path", "~/.local/share/recordian/refine-samples.jsonl"),
-            hint="JSONL 文件；每行一条样本记录。",
-        )
         row = _add_field(sec_refine, row, key="refine_n_gpu_layers", label="llama.cpp GPU 层数", value=current.get("refine_n_gpu_layers", -1))
         row = _add_field(sec_refine, row, key="refine_max_tokens", label="精炼 Max Tokens", value=current.get("refine_max_tokens", 512))
         row = _add_field(
@@ -845,8 +842,8 @@ def open_settings_gtk(
             label="上屏后端",
             value=current_commit_backend,
             kind="combo",
-            options=("auto", "wtype", "xdotool", "xdotool-clipboard", "stdout", "none"),
-            hint="X11 + Electron 建议 xdotool-clipboard",
+            options=("auto", "fcitx", "wtype", "xdotool", "xdotool-clipboard", "stdout", "none"),
+            hint="auto 会优先走 fcitx 上屏通道，失败再粘贴",
         )
         row = _add_field(
             sec_advanced,
@@ -866,7 +863,7 @@ def open_settings_gtk(
             value=current.get("enable_streaming_commit", False),
             kind="bool",
             default_bool=False,
-            hint="关闭时保持当前一次性上屏；开启后按模型流式结果增量上屏。",
+            hint="实时识别时默认会边说边往光标打字；前面认错了会退格改掉。关闭则只在浮窗出字，松手后再粘贴。Electron/剪贴板窗口仍只走松手粘贴。",
         )
         row = _add_field(
             sec_advanced,
@@ -885,6 +882,24 @@ def open_settings_gtk(
             value=current.get("debug_diagnostics", False),
             kind="bool",
             default_bool=False,
+        )
+        row = _add_field(
+            sec_advanced,
+            row,
+            key="capture_refine_samples",
+            label="记录精炼样本",
+            value=current.get("capture_refine_samples", False),
+            kind="bool",
+            default_bool=False,
+            hint="每次口述保存一轮 ASR 和二轮精炼结果，便于后续对比调参。",
+        )
+        row = _add_field(
+            sec_advanced,
+            row,
+            key="capture_refine_samples_path",
+            label="样本文件路径",
+            value=current.get("capture_refine_samples_path", "~/.local/share/recordian/refine-samples.jsonl"),
+            hint="JSONL 文件；每行一条样本记录。",
         )
         _add_field(
             sec_advanced,
@@ -1097,7 +1112,7 @@ def open_settings_gtk(
             "wake_semantic_timeout_ms",
         }
 
-        sec_wake_model = _create_section(tab_wake, "模型与阈值")
+        sec_wake_model = _create_collapsible_section(tab_wake, "模型与阈值（高级，默认无需修改）")
         row = 0
         row = _add_field(
             sec_wake_model,
@@ -1123,7 +1138,7 @@ def open_settings_gtk(
             value=current.get("wake_keyword_score", 1.5),
         )
 
-        sec_wake_advanced = _create_section(tab_wake, "高级调优")
+        sec_wake_advanced = _create_collapsible_section(tab_wake, "高级调优（仅在唤醒不稳定时调整）")
         row = 0
         row = _add_field(
             sec_wake_advanced,
@@ -1679,6 +1694,7 @@ def open_settings_gtk(
                     "hub": latest_config.get("hub", "ms"),
                     "remote_code": latest_config.get("remote_code", ""),
                     "hotword": latest_config.get("hotword", []),
+                    "hotword_replacement": latest_config.get("hotword_replacement", []),
                     "enable_streaming_refine": latest_config.get("enable_streaming_refine", False),
                 }
                 payload = normalize_runtime_config(

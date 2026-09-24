@@ -75,7 +75,7 @@ def normalize_commit_backend(
     fallback: str = "auto",
     allow_auto_fallback: bool = True,
 ) -> str:
-    allowed = {"none", "auto", "wtype", "xdotool", "xdotool-clipboard", "stdout"}
+    allowed = {"none", "auto", "fcitx", "wtype", "xdotool", "xdotool-clipboard", "stdout"}
     if allow_auto_fallback:
         allowed.add("auto-fallback")
     return _normalize_choice(
@@ -122,6 +122,8 @@ def normalize_runtime_config(
         allow_auto_fallback=allow_auto_fallback_commit,
     )
     normalized["notify_backend"] = normalize_notify_backend(normalized.get("notify_backend", "auto"))
+    normalized["enable_streaming_commit"] = bool(normalized.get("enable_streaming_commit", False))
+    normalized["asr_realtime_endpoint"] = str(normalized.get("asr_realtime_endpoint") or "").strip()
     normalized["wake_prefix"] = _normalize_string_list(
         normalized.get("wake_prefix", DEFAULT_WAKE_PREFIX),
         fallback=DEFAULT_WAKE_PREFIX,

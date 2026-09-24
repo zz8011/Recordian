@@ -183,6 +183,47 @@ def test_http_cloud_provider_realtime_session_roundtrip() -> None:
     assert result.metadata["realtime"] is True
 
 
+def test_http_cloud_realtime_finish_error_keeps_last_partial() -> None:
+    import requests
+
+    provider = HttpCloudProvider(
+        "http://127.0.0.1:8000/v1/audio/transcriptions",
+        model_name="qwen3-asr-1.7b",
+        realtime_endpoint="http://127.0.0.1:40002",
+    )
+
+    class _FinishFailSession(_FakeRequestsSession):
+        def post(self, url: str, **kwargs):
+            self.calls.append(("post", url, kwargs))
+            if url.endswith("/api/start"):
+                return _FakeResponse({"session_id": "demo-session"})
+            if url.endswith("/api/chunk"):
+                return _FakeResponse({"text": "你好", "language": "zh"})
+            if url.endswith("/api/finish"):
+                err = _FakeResponse({"detail": "boom"})
+                err.status_code = 500
+
+                def _raise() -> None:
+                    raise requests.HTTPError("500 Server Error")
+
+                err.raise_for_status = _raise  # type: ignore[method-assign]
+                return err
+            raise AssertionError(url)
+
+    fake_session = _FinishFailSession()
+    with (
+        patch("requests.get", return_value=_FakeResponse({"data": [{"id": "qwen3-asr-1.7b"}]})),
+        patch("requests.Session", return_value=fake_session),
+    ):
+        session = provider.start_realtime_session(hotwords=[])
+        session.push_audio(b"\x00\x00\x00\x00")
+        result = session.finish()
+
+    assert result.text == "你好"
+    assert result.detected_language == "zh"
+    assert result.metadata.get("finish_failed") is True
+
+
 def test_http_cloud_provider_resolves_realtime_model_name_case_insensitively() -> None:
     provider = HttpCloudProvider(
         "http://127.0.0.1:8000/v1/audio/transcriptions",

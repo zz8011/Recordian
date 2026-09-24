@@ -146,6 +146,22 @@ def build_parser() -> argparse.ArgumentParser:
         help="Model name for cloud provider",
     )
     parser.add_argument(
+        "--refine-timeout",
+        type=float,
+        default=120.0,
+        help="HTTP timeout in seconds for cloud refine requests (long text rewrite needs more than 30s)",
+    )
+    parser.add_argument(
+        "--refine-max-len-llm",
+        type=int,
+        default=800,
+        help=(
+            "Max text length (chars) sent to the LLM refiner. Longer text skips the LLM "
+            "rewrite and only runs deterministic cleanup (avoids multi-second cloud refine "
+            "on long utterances). 0 disables the limit (always refine)."
+        ),
+    )
+    parser.add_argument(
         "--enable-streaming-refine",
         action=argparse.BooleanOptionalAction,
         default=False,
@@ -366,6 +382,24 @@ def build_parser() -> argparse.ArgumentParser:
         default=5000,
         help="Max learned terms retained in local lexicon",
     )
+    parser.add_argument(
+        "--auto-lexicon-max-auto-hotwords",
+        type=int,
+        default=15,
+        help="Max auto-learned hotwords mixed into ASR context (manual hotwords are never capped by this)",
+    )
+    parser.add_argument(
+        "--enable-hotword-correction",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Deterministically rewrite near-miss hotword variants (case/spacing/1-edit/pinyin homophone) after ASR",
+    )
+    parser.add_argument(
+        "--hotword-correction-edits",
+        type=int,
+        default=1,
+        help="Max ASCII edit distance for hotword correction (0 disables the fuzzy pass; only applies to words >= 6 chars)",
+    )
     add_dictate_args(parser)
     return parser
 
@@ -494,6 +528,15 @@ def _parse_args_with_config(parser: argparse.ArgumentParser) -> argparse.Namespa
         args.auto_lexicon_max_terms = max(100, int(getattr(args, "auto_lexicon_max_terms", 5000)))
     except Exception:
         args.auto_lexicon_max_terms = 5000
+    try:
+        args.auto_lexicon_max_auto_hotwords = max(0, int(getattr(args, "auto_lexicon_max_auto_hotwords", 15)))
+    except Exception:
+        args.auto_lexicon_max_auto_hotwords = 15
+    args.enable_hotword_correction = _coerce_bool(getattr(args, "enable_hotword_correction", True), default=True)
+    try:
+        args.hotword_correction_edits = max(0, int(getattr(args, "hotword_correction_edits", 1)))
+    except Exception:
+        args.hotword_correction_edits = 1
     args.config_path = str(Path(args.config_path).expanduser())
     return args
 
@@ -542,12 +585,18 @@ def _save_runtime_config(args: argparse.Namespace) -> None:
         "debug_diagnostics": args.debug_diagnostics,
         "remote_code": args.remote_code,
         "hotword": list(args.hotword),
+        "hotword_replacement": list(getattr(args, "hotword_replacement", []) or []),
         "asr_provider": getattr(args, "asr_provider", "qwen-asr"),
         "qwen_model": getattr(args, "qwen_model", ""),
         "qwen_language": getattr(args, "qwen_language", "Chinese"),
         "qwen_max_new_tokens": getattr(args, "qwen_max_new_tokens", 8192),
         "asr_context": getattr(args, "asr_context", ""),
         "asr_context_preset": getattr(args, "asr_context_preset", ""),
+        "asr_endpoint": getattr(args, "asr_endpoint", "http://127.0.0.1:8000/v1/audio/transcriptions"),
+        "asr_api_key": getattr(args, "asr_api_key", ""),
+        "asr_timeout_s": getattr(args, "asr_timeout_s", 30.0),
+        "asr_realtime_endpoint": str(getattr(args, "asr_realtime_endpoint", "") or "").strip(),
+        "enable_streaming_commit": bool(getattr(args, "enable_streaming_commit", False)),
         "enable_text_refine": getattr(args, "enable_text_refine", False),
         "refine_provider": getattr(args, "refine_provider", "local"),
         "refine_model": getattr(args, "refine_model", "Qwen/Qwen3-0.6B"),
@@ -560,6 +609,8 @@ def _save_runtime_config(args: argparse.Namespace) -> None:
         "refine_api_base": getattr(args, "refine_api_base", "https://api.minimaxi.com/anthropic"),
         "refine_api_key": getattr(args, "refine_api_key", ""),
         "refine_api_model": getattr(args, "refine_api_model", "claude-3-5-sonnet-20241022"),
+        "refine_timeout": float(getattr(args, "refine_timeout", 120.0)),
+        "refine_max_len_llm": int(getattr(args, "refine_max_len_llm", 800)),
         "enable_streaming_refine": getattr(args, "enable_streaming_refine", False),
         "capture_refine_samples": getattr(args, "capture_refine_samples", False),
         "capture_refine_samples_path": getattr(args, "capture_refine_samples_path", DEFAULT_REFINE_CAPTURE_PATH),
@@ -612,6 +663,9 @@ def _save_runtime_config(args: argparse.Namespace) -> None:
         "auto_lexicon_max_hotwords": getattr(args, "auto_lexicon_max_hotwords", 40),
         "auto_lexicon_min_accepts": getattr(args, "auto_lexicon_min_accepts", 2),
         "auto_lexicon_max_terms": getattr(args, "auto_lexicon_max_terms", 5000),
+        "auto_lexicon_max_auto_hotwords": getattr(args, "auto_lexicon_max_auto_hotwords", 15),
+        "enable_hotword_correction": getattr(args, "enable_hotword_correction", True),
+        "hotword_correction_edits": getattr(args, "hotword_correction_edits", 1),
     }
     path = Path(args.config_path)
     ConfigManager.save(path, payload)

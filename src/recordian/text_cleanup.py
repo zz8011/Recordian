@@ -79,6 +79,23 @@ def _stable_prefix_delta(
     return committed, ""
 
 
+def _revision_delta(committed: str, hypothesis: str) -> tuple[int, str]:
+    """Return ``(backspace_count, text_to_type)`` to turn *committed* into *hypothesis*.
+
+    Used for live dictation: type the latest ASR hypothesis immediately, then
+    delete the diverging tail and retype when a later partial revises it.
+    """
+    previous = str(committed)
+    current = str(hypothesis)
+    if current == previous:
+        return 0, ""
+    prefix_len = 0
+    limit = min(len(previous), len(current))
+    while prefix_len < limit and previous[prefix_len] == current[prefix_len]:
+        prefix_len += 1
+    return len(previous) - prefix_len, current[prefix_len:]
+
+
 def _optimistic_first_partial(text: str) -> str:
     """Strip a trailing punctuation mark from the first partial result so
     it can be optimistically committed before the full utterance is
@@ -135,3 +152,17 @@ def _normalize_final_text(text: str) -> str:
             normalized = normalized[:-tail]
             break
     return normalized
+
+
+def wrap_overlay_caption(text: str, *, max_chars: int = 22, max_lines: int = 3) -> str:
+    """Fit live ASR text into a short overlay caption, keeping the newest tail."""
+    candidate = str(text).strip()
+    if not candidate:
+        return ""
+    max_chars = max(8, int(max_chars))
+    max_lines = max(1, int(max_lines))
+    budget = max_chars * max_lines
+    if len(candidate) > budget:
+        candidate = "…" + candidate[-(budget - 1) :]
+    lines = [candidate[index : index + max_chars] for index in range(0, len(candidate), max_chars)]
+    return "\n".join(lines[:max_lines])

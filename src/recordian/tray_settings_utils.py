@@ -40,6 +40,7 @@ KEY_LABEL_MAP: dict[str, str] = {
     "refine_temperature": "精炼温度",
     "refine_max_tokens": "精炼最大Token",
     "refine_timeout": "精炼超时",
+    "refine_max_len_llm": "精炼长文阈值(字)",
     "enable_thinking": "启用思考",
     "wake_use_webrtcvad": "WebRTC VAD",
     "wake_vad_aggressiveness": "VAD 激进程度",

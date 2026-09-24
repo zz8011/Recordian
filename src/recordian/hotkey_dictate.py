@@ -28,12 +28,14 @@ from .linux_dictate import run_dictate_once  # noqa: F401
 from .postprocess_pipeline import (  # noqa: F401
     _apply_refine_postprocess,
     _apply_target_window,
+    _build_refine_prompt_with_guards,
     _build_refine_prompt_with_protected_terms,
     _cleanup_repeat_lite_text,
     _cleanup_stutter_text,
     _coerce_bool,
     _extract_refine_postprocess_rule,
     _resolve_auto_hard_enter,
+    _select_refine_correction_terms,
     _select_refine_protected_terms,
     _should_skip_owner_gated_asr,
     _text_contains_term,
@@ -51,6 +53,7 @@ from .state_manager import RecordingState  # noqa: F401
 from .text_cleanup import (  # noqa: F401
     _normalize_final_text,
     _optimistic_first_partial,
+    _revision_delta,
     _stable_prefix_delta,
 )
 from .wake_session_monitor import (  # noqa: F401
@@ -84,10 +87,19 @@ __all__ = [
 def main() -> None:
     import logging
     import sys
+    import threading
 
     from recordian.error_tracker import get_error_tracker
 
     logger = logging.getLogger(__name__)
+
+    try:
+        from recordian.logging_config import setup_logging
+
+        # 后端崩溃/线程异常也要落盘，否则只能靠用户复述报错
+        setup_logging(console=False)
+    except Exception:  # noqa: BLE001
+        pass
 
     def handle_exception(exc_type, exc_value, exc_traceback):
         """Global exception handler."""
@@ -100,7 +112,20 @@ def main() -> None:
         if tracker:
             tracker.capture_exception(exc_value)
 
+    def handle_thread_exception(thread_args) -> None:
+        """线程内异常也记进日志文件（默认只打到 stderr）。"""
+        logger.error(
+            "Uncaught thread exception in %s",
+            getattr(thread_args.thread, "name", "unknown"),
+            exc_info=(thread_args.exc_type, thread_args.exc_value, thread_args.exc_traceback),
+        )
+        try:
+            threading.__excepthook__(thread_args)
+        except Exception:  # noqa: BLE001
+            pass
+
     sys.excepthook = handle_exception
+    threading.excepthook = handle_thread_exception
 
     try:
         _main_impl()
@@ -130,6 +155,29 @@ def _main_impl() -> None:
     args = _parse_args_with_config(parser)
     if args.save_config:
         _save_runtime_config(args)
+
+    import fcntl
+    import os
+
+    lock_path = Path(args.config_path).expanduser().resolve().parent / "hotkey-dictate.lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    lock_fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o644)
+    try:
+        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        print(
+            json.dumps(
+                {
+                    "event": "error",
+                    "error": f"hotkey_dictate already running (lock={lock_path})",
+                },
+                ensure_ascii=False,
+            ),
+            flush=True,
+        )
+        raise SystemExit(1) from None
+    os.ftruncate(lock_fd, 0)
+    os.write(lock_fd, str(os.getpid()).encode("ascii"))
 
     try:
         from pynput import keyboard
@@ -201,6 +249,14 @@ def _main_impl() -> None:
 
         def _request_stop_recording() -> None:
             threading.Thread(target=stop_recording, daemon=True, name="recordian-stop-recording").start()
+
+        def _on_overlay_stop_signal(signum: int, frame: object) -> None:
+            # overlay 点击停止：走与松开热键相同的停止流程
+            _request_stop_recording()
+
+        import signal as _signal
+
+        _signal.signal(_signal.SIGUSR1, _on_overlay_stop_signal)
 
         if bool(getattr(args, "enable_voice_wake", False)):
             runtime_cfg = make_wake_runtime_config(args)

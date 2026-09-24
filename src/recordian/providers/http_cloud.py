@@ -2,37 +2,200 @@ from __future__ import annotations
 
 import base64
 import json
-import re
+import logging
 import subprocess
 import time
+from collections.abc import Callable
 from pathlib import Path
 from shutil import which
-from typing import cast
+from typing import Any, cast
 from urllib.parse import urlparse, urlunparse
 
+from ..hotword_corrector import _hotword_preference_rank, _hotword_variant_key
 from ..models import ASRResult, coerce_asr_segments, coerce_asr_timestamps
 from .asr_context import ASRContextComposer
 from .base import ASRProvider, ASRProviderCapabilities, _estimate_english_ratio
 
+logger = logging.getLogger(__name__)
 
-def _hotword_variant_key(token: str) -> str:
-    return re.sub(r"[\s._-]+", "", str(token).casefold())
+#: 一次重试的等待时间（秒）。远端模型实例冷启动/重启通常几秒内恢复。
+TRANSCRIBE_RETRY_DELAY_S = 1.5
+#: 值得重试的瞬时 HTTP 状态码。
+RETRYABLE_HTTP_STATUS = frozenset({408, 425, 429, 500, 502, 503, 504})
+#: GPUStack 在模型实例未运行时返回的 404 文案片段。
+MODEL_NOT_RUNNING_HINTS = ("no running instances", "model not found")
+#: requests 里表示「连接层瞬时故障」的异常名。
+RETRYABLE_TRANSPORT_ERROR_NAMES = frozenset(
+    {
+        "ConnectionError",
+        "Timeout",
+        "ReadTimeout",
+        "ConnectTimeout",
+        "ChunkedEncodingError",
+        "RemoteDisconnected",
+        "NewConnectionError",
+    }
+)
 
 
-def _hotword_preference_rank(token: str) -> tuple[int, int, str]:
-    text = str(token)
-    compact = re.sub(r"[\s._-]+", "", text)
-    has_upper = any(ch.isalpha() and ch.isupper() for ch in text)
-    has_lower = any(ch.isalpha() and ch.islower() for ch in text)
-    if compact == text and has_upper and has_lower:
-        bucket = 0
-    elif compact == text and has_upper:
-        bucket = 1
-    elif compact == text:
-        bucket = 2
-    else:
-        bucket = 3
-    return (bucket, len(text), text)
+def _response_status(response: object) -> int:
+    try:
+        return int(getattr(response, "status_code", 200) or 200)
+    except (TypeError, ValueError):
+        return 200
+
+
+def _looks_like_model_not_running(response: object) -> bool:
+    try:
+        body = str(getattr(response, "text", "") or "")
+    except Exception:  # noqa: BLE001
+        return False
+    lowered = body.lower()
+    return any(hint in lowered for hint in MODEL_NOT_RUNNING_HINTS)
+
+
+def _is_retryable_transport_error(exc: BaseException | None) -> bool:
+    return type(exc).__name__ in RETRYABLE_TRANSPORT_ERROR_NAMES if exc is not None else False
+
+
+def _describe_transcribe_failure(
+    *,
+    endpoint: str,
+    model_name: str,
+    timeout_s: float,
+    exc: BaseException | None = None,
+    status: int = 0,
+) -> str:
+    """把 ASR 失败翻译成一句可读的中文（overlay 只显示前 72 个字符，重点放前面）。"""
+    if status == 404:
+        return (
+            f"ASR 后端没有运行中的模型「{model_name}」（HTTP 404）；"
+            f"请在 GPUStack 启动该模型实例（{endpoint}）"
+        )
+    if status in {502, 503, 504}:
+        return f"ASR 后端暂时不可用（HTTP {status}），模型实例可能正在重启（{endpoint}）"
+    if status >= 500:
+        return f"ASR 后端内部错误（HTTP {status}）（{endpoint}）"
+    if status in {401, 403}:
+        return f"ASR 后端鉴权失败（HTTP {status}）；请检查 asr_api_key（{endpoint}）"
+    if status:
+        return f"ASR 请求失败（HTTP {status}）（{endpoint}）"
+
+    error_name = type(exc).__name__ if exc is not None else ""
+    if error_name in {"Timeout", "ReadTimeout", "ConnectTimeout"}:
+        return f"ASR 请求超时（>{timeout_s:.0f}s），后端可能卡住或网络不通（{endpoint}）"
+    if error_name in {"ConnectionError", "NewConnectionError", "RemoteDisconnected", "ChunkedEncodingError"}:
+        return f"无法连接 ASR 后端 {endpoint}；请检查主机是否在线、端口是否可达"
+    if exc is not None:
+        return f"ASR 请求失败：{error_name}: {exc}（{endpoint}）"
+    return f"ASR 请求失败（{endpoint}）"
+
+
+def _post_transcription_with_retry(
+    post_fn: Callable[[], Any],
+    *,
+    endpoint: str,
+    model_name: str,
+    timeout_s: float,
+) -> Any:
+    """执行一次转写 POST；瞬时失败（断连 / 5xx / 模型实例未运行）重试一次。
+
+    重试仍失败时抛出 ``RuntimeError``，消息是给用户看的中文说明；非瞬时的
+    4xx（如 401）直接把响应交回调用方的 ``raise_for_status()``。
+    """
+    attempts = 2
+    last_exc: BaseException | None = None
+    last_status = 0
+
+    for attempt in range(1, attempts + 1):
+        response: Any = None
+        exc: BaseException | None = None
+        try:
+            response = post_fn()
+        except Exception as error:  # noqa: BLE001
+            exc = error
+
+        if response is not None and _response_status(response) < 400:
+            return response
+
+        if response is not None:
+            last_status = _response_status(response)
+            retryable = last_status in RETRYABLE_HTTP_STATUS or (
+                last_status == 404 and _looks_like_model_not_running(response)
+            )
+        else:
+            last_status = 0
+            retryable = _is_retryable_transport_error(exc)
+
+        last_exc = exc
+        if attempt >= attempts or not retryable:
+            if response is not None and not retryable:
+                return response
+            raise RuntimeError(
+                _describe_transcribe_failure(
+                    endpoint=endpoint,
+                    model_name=model_name,
+                    timeout_s=timeout_s,
+                    exc=last_exc,
+                    status=last_status,
+                )
+            ) from last_exc
+
+        logger.warning(
+            "ASR 请求第 %d 次失败（status=%s error=%s），%.1fs 后重试: endpoint=%s model=%s",
+            attempt,
+            last_status or "-",
+            type(last_exc).__name__ if last_exc is not None else "-",
+            TRANSCRIBE_RETRY_DELAY_S,
+            endpoint,
+            model_name,
+        )
+        time.sleep(TRANSCRIBE_RETRY_DELAY_S)
+
+    raise RuntimeError(  # pragma: no cover - 循环内已处理所有失败分支
+        _describe_transcribe_failure(
+            endpoint=endpoint,
+            model_name=model_name,
+            timeout_s=timeout_s,
+            exc=last_exc,
+            status=last_status,
+        )
+    ) from last_exc
+
+
+def _coerce_asr_text(value: object) -> str:
+    """Normalize ASR ``text`` that may be a list or a stringified list.
+
+    Some backends (e.g. mega-asr via GPUStack) return ``["你好"]`` or the
+    string ``"['你好']"`` instead of a plain transcript. Empty / blank
+    entries become ``""``.
+    """
+    if value is None:
+        return ""
+    if isinstance(value, (list, tuple)):
+        parts = [str(item).strip() for item in value if str(item).strip()]
+        return " ".join(parts)
+    text = str(value).strip()
+    if not text:
+        return ""
+    if (text.startswith("[") and text.endswith("]")) or (
+        text.startswith("(") and text.endswith(")")
+    ):
+        try:
+            import ast
+
+            parsed = ast.literal_eval(text)
+        except (SyntaxError, ValueError):
+            return text
+        if isinstance(parsed, (list, tuple)):
+            parts = [str(item).strip() for item in parsed if str(item).strip()]
+            return " ".join(parts)
+        if parsed is None:
+            return ""
+        return str(parsed).strip()
+    return text
+
+
 
 
 def _group_hotword_variants(hotwords: list[str]) -> list[tuple[str, list[str]]]:
@@ -88,6 +251,8 @@ class _HttpCloudRealtimeSession:
         self._unfixed_token_num = unfixed_token_num
         self._session_id = ""
         self._started_at = 0.0
+        self._last_text = ""
+        self._last_language: str | None = None
 
     def _headers(self, *, content_type: str) -> dict[str, str]:
         headers = {"Content-Type": content_type}
@@ -129,20 +294,35 @@ class _HttpCloudRealtimeSession:
             timeout=self._timeout_s,
         )
         response.raise_for_status()
-        return cast(dict[str, object], response.json())
+        body = cast(dict[str, object], response.json())
+        text = _coerce_asr_text(body.get("text", ""))
+        if text:
+            self._last_text = text
+        language = body.get("detected_language", body.get("language"))
+        if language:
+            self._last_language = str(language).strip() or None
+        return body
 
     def finish(self) -> ASRResult:
         if not self._session_id:
             raise RuntimeError("realtime_asr_session_not_started")
-        response = self._session.post(
-            f"{self._base_url}/api/finish",
-            params={"session_id": self._session_id},
-            timeout=self._timeout_s,
-        )
-        response.raise_for_status()
-        body = response.json()
-        text = str(body.get("text", ""))
-        detected_language = body.get("detected_language", body.get("language"))
+        try:
+            response = self._session.post(
+                f"{self._base_url}/api/finish",
+                params={"session_id": self._session_id},
+                timeout=self._timeout_s,
+            )
+            response.raise_for_status()
+            body = response.json()
+        except Exception:
+            body = {
+                "text": self._last_text,
+                "language": self._last_language,
+                "realtime": True,
+                "finish_failed": True,
+            }
+        text = _coerce_asr_text(body.get("text", "")) or self._last_text
+        detected_language = body.get("detected_language", body.get("language")) or self._last_language
         segments = coerce_asr_segments(body.get("segments"))
         timestamps = coerce_asr_timestamps(body.get("timestamps"))
         return ASRResult(
@@ -156,6 +336,7 @@ class _HttpCloudRealtimeSession:
                 "detected_language": detected_language,
                 "latency_seconds": body.get("latency_seconds"),
                 "realtime": True,
+                "finish_failed": bool(body.get("finish_failed")),
             },
         )
 
@@ -459,6 +640,11 @@ class HttpCloudProvider(ASRProvider):
             form_data["language"] = normalized
         prompt = self._compose_context(hotwords)
         if prompt:
+            # mega-asr / Qwen3-ASR OpenAI shim treats bare `prompt` as a language
+            # name when `language` is omitted, which 400s on hotword context.
+            # Keep prompt for biasing, but force an explicit language first.
+            if "language" not in form_data:
+                form_data["language"] = "zh"
             form_data["prompt"] = prompt
         return form_data
 
@@ -567,13 +753,15 @@ class HttpCloudProvider(ASRProvider):
             files = {
                 "file": (upload_name, upload_data, upload_mime),
             }
-            response = requests.post(
-                self.endpoint,
-                data=form_data,
-                files=files,
-                headers=headers,
-                timeout=self.timeout_s,
-            )
+
+            def _post():
+                return requests.post(
+                    self.endpoint,
+                    data=form_data,
+                    files=files,
+                    headers=headers,
+                    timeout=self.timeout_s,
+                )
         else:
             normalized_hotwords = ASRContextComposer(self.context).normalize_hotwords(hotwords)
             payload: dict[str, object] = {
@@ -584,16 +772,24 @@ class HttpCloudProvider(ASRProvider):
             }
             if self.max_new_tokens is not None:
                 payload["max_new_tokens"] = self.max_new_tokens
-            response = requests.post(
-                self.endpoint,
-                json=payload,
-                headers=headers,
-                timeout=self.timeout_s,
-            )
 
+            def _post():
+                return requests.post(
+                    self.endpoint,
+                    json=payload,
+                    headers=headers,
+                    timeout=self.timeout_s,
+                )
+
+        response = _post_transcription_with_retry(
+            _post,
+            endpoint=self.endpoint,
+            model_name=self.model_name,
+            timeout_s=self.timeout_s,
+        )
         response.raise_for_status()
         data = response.json()
-        text = str(data.get("text", ""))
+        text = _coerce_asr_text(data.get("text", ""))
         detected_language = data.get("detected_language", data.get("language"))
         segments = coerce_asr_segments(data.get("segments"))
         timestamps = coerce_asr_timestamps(data.get("timestamps"))

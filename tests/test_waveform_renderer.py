@@ -302,3 +302,62 @@ class TestWaveformRendererStateTransitions:
             assert renderer.base_mode == 3.0
         finally:
             root.destroy()
+
+
+class TestWaveformRendererRecordingClick:
+    """测试录音中点击 overlay 的回调触发逻辑"""
+
+    def _make_renderer(self):
+        import tkinter as tk
+
+        from recordian.waveform_renderer import WaveformRenderer
+
+        root = tk.Tk()
+        renderer = WaveformRenderer.__new__(WaveformRenderer)
+        renderer.root = root
+        renderer.state = "idle"
+        renderer._on_recording_click = None
+        return root, renderer
+
+    def test_click_fires_callback_during_recording(self) -> None:
+        root, renderer = self._make_renderer()
+        try:
+            calls = []
+            renderer.set_on_recording_click(lambda: calls.append(1))
+            renderer.state = "recording"
+            renderer._maybe_notify_recording_click()
+            assert calls == [1]
+        finally:
+            root.destroy()
+
+    def test_click_ignored_when_not_recording(self) -> None:
+        root, renderer = self._make_renderer()
+        try:
+            calls = []
+            renderer.set_on_recording_click(lambda: calls.append(1))
+            for state in ("idle", "processing", "error"):
+                renderer.state = state
+                renderer._maybe_notify_recording_click()
+            assert calls == []
+        finally:
+            root.destroy()
+
+    def test_click_without_callback_does_not_raise(self) -> None:
+        root, renderer = self._make_renderer()
+        try:
+            renderer.state = "recording"
+            renderer._maybe_notify_recording_click()  # 无回调也不应抛异常
+        finally:
+            root.destroy()
+
+    def test_click_callback_exception_is_swallowed(self) -> None:
+        root, renderer = self._make_renderer()
+        try:
+            def _boom():
+                raise RuntimeError("boom")
+
+            renderer.set_on_recording_click(_boom)
+            renderer.state = "recording"
+            renderer._maybe_notify_recording_click()  # 回调异常不应影响渲染循环
+        finally:
+            root.destroy()

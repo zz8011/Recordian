@@ -53,6 +53,86 @@ class StdoutCommitter(TextCommitter):
         print(text, file=sys.stderr)
         return CommitResult(backend=self.backend_name, committed=False, detail="printed_to_stderr")
 
+    def delete_chars(self, count: int) -> CommitResult:
+        n = max(0, int(count))
+        return CommitResult(backend=self.backend_name, committed=False, detail=f"backspace:{n}")
+
+
+_FCITX_SERVICE = "org.fcitx.Fcitx5"
+_FCITX_PATH = "/recordian"
+_FCITX_INTERFACE = "org.fcitx.Fcitx.Recordian1"
+
+
+def _fcitx_channel_available() -> bool:
+    """Return True when the Recordian fcitx addon is answering on the session bus."""
+    if not which("busctl"):
+        return False
+    try:
+        result = subprocess.run(
+            ["busctl", "--user", "call", _FCITX_SERVICE, _FCITX_PATH, _FCITX_INTERFACE, "Ping"],
+            capture_output=True,
+            text=True,
+            timeout=0.4,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return result.returncode == 0 and "ok" in result.stdout
+
+
+class FcitxCommitter(TextCommitter):
+    """Commit a finished string through the fcitx Recordian addon.
+
+    The addon calls InputContext::commitString on the focused context. This
+    bypasses Rime, so it does not update the Rime user dictionary.
+    """
+
+    backend_name = "fcitx"
+
+    def __init__(self, target_window_id: int | None = None, *, streaming: bool = False) -> None:
+        self.target_window_id = target_window_id
+        self.streaming = bool(streaming)
+        self._focused_once = False
+
+    def commit(self, text: str) -> CommitResult:
+        if text == "":
+            return CommitResult(backend=self.backend_name, committed=True, detail="empty")
+        if not which("busctl"):
+            raise CommitError("busctl not found")
+        if isinstance(self.target_window_id, int) and which("xdotool") and not (self.streaming and self._focused_once):
+            # Focus once. Repeating it on every partial makes the caret stutter.
+            _xdotool_focus_window(self.target_window_id)
+            time.sleep(0.05)
+            self._focused_once = True
+        result = subprocess.run(
+            [
+                "busctl",
+                "--user",
+                "call",
+                _FCITX_SERVICE,
+                _FCITX_PATH,
+                _FCITX_INTERFACE,
+                "CommitText",
+                "s",
+                text,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=2.0,
+            check=False,
+        )
+        if result.returncode != 0:
+            detail = (result.stderr or result.stdout or "fcitx commit failed").strip()
+            raise CommitError(detail)
+        detail = (result.stdout or "").strip() or "committed"
+        return CommitResult(backend=self.backend_name, committed=True, detail=detail)
+
+    def delete_chars(self, count: int) -> CommitResult:
+        return XDoToolCommitter(
+            target_window_id=self.target_window_id if isinstance(self.target_window_id, int) else None,
+            streaming=True,
+        ).delete_chars(count)
+
 
 class WTypeCommitter(TextCommitter):
     backend_name = "wtype"
@@ -63,22 +143,58 @@ class WTypeCommitter(TextCommitter):
         _run_command(["wtype", "--", text])
         return CommitResult(backend=self.backend_name, committed=True)
 
+    def delete_chars(self, count: int) -> CommitResult:
+        n = max(0, int(count))
+        if n <= 0:
+            return CommitResult(backend=self.backend_name, committed=True, detail="backspace:0")
+        if not which("wtype"):
+            raise CommitError("wtype not found in PATH")
+        cmd = ["wtype"]
+        for _ in range(n):
+            cmd.extend(["-k", "BackSpace"])
+        _run_command(cmd)
+        return CommitResult(backend=self.backend_name, committed=True, detail=f"backspace:{n}")
+
 
 class XDoToolCommitter(TextCommitter):
     """xdotool type — fallback for apps that don't handle clipboard paste well."""
     backend_name = "xdotool"
 
-    def __init__(self, target_window_id: int | None = None) -> None:
+    def __init__(self, target_window_id: int | None = None, *, streaming: bool = False) -> None:
         self.target_window_id = target_window_id
+        self.streaming = bool(streaming)
+        self._focused_once = False
+
+    def _ensure_focus(self) -> None:
+        if not isinstance(self.target_window_id, int):
+            return
+        if self.streaming and self._focused_once:
+            return
+        _xdotool_focus_window(self.target_window_id)
+        time.sleep(0.04 if self.streaming else 0.12)
+        self._focused_once = True
 
     def commit(self, text: str) -> CommitResult:
         if not which("xdotool"):
             raise CommitError("xdotool not found in PATH")
-        if isinstance(self.target_window_id, int):
-            _xdotool_focus_window(self.target_window_id)
-            time.sleep(0.12)
-        _run_command(["xdotool", "type", "--delay", "1", "--clearmodifiers", "--", text])
+        self._ensure_focus()
+        delay = "0" if self.streaming else "1"
+        _run_command(["xdotool", "type", "--delay", delay, "--clearmodifiers", "--", text])
         return CommitResult(backend=self.backend_name, committed=True)
+
+    def delete_chars(self, count: int) -> CommitResult:
+        n = max(0, int(count))
+        if n <= 0:
+            return CommitResult(backend=self.backend_name, committed=True, detail="backspace:0")
+        if not which("xdotool"):
+            raise CommitError("xdotool not found in PATH")
+        self._ensure_focus()
+        if _send_backspaces_via_xtest(n, window_id=None):
+            return CommitResult(backend=self.backend_name, committed=True, detail=f"backspace:{n}:xtest")
+        _run_command(
+            ["xdotool", "key", "--clearmodifiers", "--repeat", str(n), "--delay", "0", "BackSpace"]
+        )
+        return CommitResult(backend=self.backend_name, committed=True, detail=f"backspace:{n}")
 
 
 def send_paste_shortcut(*, target_window_id: int | None = None) -> CommitResult:
@@ -110,7 +226,7 @@ def send_hard_enter(committer: TextCommitter) -> CommitResult:
             _run_command(["wtype", "-k", "Return"])
             return CommitResult(backend=backend, committed=True, detail="hard_enter_sent")
 
-        if target_backend.startswith("xdotool") or target_backend in {"auto", "auto-fallback", "fallback"}:
+        if target_backend == "fcitx" or target_backend.startswith("xdotool") or target_backend in {"auto", "auto-fallback", "fallback"}:
             if not which("xdotool"):
                 raise CommitError("xdotool not found in PATH")
             wid = getattr(target_committer, "target_window_id", None)
@@ -381,21 +497,47 @@ class CommitterWithFallback(TextCommitter):
         raise CommitError(error_msg) from last_error
 
 
+def _fcitx_committer_from(committer: TextCommitter) -> FcitxCommitter | None:
+    if isinstance(committer, FcitxCommitter):
+        return committer
+    committers = getattr(committer, "committers", None)
+    if not isinstance(committers, list):
+        return None
+    for entry in committers:
+        if not isinstance(entry, tuple) or not entry:
+            continue
+        candidate = entry[0]
+        if isinstance(candidate, FcitxCommitter):
+            return candidate
+    return None
+
+
 def resolve_streaming_committer(committer: TextCommitter) -> TextCommitter:
     """Pick a lower-latency committer for incremental streaming when possible.
 
     Clipboard paste is reliable for one-shot commit, but it is too slow for
     token-by-token updates because each flush needs clipboard settle time and a
-    paste shortcut. When streaming is enabled, prefer direct typing if the
-    current backend is clipboard-based.
+    paste shortcut. The fcitx channel can append and revise while speaking, so
+    streaming keeps that committer instead of the clipboard fallback.
     """
+    fcitx_committer = _fcitx_committer_from(committer)
+    if fcitx_committer is not None:
+        return FcitxCommitter(
+            target_window_id=fcitx_committer.target_window_id
+            if isinstance(fcitx_committer.target_window_id, int)
+            else None,
+            streaming=True,
+        )
     backend = str(getattr(committer, "backend_name", "")).strip().lower()
     if backend == "xdotool-clipboard" and which("xdotool"):
         target_window_id = getattr(committer, "target_window_id", None)
         if isinstance(target_window_id, int):
             if _is_electron_window(target_window_id):
                 return committer
-        return XDoToolCommitter(target_window_id=target_window_id if isinstance(target_window_id, int) else None)
+        return XDoToolCommitter(
+            target_window_id=target_window_id if isinstance(target_window_id, int) else None,
+            streaming=True,
+        )
     return committer
 
 
@@ -403,7 +545,7 @@ def resolve_committer(backend: str, *, target_window_id: int | None = None) -> T
     """Resolve text output backend for Linux desktop integration.
 
     Args:
-        backend: Backend name (auto, auto-fallback, xdotool, xdotool-clipboard, wtype, stdout, none)
+        backend: Backend name (auto, auto-fallback, fcitx, xdotool, xdotool-clipboard, wtype, stdout, none)
         target_window_id: Optional X11 window ID for window-specific routing
 
     Returns:
@@ -424,6 +566,8 @@ def resolve_committer(backend: str, *, target_window_id: int | None = None) -> T
         return NoopCommitter()
     if normalized == "stdout":
         return StdoutCommitter()
+    if normalized == "fcitx":
+        return FcitxCommitter(target_window_id=target_window_id)
     if normalized == "wtype":
         return WTypeCommitter()
     if normalized == "xdotool":
@@ -454,6 +598,12 @@ def resolve_committer(backend: str, *, target_window_id: int | None = None) -> T
         if normalized == "auto-fallback":
             committers: list[tuple[TextCommitter, str]] = []
             timeout_ms = _parse_clipboard_timeout_ms(os.environ.get("RECORDIAN_CLIPBOARD_TIMEOUT_MS"))
+
+            if _fcitx_channel_available():
+                committers.append((
+                    FcitxCommitter(target_window_id=target_window_id),
+                    "fcitx",
+                ))
 
             # Try xdotool-clipboard first (best for CJK and Electron)
             if which("xdotool") and (which("xclip") or which("xsel")):
@@ -489,19 +639,29 @@ def resolve_committer(backend: str, *, target_window_id: int | None = None) -> T
             else:
                 raise CommitError("No text commit backend available")
 
-        # Regular auto mode (no fallback)
-        # Prefer xdotool-clipboard: handles CJK and Electron apps correctly on X11.
-        # Required for Electron apps due to complex input controls.
+        # Regular auto mode. When the fcitx channel is up, commit through it
+        # and keep clipboard paste behind it.
+        chosen: TextCommitter | None = None
         if which("xdotool") and (which("xclip") or which("xsel")):
             timeout_ms = _parse_clipboard_timeout_ms(os.environ.get("RECORDIAN_CLIPBOARD_TIMEOUT_MS"))
-            return XdotoolClipboardCommitter(
+            chosen = XdotoolClipboardCommitter(
                 target_window_id=target_window_id,
                 clipboard_timeout_ms=timeout_ms
             )
-        if which("wtype"):
-            return WTypeCommitter()
-        if which("xdotool"):
-            return XDoToolCommitter()
+        elif which("wtype"):
+            chosen = WTypeCommitter()
+        elif which("xdotool"):
+            chosen = XDoToolCommitter()
+        if chosen is not None and _fcitx_channel_available():
+            return CommitterWithFallback(
+                committers=[
+                    (FcitxCommitter(target_window_id=target_window_id), "fcitx"),
+                    (chosen, chosen.backend_name),
+                ],
+                notify_on_fallback=False,
+            )
+        if chosen is not None:
+            return chosen
         raise CommitError(
             "No text commit backend available. Please install xdotool+xclip or wtype:\n"
             "  sudo apt install xdotool xclip  # for X11\n"
@@ -861,6 +1021,78 @@ def _xdotool_hard_return(*, window_id: int | None = None) -> None:
         raise CommitError("xdotool not found") from exc
     except subprocess.CalledProcessError as exc:
         raise CommitError(f"xdotool hard return failed: {exc}") from exc
+
+
+def send_backspaces(committer: TextCommitter, count: int) -> CommitResult:
+    """Delete *count* characters left of the caret through the current backend."""
+    n = max(0, int(count))
+    backend = str(getattr(committer, "backend_name", "unknown"))
+    if n <= 0:
+        return CommitResult(backend=backend, committed=True, detail="backspace:0")
+    method = getattr(committer, "delete_chars", None)
+    if callable(method):
+        return method(n)
+    if backend == "wtype":
+        return WTypeCommitter().delete_chars(n)
+    if backend.startswith("xdotool") or backend in {"auto", "auto-fallback", "fallback"}:
+        wid = getattr(committer, "target_window_id", None)
+        return XDoToolCommitter(
+            target_window_id=wid if isinstance(wid, int) else None,
+            streaming=True,
+        ).delete_chars(n)
+    return CommitResult(backend=backend, committed=False, detail="backspace_unsupported_backend")
+
+
+def _send_backspaces_via_xtest(count: int, *, window_id: int | None = None) -> bool:
+    libs = _load_xtest_libraries()
+    if libs is None:
+        return False
+    x11, xtst = libs
+    if window_id is not None and _should_refocus_window(window_id):
+        _xdotool_focus_window(window_id)
+        time.sleep(0.04)
+    display = x11.XOpenDisplay(None)
+    if not display:
+        return False
+    try:
+        keysym = x11.XStringToKeysym(b"BackSpace")
+        if not keysym:
+            return False
+        keycode = int(x11.XKeysymToKeycode(display, keysym))
+        if keycode <= 0:
+            return False
+        # PTT holds Control. A bare BackSpace then becomes Ctrl+BackSpace and
+        # deletes the previous word, not the one character SemIf approved.
+        keymap = (ctypes.c_char * 32)()
+        x11.XQueryKeymap(display, keymap)
+        modifier_codes: list[int] = []
+        for name in (b"Control_L", b"Control_R", b"Shift_L", b"Shift_R", b"Alt_L", b"Alt_R"):
+            sym = x11.XStringToKeysym(name)
+            if not sym:
+                continue
+            code = int(x11.XKeysymToKeycode(display, sym))
+            if code <= 0:
+                continue
+            if ord(keymap[code // 8]) & (1 << (code % 8)):
+                modifier_codes.append(code)
+                xtst.XTestFakeKeyEvent(display, code, 0, 0)
+        x11.XFlush(display)
+        for _ in range(max(0, int(count))):
+            if xtst.XTestFakeKeyEvent(display, keycode, 1, 0) == 0:
+                return False
+            if xtst.XTestFakeKeyEvent(display, keycode, 0, 0) == 0:
+                return False
+        for code in modifier_codes:
+            xtst.XTestFakeKeyEvent(display, code, 1, 0)
+        x11.XFlush(display)
+        return True
+    except Exception:
+        return False
+    finally:
+        try:
+            x11.XCloseDisplay(display)
+        except Exception:
+            pass
 
 
 def _send_hard_enter_via_xtest(*, window_id: int | None = None) -> bool:

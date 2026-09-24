@@ -147,6 +147,7 @@ def build_ptt_hotkey_handlers(
                 max_hotwords=int(getattr(args, "auto_lexicon_max_hotwords", 40)),
                 min_accepts=int(getattr(args, "auto_lexicon_min_accepts", 2)),
                 max_terms=int(getattr(args, "auto_lexicon_max_terms", 5000)),
+                max_auto_hotwords=int(getattr(args, "auto_lexicon_max_auto_hotwords", 15)),
             )
             if args.debug_diagnostics:
                 on_state(
@@ -165,15 +166,14 @@ def build_ptt_hotkey_handlers(
             on_state({"event": "log", "message": f"auto_lexicon_disabled: {type(exc).__name__}: {exc}"})
 
     def _resolve_hotwords() -> list[str]:
-        base_hotwords = list(getattr(args, "hotword", []))
-        if auto_lexicon is None:
-            return base_hotwords
+        from .hotword_corrector import compose_effective_hotwords
+
         try:
-            return auto_lexicon.compose_hotwords(base_hotwords)
+            return compose_effective_hotwords(args, auto_lexicon=auto_lexicon)
         except Exception as exc:  # noqa: BLE001
             if args.debug_diagnostics:
                 on_state({"event": "log", "message": f"diag auto_lexicon_compose_failed: {exc}"})
-            return base_hotwords
+            return list(getattr(args, "hotword", []) or [])
 
     # Initialize text refiner if enabled
     from .providers.base_text_refiner import BaseTextRefiner
@@ -219,6 +219,7 @@ def build_ptt_hotkey_handlers(
                 temperature=0.1,
                 prompt_template=custom_prompt if custom_prompt else None,
                 enable_thinking=getattr(args, "enable_thinking", False),
+                timeout=float(getattr(args, "refine_timeout", 120.0)),
             )
             on_state({"event": "log", "message": f"使用云端 LLM: {refiner.model}"})
         elif refine_provider == "llamacpp":
@@ -576,6 +577,11 @@ def build_ptt_hotkey_handlers(
                         )
                     elif realtime_asr_worker.error:
                         on_state({"event": "log", "message": f"realtime_asr_failed: {realtime_asr_worker.error}"})
+                        realtime_final_text = realtime_asr_worker.final_text
+                        realtime_detected_language = realtime_asr_worker.detected_language
+                        realtime_transcribe_latency_ms = realtime_asr_worker.transcribe_latency_ms
+                        if isinstance(realtime_asr_worker.commit_info, dict):
+                            realtime_commit_info = realtime_asr_worker.commit_info
                     else:
                         realtime_final_text = realtime_asr_worker.final_text
                         realtime_detected_language = realtime_asr_worker.detected_language

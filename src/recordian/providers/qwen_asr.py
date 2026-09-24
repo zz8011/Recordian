@@ -1,10 +1,19 @@
 from __future__ import annotations
 
+import time
 from pathlib import Path
+from types import SimpleNamespace
+
+import numpy as np
 
 from ..models import ASRResult
 from .asr_context import ASRContextComposer
 from .base import ASRProvider, ASRProviderCapabilities, _estimate_english_ratio
+
+_STREAM_SAMPLE_RATE = 16000
+_STREAM_MIN_SAMPLES = int(_STREAM_SAMPLE_RATE * 0.45)
+_STREAM_PARTIAL_NEW_SAMPLES = int(_STREAM_SAMPLE_RATE * 0.7)
+_STREAM_PARTIAL_MAX_SAMPLES = int(_STREAM_SAMPLE_RATE * 24)
 
 
 def _compose_qwen_context(base_context: str, hotwords: list[str], *, max_hotwords: int = 40) -> str:
@@ -49,7 +58,12 @@ class QwenASRProvider(ASRProvider):
             supports_hotwords=True,
             supports_context=True,
             supports_language_hint=True,
+            supports_realtime=True,
         )
+
+    def start_realtime_session(self, *, hotwords: list[str]) -> "_QwenRealtimeSession":
+        self._lazy_load()
+        return _QwenRealtimeSession(self, hotwords)
 
     def _lazy_load(self) -> None:
         if self._model is not None:
@@ -185,3 +199,72 @@ class QwenASRProvider(ASRProvider):
                     os.unlink(vad_temp_file)
                 except OSError:
                     pass
+
+    def _transcribe_array(self, audio: np.ndarray, hotwords: list[str], *, max_samples: int | None = None) -> str:
+        self._lazy_load()
+        assert self._model is not None
+        if max_samples is not None and audio.size > max_samples:
+            audio = audio[-max_samples:]
+        if audio.size < _STREAM_MIN_SAMPLES:
+            return ""
+        context = ASRContextComposer(self.context).compose_text(hotwords)
+        results = self._model.transcribe(
+            audio=(audio, _STREAM_SAMPLE_RATE),
+            context=context,
+            language=self.language,
+            return_time_stamps=False,
+        )
+        result = results[0]
+        return (result.text or "").strip()
+
+
+class _QwenRealtimeSession:
+    """Feed float32 PCM and return the current hypothesis.
+
+    The transformers backend has no token stream. Each update transcribes the
+    audio gathered so far, which is what the input box shows while the key is held.
+    """
+
+    def __init__(self, provider: QwenASRProvider, hotwords: list[str]) -> None:
+        self._provider = provider
+        self._hotwords = list(hotwords)
+        self._pcm = np.zeros((0,), dtype=np.float32)
+        self._last_text = ""
+        self._last_infer_samples = 0
+        self._started_at = time.perf_counter()
+
+    def push_audio(self, raw: bytes) -> dict[str, str]:
+        if raw:
+            chunk = np.frombuffer(raw, dtype="<f4")
+            if chunk.size:
+                self._pcm = np.concatenate([self._pcm, np.array(chunk, dtype=np.float32, copy=True)])
+        new_samples = self._pcm.size - self._last_infer_samples
+        if self._last_text and new_samples < _STREAM_PARTIAL_NEW_SAMPLES:
+            return {"text": self._last_text}
+        if self._pcm.size < _STREAM_MIN_SAMPLES:
+            return {"text": ""}
+        audio = self._pcm
+        if audio.size > _STREAM_PARTIAL_MAX_SAMPLES:
+            audio = audio[-_STREAM_PARTIAL_MAX_SAMPLES:]
+        text = self._provider._transcribe_array(
+            audio,
+            self._hotwords,
+            max_samples=_STREAM_PARTIAL_MAX_SAMPLES,
+        )
+        self._last_infer_samples = self._pcm.size
+        if text:
+            self._last_text = text
+        return {"text": self._last_text}
+
+    def finish(self) -> SimpleNamespace:
+        text = self._last_text
+        if self._pcm.size >= _STREAM_MIN_SAMPLES:
+            text = self._provider._transcribe_array(self._pcm, self._hotwords) or text
+        return SimpleNamespace(text=text, detected_language=self._provider.language)
+
+    def cancel(self) -> None:
+        self._pcm = np.zeros((0,), dtype=np.float32)
+
+    @property
+    def elapsed_ms(self) -> float:
+        return (time.perf_counter() - self._started_at) * 1000.0

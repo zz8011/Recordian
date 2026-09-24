@@ -10,6 +10,7 @@ from unittest.mock import Mock, patch
 from recordian.backend_manager import (
     BackendManager,
     _cleanup_orphan_recordian_recorders,
+    _is_hotkey_dictate_command,
     _is_recordian_recorder_command,
     _list_orphan_recordian_recorder_pids,
     _terminate_backend_process,
@@ -615,6 +616,16 @@ class TestBackendManagerCleanup:
         assert _is_recordian_recorder_command(command) is True
         assert _is_recordian_recorder_command("/usr/bin/ffmpeg -f x11grab -i :0 pipe:1") is False
 
+    def test_is_hotkey_dictate_command_matches_backend(self) -> None:
+        assert (
+            _is_hotkey_dictate_command(
+                "/home/zz8011/文档/Develop/Recordian/.venv/bin/python3 -m recordian.hotkey_dictate "
+                "--config-path /home/zz8011/.config/recordian/hotkey.json"
+            )
+            is True
+        )
+        assert _is_hotkey_dictate_command("python3 -m recordian.tray_app") is False
+
     @patch("recordian.backend_manager.time.sleep")
     @patch("recordian.backend_manager.time.monotonic")
     @patch("recordian.backend_manager.os.kill")
@@ -646,3 +657,59 @@ class TestBackendManagerCleanup:
             ((102, signal.SIGKILL),),
         ]
         mock_sleep.assert_called_once()
+
+
+class TestBackendManagerRequestStopRecording:
+    """测试 overlay 点击停止录音的 SIGUSR1 通道"""
+
+    @patch("recordian.backend_manager.os.kill")
+    def test_sends_sigusr1_to_backend_process_only(self, mock_kill: Mock) -> None:
+        config_path = Path("/tmp/test_config.json")
+        events = queue.Queue()
+
+        manager = BackendManager(
+            config_path=config_path,
+            events=events,
+            on_state_change=Mock(),
+            on_menu_update=Mock(),
+        )
+        mock_proc = Mock()
+        mock_proc.poll.return_value = None
+        mock_proc.pid = 4321
+        manager.proc = mock_proc
+
+        assert manager.request_stop_recording() is True
+        mock_kill.assert_called_once_with(4321, signal.SIGUSR1)
+
+    @patch("recordian.backend_manager.os.kill")
+    def test_returns_false_when_backend_not_running(self, mock_kill: Mock) -> None:
+        manager = BackendManager(
+            config_path=Path("/tmp/test_config.json"),
+            events=queue.Queue(),
+            on_state_change=Mock(),
+            on_menu_update=Mock(),
+        )
+        assert manager.request_stop_recording() is False
+        mock_kill.assert_not_called()
+
+        mock_proc = Mock()
+        mock_proc.poll.return_value = 0  # 已退出
+        manager.proc = mock_proc
+        assert manager.request_stop_recording() is False
+        mock_kill.assert_not_called()
+
+    @patch("recordian.backend_manager.os.kill")
+    def test_returns_false_on_oserror(self, mock_kill: Mock) -> None:
+        manager = BackendManager(
+            config_path=Path("/tmp/test_config.json"),
+            events=queue.Queue(),
+            on_state_change=Mock(),
+            on_menu_update=Mock(),
+        )
+        mock_proc = Mock()
+        mock_proc.poll.return_value = None
+        mock_proc.pid = 4321
+        manager.proc = mock_proc
+        mock_kill.side_effect = ProcessLookupError()
+
+        assert manager.request_stop_recording() is False

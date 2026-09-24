@@ -45,7 +45,61 @@ logger = logging.getLogger(__name__)
 DEFAULT_CONFIG_PATH = "~/.config/recordian/hotkey.json"
 DEFAULT_AUTO_LEXICON_DB_PATH = "~/.config/recordian/auto_lexicon.db"
 
+#: 所有托盘运行期日志都带这个前缀，方便 `journalctl | grep` 定位。
+LOG_PREFIX = "[recordian-tray]"
+
+#: 后端非预期退出后的自动重启退避（秒）；用尽后放弃并提示用户手动启动。
+AUTO_RESTART_DELAYS_S: tuple[float, ...] = (1.0, 2.0, 4.0, 8.0, 15.0)
+
 HOTKEY_CAPTURE_FIELDS = {"hotkey", "stop_hotkey", "toggle_hotkey"}
+
+
+def acquire_single_instance_lock(config_path: str | Path, *, lock_name: str = "tray.lock") -> int | None:
+    """用 flock 保证只有一个托盘实例，返回需要长期持有的 fd。
+
+    两个托盘同时运行会互相调用 `_cleanup_orphan_recordian_recorders()`，把对方的
+    后端进程杀掉（表现为「后端总是停止」），所以这里直接拒绝第二个实例。
+
+    锁文件创建不出来（权限/磁盘）时返回 ``None`` 并且**不阻塞启动**——没有单实例
+    保护总好过整个语音输入起不来；真正被别的实例占用时才抛 ``RuntimeError``。
+    """
+    import fcntl
+    import os
+
+    lock_path = Path(config_path).expanduser().resolve().parent / lock_name
+    try:
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        lock_fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o644)
+    except OSError as exc:
+        logger.warning("无法创建托盘单实例锁 %s: %s（继续启动，但无单实例保护）", lock_path, exc)
+        return None
+
+    try:
+        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError as exc:
+        os.close(lock_fd)
+        raise RuntimeError(f"Recordian 托盘已在运行，无需重复启动（lock={lock_path}）") from exc
+    except OSError as exc:  # 文件系统不支持 flock 等
+        os.close(lock_fd)
+        logger.warning("托盘单实例锁不可用（%s: %s），继续启动", type(exc).__name__, exc)
+        return None
+
+    try:
+        os.ftruncate(lock_fd, 0)
+        os.write(lock_fd, str(os.getpid()).encode("ascii"))
+    except OSError:
+        pass
+    return lock_fd
+
+
+def notify_desktop(title: str, body: str, *, urgency: str = "normal", backend: str = "auto") -> None:
+    """尽力发送桌面通知；任何失败都不影响主流程。"""
+    try:
+        from .linux_notify import Notification, resolve_notifier
+
+        resolve_notifier(backend).notify(Notification(title=title, body=body, urgency=urgency))
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -104,6 +158,8 @@ class TrayApp:
             on_state_change=self._on_backend_state_change,
             on_menu_update=self._update_tray_menu,
         )
+        # 录音中点击 overlay -> 请求后端停止录音
+        self.overlay.set_on_recording_click(self._on_overlay_recording_click)
         self._gtk_settings_window: Any = None
         self._diagnostics_window: tk.Toplevel | None = None
         self._diagnostics_text: tk.Text | None = None
@@ -117,6 +173,10 @@ class TrayApp:
         self._config_cache: dict[str, Any] | None = None
         self._config_cache_mtime: float = 0.0
         self._toggle_lock = threading.Lock()
+        # 后端自动重启状态
+        self._quitting = False
+        self._auto_restart_attempts = 0
+        self._auto_restart_after_id: str | None = None
 
     def _get_cached_config(self) -> dict[str, Any]:
         try:
@@ -140,6 +200,14 @@ class TrayApp:
             self.state.status = status
             self.state.detail = detail
         self.root.after(0, _update)
+
+    def _on_overlay_recording_click(self) -> None:
+        """录音中点击 overlay：请求后端停止录音（从 pyglet 线程调用）。"""
+        try:
+            if self.backend.request_stop_recording():
+                self.events.put({"event": "log", "message": "overlay_stop_requested"})
+        except Exception:
+            pass
 
     def run(self) -> None:
         self._start_tray()
@@ -165,6 +233,13 @@ class TrayApp:
             self.state.backend_running = True
             self.state.status = "idle"
             self.state.detail = "Ready"
+            # 后端已经就绪：清空自动重启计数与待执行的定时器
+            self._cancel_backend_restart()
+            self._auto_restart_attempts = 0
+            self._log_runtime(
+                f"backend_ready hotkey={event.get('hotkey', '')} "
+                f"mode={event.get('trigger_mode', '')} notify={event.get('notify_backend', '')}"
+            )
             if self._warmup_done:
                 self.overlay.set_state("idle", "Ready")
         elif et == "model_warmup":
@@ -193,29 +268,27 @@ class TrayApp:
             if text:
                 self.state.last_run.text = text
                 if self.state.status == "recording":
-                    self.state.detail = "Recording..."
+                    self.state.detail = truncate(text, 48)
+                    self.overlay.set_state("recording", text)
                 elif self.state.status == "processing":
-                    detail = truncate(text, 48)
-                    self.state.detail = detail
-                    self.overlay.set_state("processing", detail)
+                    self.state.detail = truncate(text, 48)
+                    self.overlay.set_state("processing", text)
         elif et == "realtime_asr_partial":
             text = str(event.get("text", "")).strip()
             if text:
                 self.state.last_run.text = text
-                detail = truncate(text, 48)
-                self.state.detail = detail
+                self.state.detail = truncate(text, 48)
                 if self.state.status == "recording":
-                    self.overlay.set_state("recording", detail)
+                    self.overlay.set_state("recording", text)
                 elif self.state.status == "processing":
-                    self.overlay.set_state("processing", detail)
+                    self.overlay.set_state("processing", text)
         elif et == "refine_stream_chunk":
             text = str(event.get("accumulated", "")).strip()
             if text:
                 self.state.last_run.text = text
                 if self.state.status == "processing":
-                    detail = truncate(text, 48)
-                    self.state.detail = detail
-                    self.overlay.set_state("processing", detail)
+                    self.state.detail = truncate(text, 48)
+                    self.overlay.set_state("processing", text)
         elif et == "audio_level":
             self.overlay.set_level(cast(float, event.get("level", 0.0) or 0.0))
         elif et == "processing_started":
@@ -271,25 +344,38 @@ class TrayApp:
             self.state.status = "busy"
             self.state.detail = "Busy"
             self.overlay.set_state("processing", "Still processing previous input")
+            self._log_runtime(f"busy: {event.get('reason', 'dictation_in_progress')}")
         elif et == "error":
             self.state.status = "error"
             self.state.detail = str(event.get("error", "error"))
             detail = truncate(self.state.detail, 72)
             self.overlay.set_state("error", detail)
             self._schedule_off_cue_from_overlay("error", detail)
+            self._log_runtime(f"error: {self.state.detail}")
         elif et in {"stopped", "backend_exited"}:
-            self.state.backend_running = False
-            self.state.status = "stopped"
-            self.state.detail = "Stopped"
+            intentional = bool(event.get("intentional", False))
+            code = event.get("code")
+            alive = self._backend_alive()
+            if et == "backend_exited":
+                self._log_runtime(
+                    f"backend_exited code={code} intentional={intentional} superseded={alive}"
+                )
+            else:
+                # 这个事件只由 BackendManager.stop() 发出，即用户/托盘主动停止
+                self._log_runtime("backend_stopped (explicit)")
+            self.state.backend_running = alive
+            self.state.status = "idle" if alive else "stopped"
+            self.state.detail = "Ready" if alive else "Stopped"
             detail = "Stopped"
             self.overlay.set_state("idle", detail)
             self._schedule_off_cue_from_overlay("idle", detail)
+            if et == "backend_exited" and not intentional and not alive:
+                self._schedule_backend_restart(f"exit_code={code}")
         elif et == "log":
             msg = str(event.get("message", "")).strip()
             if msg:
                 self.state.detail = truncate(msg, 48)
-                if msg.startswith("diag "):
-                    print(msg, file=sys.stderr, flush=True)
+                self._log_runtime(f"log: {msg}")
         self._update_tray_menu()
 
     @staticmethod
@@ -322,6 +408,74 @@ class TrayApp:
         if observation.asr_path:
             suffix += f" path={observation.asr_path}"
         return suffix
+
+    # -- 运行期可观测性与后端自愈 ------------------------------------------
+
+    def _log_runtime(self, message: str) -> None:
+        """把托盘侧的关键状态写到 stderr（journald）与日志文件，便于事后定位。"""
+        text = str(message).replace("\n", " ").strip()
+        if not text:
+            return
+        print(f"{LOG_PREFIX} {text}", file=sys.stderr, flush=True)
+        logger.info("%s", text)
+
+    def _notify_backend(self, title: str, body: str, *, urgency: str = "normal") -> None:
+        notify_desktop(
+            title,
+            body,
+            urgency=urgency,
+            backend=str(getattr(self.args, "notify_backend", "auto") or "auto"),
+        )
+
+    def _backend_alive(self) -> bool:
+        proc = getattr(self.backend, "proc", None)
+        if proc is None:
+            return False
+        try:
+            return proc.poll() is None
+        except Exception:  # noqa: BLE001
+            return False
+
+    def _cancel_backend_restart(self) -> None:
+        after_id = getattr(self, "_auto_restart_after_id", None)
+        if after_id is None:
+            return
+        self._auto_restart_after_id = None
+        try:
+            self.root.after_cancel(after_id)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _schedule_backend_restart(self, reason: str) -> None:
+        """后端非预期退出后自动拉起；退避用尽则提示用户手动启动。"""
+        if getattr(self, "_quitting", False):
+            return
+        attempt = int(getattr(self, "_auto_restart_attempts", 0)) + 1
+        if attempt > len(AUTO_RESTART_DELAYS_S):
+            self._log_runtime(f"backend 反复退出，已放弃自动重启（{len(AUTO_RESTART_DELAYS_S)} 次）: {reason}")
+            self._notify_backend(
+                "Recordian 后端已停止",
+                "自动重启失败，请在托盘菜单点击「启动后端」",
+                urgency="critical",
+            )
+            return
+        self._auto_restart_attempts = attempt
+        delay_s = AUTO_RESTART_DELAYS_S[min(attempt - 1, len(AUTO_RESTART_DELAYS_S) - 1)]
+        self._log_runtime(f"backend 非预期退出（{reason}），{delay_s:.0f}s 后自动重启（第 {attempt} 次）")
+        self._notify_backend("Recordian 后端已停止", f"{delay_s:.0f} 秒后自动重启（第 {attempt} 次）")
+        self._cancel_backend_restart()
+        self._auto_restart_after_id = self.root.after(int(delay_s * 1000), self._restart_backend)
+
+    def _restart_backend(self) -> None:
+        self._auto_restart_after_id = None
+        if getattr(self, "_quitting", False) or self._backend_alive():
+            return
+        self._log_runtime("backend 自动重启中…")
+        try:
+            self.backend.start()
+        except Exception as exc:  # noqa: BLE001
+            self._log_runtime(f"backend 自动重启失败: {type(exc).__name__}: {exc}")
+            self._schedule_backend_restart(f"start_failed={type(exc).__name__}")
 
     def _cancel_off_cue_timer(self) -> None:
         if self._off_sound_after_id is None:
@@ -720,6 +874,10 @@ class TrayApp:
         sync_appindicator_preset_submenu(self)
 
     def quit(self) -> None:
+        # 主动退出：取消待执行的后端自动重启，避免退出后又拉起后端
+        self._quitting = True
+        self._cancel_backend_restart()
+        self._log_runtime("tray quitting")
         self.backend.stop()
         self.overlay.shutdown()
 
@@ -772,16 +930,47 @@ def main() -> None:
     sys.excepthook = handle_exception
 
     try:
-        args = build_parser().parse_args()
+        from recordian.logging_config import setup_logging
+
+        # 托盘与后端共用同一个日志文件（默认 ~/.local/share/recordian/recordian.log），
+        # 这样"报错"不会只留在 overlay 上、事后无从查起。
+        setup_logging(console=False)
+    except Exception:  # noqa: BLE001
+        pass
+
+    args = build_parser().parse_args()
+
+    # 单实例：第二个托盘会 kill 掉第一个的后端进程，直接拒绝启动。
+    try:
+        lock_fd = acquire_single_instance_lock(args.config_path)
+    except RuntimeError as exc:
+        print(f"{LOG_PREFIX} {exc}", file=sys.stderr, flush=True)
+        notify_desktop(
+            "Recordian 已在运行",
+            str(exc),
+            backend=str(getattr(args, "notify_backend", "auto") or "auto"),
+        )
+        raise SystemExit(1) from exc
+
+    try:
         app = TrayApp(args)
         app.run()
     except Exception as e:
         logger.error(f"Fatal error in main: {e}", exc_info=True)
+        print(f"{LOG_PREFIX} Fatal error in main: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
         from recordian.error_tracker import get_error_tracker
         tracker = get_error_tracker()
         if tracker:
             tracker.capture_exception(e)
         raise
+    finally:
+        if lock_fd is not None:
+            try:
+                import os
+
+                os.close(lock_fd)
+            except OSError:
+                pass
 
 
 __all__ = [
