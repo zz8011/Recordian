@@ -102,6 +102,41 @@ def request_choice(
     return interpret_choice(options, picked)
 
 
+def request_choices(
+    session: Any,
+    endpoint: str,
+    timeout_s: float,
+    state: str,
+    questions: dict[str, dict[str, Any]],
+) -> dict[str, str | None]:
+    """POST several named choice questions in one bounded request.
+
+    Each question is a ``{"type": "choice", "instructions": ..., "criteria":
+    {...}}`` mapping; every answer passes the same fixed ``interpret_choice``
+    gate, so a missing or weak answer keeps the original for that question.
+    Network and payload failures return an empty dict.
+    """
+    if session is None or not endpoint or timeout_s <= 0 or not questions:
+        return {}
+    requests = require_requests()
+    payload = {"state": state, "questions": questions}
+    try:
+        response = session.post(endpoint, json=payload, timeout=timeout_s)
+        response.raise_for_status()
+        answers = response.json()["answers"]
+    except (requests.RequestException, OSError, ValueError, KeyError, TypeError):
+        return {}
+    if not isinstance(answers, dict):
+        return {}
+    results: dict[str, str | None] = {}
+    for name, question in questions.items():
+        criteria = question.get("criteria")
+        if not isinstance(criteria, dict):
+            continue
+        results[name] = interpret_choice(criteria, answers.get(name))
+    return results
+
+
 class SemIfClient:
     """Reusable session. Empty endpoint or ``enabled=False`` never connects."""
 

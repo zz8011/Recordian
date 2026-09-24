@@ -198,3 +198,115 @@ def test_apply_namespace_runtime_normalization_preserves_backend_only_values() -
     assert args.wake_prefix == ["嘿"]
     assert args.wake_name == ["小二"]
     assert args.wake_tokens_type == "ppinyin"
+
+
+def test_correction_provider_defaults_and_separate_timeouts() -> None:
+    defaults = normalize_runtime_config({})
+    assert defaults["correction_provider"] == "semif"
+    assert defaults["enable_semif_correction"] is False
+    assert defaults["jev_timeout_s"] == 1.5
+    assert defaults["semif_timeout_s"] == 0.12
+    selected = normalize_runtime_config(
+        {
+            "correction_provider": "jev",
+            "jev_timeout_s": 9,
+            "semif_timeout_s": 9,
+            "enable_semif_correction": True,
+        }
+    )
+    assert selected["correction_provider"] == "jev"
+    assert selected["jev_timeout_s"] == 2.0
+    assert selected["semif_timeout_s"] == 0.35
+    assert normalize_runtime_config({"correction_provider": "nope"})["correction_provider"] == "semif"
+
+
+def test_parse_args_round_trip_keeps_jev_provider_and_aliases(tmp_path, monkeypatch) -> None:
+    import json
+
+    from recordian.arg_parser import _parse_args_with_config, build_parser
+
+    cfg = tmp_path / "hotkey.json"
+    cfg.write_text(
+        json.dumps(
+            {
+                "enable_semif_correction": True,
+                "correction_provider": "jev",
+                "semif_endpoint": "http://10.2.2.2:9/semif",
+                "semif_timeout_s": 0.3,
+                "jev_timeout_s": 1.4,
+                "contextual_aliases": [{"heard": "jeff", "word": "jev", "meaning": "软件工具"}],
+                "asr_context": "微信, Recordian",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "sys.argv",
+        ["recordian", "--config-path", str(cfg), "--contextual-alias", "cody→Kodi::播放器"],
+    )
+    args = _parse_args_with_config(build_parser())
+    assert args.correction_provider == "jev"
+    assert args.enable_semif_correction is True
+    assert args.semif_endpoint == "http://10.2.2.2:9/semif"
+    assert args.semif_timeout_s == 0.3
+    assert args.jev_timeout_s == 1.4
+    assert args.asr_context == "微信, Recordian"
+    assert {"heard": "jeff", "word": "jev", "meaning": "软件工具"} in args.contextual_aliases
+    assert {"heard": "cody", "word": "Kodi", "meaning": "播放器"} in args.contextual_aliases
+
+    legacy = tmp_path / "legacy.json"
+    legacy.write_text(json.dumps({"enable_semif_correction": False, "asr_context": "日常"}), encoding="utf-8")
+    monkeypatch.setattr("sys.argv", ["recordian", "--config-path", str(legacy)])
+    old = _parse_args_with_config(build_parser())
+    assert old.correction_provider == "semif"
+    assert old.enable_semif_correction is False
+    assert old.contextual_aliases == []
+    assert old.jev_timeout_s == 1.5
+    assert old.asr_context == "日常"
+
+
+def test_normalize_contextual_aliases_default_empty() -> None:
+    normalized = normalize_runtime_config({})
+    assert normalized["contextual_aliases"] == []
+
+
+def test_normalize_contextual_aliases_accepts_dicts_and_strings() -> None:
+    normalized = normalize_runtime_config(
+        {
+            "contextual_aliases": [
+                {"heard": "jeff", "word": "jev", "meaning": "软件工具"},
+                "kodi→Cody::人名",
+                {"heard": "", "word": "x", "meaning": "工具"},
+                {"heard": "same", "word": "same", "meaning": "工具"},
+                {"heard": "jeff", "word": "jev", "meaning": "软件工具"},
+                "no-meaning-string",
+            ]
+        }
+    )
+    assert normalized["contextual_aliases"] == [
+        {"heard": "jeff", "word": "jev", "meaning": "软件工具"},
+        {"heard": "kodi", "word": "Cody", "meaning": "人名"},
+    ]
+
+
+def test_normalize_contextual_aliases_rejects_non_list() -> None:
+    normalized = normalize_runtime_config({"contextual_aliases": 42})
+    assert normalized["contextual_aliases"] == []
+
+
+def test_format_contextual_aliases_round_trip() -> None:
+    aliases = [
+        {"heard": "jeff", "word": "jev", "meaning": "软件工具"},
+        {"heard": "cody", "word": "Kodi", "meaning": "播放器软件"},
+    ]
+    text = runtime_config.format_contextual_aliases(aliases)
+    assert text == "jeff→jev::软件工具\ncody→Kodi::播放器软件"
+    assert runtime_config.normalize_contextual_aliases(text) == aliases
+
+
+def test_normalize_contextual_aliases_accepts_cjk_separators() -> None:
+    text = "jeff→jev::软件工具，cody->Kodi::播放器软件；无效行"
+    assert runtime_config.normalize_contextual_aliases(text) == [
+        {"heard": "jeff", "word": "jev", "meaning": "软件工具"},
+        {"heard": "cody", "word": "Kodi", "meaning": "播放器软件"},
+    ]

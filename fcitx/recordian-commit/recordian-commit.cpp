@@ -19,9 +19,27 @@
  *       UpdatePreedit will render inline; with preedit=0 streaming is
  *       preview-only on the Python side and only CommitSession writes
  *       (preview-only UpdatePreedit calls still refresh the TTL clock).
+ *       The descriptor also carries "segments=1": this bridge accepts
+ *       CommitSegment on the same token. Older bridges omit that marker.
  *       Starting a new session on the same context supersedes and ERASES
  *       the previous entry (session capacity counts live sessions only)
  *       and replaces its preedit, leaving no residue.
+ *
+ *   CommitSegment(s token, u sequence, s text) -> s
+ *       Commit one continuous chunk on the session bound at Begin time.
+ *       sequence starts at 1 and must advance by exactly one. A duplicate
+ *       or skipped sequence is rejected and writes nothing; the token and
+ *       the expected sequence stay as they were. A successful segment
+ *       keeps the SAME token active (focus, typing, reset, sensitivity,
+ *       TTL, and foreign-preedit guards apply on every call) and refreshes
+ *       the inactivity clock. Returns "segment <n> <frontend> <program>"
+ *       or "segment <n> cleared" for an empty chunk. Final CommitSession
+ *       is still what consumes the token. When the context has no
+ *       surrounding snapshot yet, the echo is accepted only if this call's
+ *       own CommitString was seen and the new snapshot is exactly that
+ *       committed string with the caret at its Unicode end. A longer
+ *       buffer, a different string, or a caret that is not at the end
+ *       still invalidates.
  *
  *   UpdatePreedit(s token, s text) -> s
  *       Replace the preedit text of the bound context. Never commits,
@@ -73,8 +91,11 @@
  * update), not 120 s after Begin — long dictations stay alive as long as
  * they keep updating.
  */
+#include <algorithm>
 #include <array>
 #include <chrono>
+#include <cstdint>
+#include <limits>
 #include <mutex>
 #include <random>
 #include <stdexcept>
@@ -82,7 +103,10 @@
 #include <unordered_map>
 #include <vector>
 
+#include <fcitx-utils/utf8.h>
+
 #include <fcitx-utils/capabilityflags.h>
+#include <fcitx-utils/log.h>
 #include <fcitx-utils/dbus/objectvtable.h>
 #include <fcitx/addonfactory.h>
 #include <fcitx/addonmanager.h>
@@ -104,9 +128,144 @@ constexpr char kErrorStale[] = "org.fcitx.Fcitx.Recordian.Error.StaleSession";
 constexpr char kErrorBusy[] = "org.fcitx.Fcitx.Recordian.Error.SessionBusy";
 constexpr char kErrorPreedit[] =
     "org.fcitx.Fcitx.Recordian.Error.ExistingPreedit";
+constexpr char kErrorSequence[] =
+    "org.fcitx.Fcitx.Recordian.Error.BadSequence";
 
 constexpr auto kSessionTTL = std::chrono::seconds(120);
 constexpr std::size_t kMaxSessions = 8;
+
+// Snapshot of SurroundingText. cursor/anchor are Unicode scalar offsets
+// (fcitx SurroundingText), while text is UTF-8 bytes.
+struct SurroundSnap {
+    bool valid = false;
+    std::string text;
+    unsigned cursor = 0;
+    unsigned anchor = 0;
+};
+
+bool sameSnap(const SurroundSnap &a, const SurroundSnap &b) {
+    return a.valid && b.valid && a.text == b.text && a.cursor == b.cursor &&
+           a.anchor == b.anchor;
+}
+
+// Caret collapsed at the last Unicode scalar. Rejects a mid-string caret
+// and a non-empty selection.
+bool caretAtUtf8End(const SurroundSnap &snap) {
+    if (!snap.valid) {
+        return false;
+    }
+    const auto chars = fcitx::utf8::lengthValidated(snap.text);
+    if (chars == fcitx::utf8::INVALID_LENGTH) {
+        return false;
+    }
+    return snap.cursor == static_cast<unsigned>(chars) && snap.anchor == snap.cursor;
+}
+
+// Byte offset of the first byte of Unicode character `chars`, or npos.
+size_t utf8ByteOffset(const std::string &text, unsigned chars) {
+    if (chars == 0) {
+        return 0;
+    }
+    if (text.empty()) {
+        return static_cast<size_t>(-1);
+    }
+    const auto n = fcitx::utf8::lengthValidated(text);
+    if (n == fcitx::utf8::INVALID_LENGTH ||
+        static_cast<size_t>(chars) > n) {
+        return static_cast<size_t>(-1);
+    }
+    return static_cast<size_t>(
+        std::distance(text.begin(), fcitx::utf8::nextNChar(text.begin(), chars)));
+}
+
+// Replace the selected Unicode range with `inserted`. Collapses the caret
+// to the end of the insertion. Returns false when indexes are not valid
+// Unicode offsets into `before`.
+bool predictCommittedSurround(const SurroundSnap &before,
+                              const std::string &inserted, SurroundSnap *after) {
+    if (after == nullptr || !before.valid) {
+        return false;
+    }
+    const auto insertedChars = fcitx::utf8::lengthValidated(inserted);
+    const auto beforeChars = fcitx::utf8::lengthValidated(before.text);
+    if (insertedChars == fcitx::utf8::INVALID_LENGTH ||
+        beforeChars == fcitx::utf8::INVALID_LENGTH) {
+        return false;
+    }
+    if (static_cast<size_t>(before.cursor) > beforeChars ||
+        static_cast<size_t>(before.anchor) > beforeChars) {
+        return false;
+    }
+    const unsigned lo = std::min(before.cursor, before.anchor);
+    const unsigned hi = std::max(before.cursor, before.anchor);
+    const size_t loByte = utf8ByteOffset(before.text, lo);
+    const size_t hiByte = utf8ByteOffset(before.text, hi);
+    if (loByte == static_cast<size_t>(-1) || hiByte == static_cast<size_t>(-1) ||
+        loByte > hiByte || hiByte > before.text.size()) {
+        return false;
+    }
+    const auto insertedCount = static_cast<unsigned>(insertedChars);
+    if (static_cast<size_t>(lo) + insertedChars > std::numeric_limits<unsigned>::max()) {
+        return false;
+    }
+    after->valid = true;
+    after->text = before.text.substr(0, loByte) + inserted + before.text.substr(hiByte);
+    after->cursor = lo + insertedCount;
+    after->anchor = after->cursor;
+    return true;
+}
+
+SurroundSnap readSurround(const fcitx::InputContext *ic) {
+    SurroundSnap snap;
+    if (ic == nullptr) {
+        return snap;
+    }
+    const auto &surround = ic->surroundingText();
+    if (!surround.isValid()) {
+        return snap;
+    }
+    const auto chars = fcitx::utf8::lengthValidated(surround.text());
+    if (chars == fcitx::utf8::INVALID_LENGTH) {
+        return snap;
+    }
+    if (static_cast<size_t>(surround.cursor()) > chars ||
+        static_cast<size_t>(surround.anchor()) > chars) {
+        return snap;
+    }
+    snap.valid = true;
+    snap.text = surround.text();
+    snap.cursor = surround.cursor();
+    snap.anchor = surround.anchor();
+    return snap;
+}
+
+// One outstanding CommitSegment whose client echo we may accept.
+// Cleared on ack, cancel, failure, and TTL. A later event may repeat the
+// already-accepted snapshot; any other text or caret invalidates.
+struct SegmentAck {
+    bool armed = false;
+    bool poisoned = false;
+    bool commitSeen = false;
+    uint32_t sequence = 0;
+    fcitx::ICUUID uuid{};
+    std::string requested;
+    SurroundSnap before{};
+    SurroundSnap after{};
+    bool afterKnown = false;
+    bool hasAccepted = false;
+    SurroundSnap accepted{};
+};
+
+void clearPendingAck(SegmentAck *ack) {
+    if (ack == nullptr) {
+        return;
+    }
+    const bool hasAccepted = ack->hasAccepted;
+    const SurroundSnap accepted = ack->accepted;
+    *ack = SegmentAck{};
+    ack->hasAccepted = hasAccepted;
+    ack->accepted = accepted;
+}
 
 struct StreamingSession {
     std::string token;
@@ -120,6 +279,10 @@ struct StreamingSession {
     // silently drop the tail of the utterance.
     std::chrono::steady_clock::time_point lastActive{};
     bool finished = false;
+    // Next CommitSegment sequence. Starts at 1; only an accepted segment
+    // advances it by one. The token stays live across those commits.
+    uint32_t nextSegment = 1;
+    SegmentAck ack{};
     // Last preedit text this session wrote into the context ("" once
     // cleared). Used to only ever remove preedit that is still ours.
     std::string lastPreedit;
@@ -172,6 +335,9 @@ public:
         watch(fcitx::EventType::InputContextReset);
         watch(fcitx::EventType::InputContextSurroundingTextUpdated);
         watch(fcitx::EventType::InputContextSwitchInputMethod);
+        // Posted by InputContext::commitString. Used as provenance that the
+        // string we just asked to commit is the one the framework is sending.
+        watch(fcitx::EventType::InputContextCommitString);
     }
 
     std::string Ping() { return "ok"; }
@@ -269,7 +435,114 @@ public:
             }
         }
         return token + " preedit=" + (preeditCapable ? "1" : "0") +
-               " frontend=" + frontend + " program=" + program;
+               " frontend=" + frontend + " program=" + program + " segments=1";
+    }
+
+    std::string CommitSegment(const std::string &token, uint32_t sequence,
+                              const std::string &text) {
+        std::shared_ptr<StreamingSession> entry;
+        {
+            std::lock_guard<std::mutex> guard(mutex_);
+            auto it = sessions_.find(token);
+            if (it == sessions_.end()) {
+                throw fcitx::dbus::MethodCallError(
+                    kErrorStale,
+                    "unknown or stale session (org.fcitx.Fcitx.Recordian.Error.StaleSession)");
+            }
+            entry = it->second;
+            if (entry->finished) {
+                throw fcitx::dbus::MethodCallError(
+                    kErrorStale,
+                    "session already committed or cancelled (org.fcitx.Fcitx.Recordian.Error.StaleSession)");
+            }
+            // Reject before any write and before consuming the token.
+            // Duplicate (sequence already accepted) and skip (sequence
+            // jumped ahead) both leave nextSegment unchanged.
+            if (sequence != entry->nextSegment ||
+                entry->nextSegment == std::numeric_limits<uint32_t>::max()) {
+                throw fcitx::dbus::MethodCallError(
+                    kErrorSequence,
+                    "duplicate or out-of-order segment (org.fcitx.Fcitx.Recordian.Error.BadSequence)");
+            }
+        }
+        auto *ic = resolveForEntry(entry, /*requireFocus=*/true);
+        if (ic == nullptr) {
+            invalidateSession(token);
+            clearOwnedPreedit(instance_->inputContextManager().findByUUID(
+                                  entry->uuid),
+                              entry);
+            throw fcitx::dbus::MethodCallError(
+                kErrorStale,
+                "bound input context lost focus or is gone (org.fcitx.Fcitx.Recordian.Error.StaleSession)");
+        }
+        if (foreignPreeditAppeared(ic, entry)) {
+            invalidateSession(token);
+            throw fcitx::dbus::MethodCallError(
+                kErrorStale,
+                "preedit was replaced by another source (org.fcitx.Fcitx.Recordian.Error.StaleSession)");
+        }
+        {
+            std::lock_guard<std::mutex> guard(mutex_);
+            auto it = sessions_.find(token);
+            if (it == sessions_.end() || it->second.get() != entry.get() ||
+                entry->finished) {
+                throw fcitx::dbus::MethodCallError(
+                    kErrorStale,
+                    "session already committed or cancelled (org.fcitx.Fcitx.Recordian.Error.StaleSession)");
+            }
+            if (sequence != entry->nextSegment) {
+                throw fcitx::dbus::MethodCallError(
+                    kErrorSequence,
+                    "duplicate or out-of-order segment (org.fcitx.Fcitx.Recordian.Error.BadSequence)");
+            }
+            // Advance before the toolkit write so a lost reply cannot be
+            // retried into a second commit of this sequence. The token
+            // stays in the map; only CommitSession / Cancel consumes it.
+            entry->nextSegment = sequence + 1;
+            entry->lastActive = std::chrono::steady_clock::now();
+            if (text.empty()) {
+                clearPendingAck(&entry->ack);
+            } else {
+                // Predict the client echo from the surrounding text BEFORE
+                // this write. cursor/anchor are Unicode offsets.
+                SegmentAck ack;
+                ack.armed = true;
+                ack.sequence = sequence;
+                ack.uuid = entry->uuid;
+                ack.requested = text;
+                ack.before = readSurround(ic);
+                ack.afterKnown = predictCommittedSurround(ack.before, text, &ack.after);
+                ack.hasAccepted = entry->ack.hasAccepted;
+                ack.accepted = entry->ack.accepted;
+                entry->ack = std::move(ack);
+            }
+        }
+        clearOwnedPreedit(ic, entry);
+        if (text.empty()) {
+            return "segment " + std::to_string(sequence) + " cleared";
+        }
+        {
+            // Nested CommitString during this call is ours. A different
+            // string from commitFilter poisons the prediction.
+            struct Depth {
+                int &value;
+                explicit Depth(int &value) : value(value) { value += 1; }
+                ~Depth() { value -= 1; }
+            } guard(selfCommitDepth_);
+            ic->commitString(text);
+        }
+        {
+            std::lock_guard<std::mutex> guard(mutex_);
+            auto it = sessions_.find(token);
+            if (it == sessions_.end() || it->second->finished ||
+                it->second->ack.poisoned) {
+                throw fcitx::dbus::MethodCallError(
+                    kErrorStale,
+                    "bound input context changed during segment commit (org.fcitx.Fcitx.Recordian.Error.StaleSession)");
+            }
+        }
+        return "segment " + std::to_string(sequence) + " " +
+               std::string(ic->frontendName()) + " " + ic->program();
     }
 
     std::string UpdatePreedit(const std::string &token,
@@ -376,6 +649,7 @@ public:
             }
             entry = it->second;
             entry->finished = true;
+            clearPendingAck(&entry->ack);
             sessions_.erase(it);
         }
         // Resolve through the *kept* entry: the session is gone from the
@@ -406,15 +680,52 @@ private:
                 auto &session = *it->second;
                 bool drop = false;
                 switch (event.type()) {
+                case fcitx::EventType::InputContextCommitString: {
+                    // Provenance for the commit we just issued. Only the
+                    // nested event from CommitSegment may arm the echo.
+                    if (session.uuid != uuid || !session.ack.armed ||
+                        selfCommitDepth_ <= 0) {
+                        break;
+                    }
+                    auto *commitEvent =
+                        dynamic_cast<fcitx::CommitStringEvent *>(&event);
+                    if (commitEvent == nullptr ||
+                        commitEvent->text() != session.ack.requested ||
+                        session.ack.uuid != uuid ||
+                        session.ack.sequence == 0) {
+                        session.ack.poisoned = true;
+                        session.ack.afterKnown = false;
+                        clearPendingAck(&session.ack);
+                        drop = true;
+                        break;
+                    }
+                    session.ack.commitSeen = true;
+                    session.ack.afterKnown = predictCommittedSurround(
+                        session.ack.before, commitEvent->text(), &session.ack.after);
+                    // No before-snapshot: the following surrounding event
+                    // may accept only the exact empty-field insert below.
+                    break;
+                }
+                case fcitx::EventType::InputContextSurroundingTextUpdated:
+                    if (session.uuid != uuid) {
+                        break;
+                    }
+                    drop = !surroundingIsOwnCommit(session, icEvent->inputContext());
+                    if (drop) {
+                        clearPendingAck(&session.ack);
+                    }
+                    break;
                 case fcitx::EventType::InputContextFocusOut:
                 case fcitx::EventType::InputContextDestroyed:
                 case fcitx::EventType::InputContextReset:
-                case fcitx::EventType::InputContextSurroundingTextUpdated:
                 case fcitx::EventType::InputContextSwitchInputMethod:
                     // Focus loss, context destruction, toolkit reset (mouse
-                    // click / app reset), caret or surrounding-text change,
-                    // and manual IM switch all age out the session.
-                    drop = (session.uuid == uuid);
+                    // click / app reset), and manual IM switch all age out
+                    // the session. Reset is never treated as our commit echo.
+                    if (session.uuid == uuid) {
+                        clearPendingAck(&session.ack);
+                        drop = true;
+                    }
                     break;
                 case fcitx::EventType::InputContextKeyEvent: {
                     // Typing, navigation, and chords (Ctrl+A) invalidate:
@@ -468,6 +779,7 @@ private:
         for (auto it = sessions_.begin(); it != sessions_.end();) {
             if (now - it->second->lastActive > kSessionTTL) {
                 it->second->finished = true;
+                clearPendingAck(&it->second->ack);
                 expired.push_back(it->second);
                 it = sessions_.erase(it);
             } else {
@@ -483,7 +795,69 @@ private:
             return;
         }
         it->second->finished = true;
+        clearPendingAck(&it->second->ack);
         sessions_.erase(it);
+    }
+
+    // True only for the predicted echo of this session's own CommitSegment,
+    // or a repeat of that already-accepted snapshot. Any other surrounding
+    // text or caret is a user/programmatic edit.
+    bool surroundingIsOwnCommit(StreamingSession &session,
+                                const fcitx::InputContext *ic) {
+        if (session.ack.poisoned) {
+            return false;
+        }
+        const SurroundSnap observed = readSurround(ic);
+        if (session.ack.armed) {
+            if (session.ack.uuid != session.uuid) {
+                return false;
+            }
+            if (session.ack.afterKnown &&
+                sameSnap(observed, session.ack.after)) {
+                session.ack.hasAccepted = true;
+                session.ack.accepted = observed;
+                clearPendingAck(&session.ack);
+                return true;
+            }
+            // Client repeated the previous snapshot and has not applied
+            // this insert yet. Keep waiting; do not treat it as an edit.
+            if (session.ack.hasAccepted &&
+                sameSnap(observed, session.ack.accepted)) {
+                return true;
+            }
+            // First insert into a context that has never reported
+            // surrounding text. commitSeen proves the string is the one
+            // CommitSegment just passed to commitString. The snapshot
+            // matching that string, with the caret at its end, is the
+            // empty-before echo. Anything longer, different, or not at
+            // the end stays a mismatch (foreign prefix, other caret).
+            if (session.ack.commitSeen && !session.ack.before.valid &&
+                !session.ack.requested.empty() && observed.valid &&
+                observed.text == session.ack.requested &&
+                caretAtUtf8End(observed)) {
+                session.ack.hasAccepted = true;
+                session.ack.accepted = observed;
+                clearPendingAck(&session.ack);
+                return true;
+            }
+            FCITX_WARN() << "Recordian CommitSegment echo mismatch seq="
+                         << session.ack.sequence
+                         << " commitSeen=" << session.ack.commitSeen
+                         << " beforeValid=" << session.ack.before.valid
+                         << " beforeCursor=" << session.ack.before.cursor
+                         << " beforeAnchor=" << session.ack.before.anchor
+                         << " afterKnown=" << session.ack.afterKnown
+                         << " afterCursor=" << session.ack.after.cursor
+                         << " afterAnchor=" << session.ack.after.anchor
+                         << " obsValid=" << observed.valid
+                         << " obsCursor=" << observed.cursor
+                         << " obsAnchor=" << observed.anchor
+                         << " beforeBytes=" << session.ack.before.text.size()
+                         << " afterBytes=" << session.ack.after.text.size()
+                         << " obsBytes=" << observed.text.size();
+            return false;
+        }
+        return session.ack.hasAccepted && sameSnap(observed, session.ack.accepted);
     }
 
     std::shared_ptr<StreamingSession> findSession(const std::string &token) {
@@ -527,6 +901,7 @@ private:
                 for (auto it = sessions_.begin(); it != sessions_.end();) {
                     if (it->second == entry) {
                         it->second->finished = true;
+                        clearPendingAck(&it->second->ack);
                         it = sessions_.erase(it);
                     } else {
                         ++it;
@@ -598,6 +973,8 @@ private:
     }
 
     fcitx::Instance *instance_;
+    // Non-zero only while CommitSegment is inside InputContext::commitString.
+    int selfCommitDepth_ = 0;
     std::mutex mutex_;
     std::unordered_map<std::string, std::shared_ptr<StreamingSession>>
         sessions_;
@@ -609,6 +986,7 @@ private:
     FCITX_OBJECT_VTABLE_METHOD(CommitText, "CommitText", "s", "s");
     FCITX_OBJECT_VTABLE_METHOD(BeginSession, "BeginSession", "s", "s");
     FCITX_OBJECT_VTABLE_METHOD(UpdatePreedit, "UpdatePreedit", "ss", "s");
+    FCITX_OBJECT_VTABLE_METHOD(CommitSegment, "CommitSegment", "sus", "s");
     FCITX_OBJECT_VTABLE_METHOD(CommitSession, "CommitSession", "ss", "s");
     FCITX_OBJECT_VTABLE_METHOD(CancelSession, "CancelSession", "s", "s");
 };

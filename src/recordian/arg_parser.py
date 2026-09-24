@@ -12,9 +12,14 @@ from typing import Any
 from recordian.config import ConfigManager
 from recordian.refine_capture import DEFAULT_REFINE_CAPTURE_PATH
 from recordian.runtime_config import (
+    DEFAULT_JEV_TIMEOUT_S,
     DEFAULT_SEMIF_TIMEOUT_S,
+    MAX_JEV_TIMEOUT_S,
     MAX_SEMIF_TIMEOUT_S,
     apply_namespace_runtime_normalization,
+    normalize_contextual_aliases,
+    normalize_correction_provider,
+    normalize_jev_timeout_s,
     normalize_runtime_config,
     normalize_semif_timeout_s,
 )
@@ -407,18 +412,42 @@ def build_parser() -> argparse.ArgumentParser:
         "--enable-semif-correction",
         action=argparse.BooleanOptionalAction,
         default=False,
-        help="Ask the SemIf service to pick among ambiguous hotword candidates (default off)",
+        help="Enable contextual correction (上下文纠词). Default off; provider selects SemIf or official Jev",
+    )
+    parser.add_argument(
+        "--correction-provider",
+        default="semif",
+        choices=("semif", "jev"),
+        help="Contextual correction provider: semif (default, needs an endpoint) or jev (installed jev CLI)",
     )
     parser.add_argument(
         "--semif-endpoint",
         default="",
-        help="SemIf service URL (empty disables SemIf even when correction is enabled)",
+        help="SemIf service URL. Used only when the provider is semif; empty disables that provider",
     )
     parser.add_argument(
         "--semif-timeout-s",
         type=float,
         default=DEFAULT_SEMIF_TIMEOUT_S,
         help=f"SemIf request timeout in seconds (positive, capped at {MAX_SEMIF_TIMEOUT_S})",
+    )
+    parser.add_argument(
+        "--jev-timeout-s",
+        type=float,
+        default=DEFAULT_JEV_TIMEOUT_S,
+        help=f"Official Jev overall judgment budget in seconds (positive, capped at {MAX_JEV_TIMEOUT_S})",
+    )
+    parser.add_argument(
+        "--contextual-aliases",
+        default=None,
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "--contextual-alias",
+        action="append",
+        default=[],
+        metavar="HEARD→WORD::MEANING",
+        help="Declare a context-dependent alias (e.g. 'jeff→jev::软件工具'); judged by semantic role, never replaced unconditionally",
     )
     add_dictate_args(parser)
     return parser
@@ -558,8 +587,20 @@ def _parse_args_with_config(parser: argparse.ArgumentParser) -> argparse.Namespa
     except Exception:
         args.hotword_correction_edits = 1
     args.enable_semif_correction = _coerce_bool(getattr(args, "enable_semif_correction", False), default=False)
+    args.correction_provider = normalize_correction_provider(getattr(args, "correction_provider", "semif"))
     args.semif_endpoint = str(getattr(args, "semif_endpoint", "") or "").strip()
     args.semif_timeout_s = normalize_semif_timeout_s(getattr(args, "semif_timeout_s", DEFAULT_SEMIF_TIMEOUT_S))
+    args.jev_timeout_s = normalize_jev_timeout_s(getattr(args, "jev_timeout_s", DEFAULT_JEV_TIMEOUT_S))
+    stored_aliases = getattr(args, "contextual_aliases", []) or []
+    if isinstance(stored_aliases, str):
+        stored_items: list[object] = [stored_aliases]
+    elif isinstance(stored_aliases, (list, tuple)):
+        stored_items = list(stored_aliases)
+    else:
+        stored_items = []
+    args.contextual_aliases = normalize_contextual_aliases(
+        stored_items + list(getattr(args, "contextual_alias", []) or [])
+    )
     args.config_path = str(Path(args.config_path).expanduser())
     return args
 
@@ -690,8 +731,11 @@ def _save_runtime_config(args: argparse.Namespace) -> None:
         "enable_hotword_correction": getattr(args, "enable_hotword_correction", True),
         "hotword_correction_edits": getattr(args, "hotword_correction_edits", 1),
         "enable_semif_correction": getattr(args, "enable_semif_correction", False),
+        "correction_provider": normalize_correction_provider(getattr(args, "correction_provider", "semif")),
         "semif_endpoint": getattr(args, "semif_endpoint", ""),
         "semif_timeout_s": normalize_semif_timeout_s(getattr(args, "semif_timeout_s", DEFAULT_SEMIF_TIMEOUT_S)),
+        "jev_timeout_s": normalize_jev_timeout_s(getattr(args, "jev_timeout_s", DEFAULT_JEV_TIMEOUT_S)),
+        "contextual_aliases": normalize_contextual_aliases(getattr(args, "contextual_aliases", [])),
     }
     path = Path(args.config_path)
     ConfigManager.save(path, payload)

@@ -89,6 +89,7 @@ _CLOSE_NORMAL = 1000
 _CLOSE_NO_STATUS = 1005
 _CLOSE_ABNORMAL = 1006
 _CLOSE_UNAUTHORIZED = 4401  # server-side auth failure (secret_key rejected)
+_CLOSE_BUSY = 4429  # single-user server still owns the previous inference
 
 # Hard ceiling for thread joins on close/cancel — one shared budget, never
 # several stacked waits.
@@ -101,6 +102,10 @@ _MAX_SERVER_MSG_CHARS = 160
 
 class ConfuciusProtocolError(RuntimeError):
     """The server violated the pinned protocol (handshake, EOF, close code)."""
+
+
+class ConfuciusBusyRejected(ConfuciusProtocolError):
+    """CLOSE 4429 before the socket was ready and before any PCM was sent."""
 
 
 def _truncate(text: str, limit: int = _MAX_SERVER_MSG_CHARS) -> str:
@@ -361,10 +366,48 @@ class ConfuciusRealtimeSession:
         self._receiver_thread: threading.Thread | None = None
         self._sender_thread: threading.Thread | None = None
         self._started_at = 0.0
+        # True only after a non-empty PCM frame is accepted into the send
+        # queue. 4429 retry must never observe this as true.
+        self.audio_accepted = False
 
     # -- lifecycle ---------------------------------------------------------
 
-    def start(self) -> None:
+    def start(
+        self,
+        *,
+        cancel_event: threading.Event | None = None,
+        busy_retry_s: float = 2.0,
+    ) -> None:
+        """Connect and handshake. Retry CLOSE 4429 only before PCM.
+
+        The wait is cancel-aware and bounded (default 2 s). Backoff is 0.1 s
+        then 0.2 s. Any other handshake failure, or a busy close after audio
+        was accepted, is terminal.
+        """
+        deadline = time.monotonic() + max(0.0, float(busy_retry_s))
+        delay = 0.1
+        while True:
+            if cancel_event is not None and cancel_event.is_set():
+                raise RuntimeError("confucius-asr cancelled before ready")
+            try:
+                self._start_once()
+                return
+            except ConfuciusBusyRejected:
+                if self.audio_accepted:
+                    raise
+                self._force_close()
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise
+                wait = min(delay, remaining)
+                delay = 0.2
+                if cancel_event is not None:
+                    if cancel_event.wait(wait):
+                        raise RuntimeError("confucius-asr cancelled before ready") from None
+                else:
+                    time.sleep(wait)
+
+    def _start_once(self) -> None:
         request_id = uuid.uuid4().hex
         header: dict[str, Any] = {
             "requestId": request_id,
@@ -430,6 +473,11 @@ class ConfuciusRealtimeSession:
             ) from exc
         if opcode == _OPCODE_CLOSE:
             code = _parse_close_code(getattr(frame, "data", b""))
+            if code == _CLOSE_BUSY:
+                raise ConfuciusBusyRejected(
+                    f"confucius-asr handshake rejected by {self._safe_url()}: "
+                    "server closed with code 4429 (busy, no audio accepted)"
+                )
             hint = " (unauthorized: secret_key rejected)" if code == _CLOSE_UNAUTHORIZED else ""
             raise ConfuciusProtocolError(
                 f"confucius-asr handshake rejected by {self._safe_url()}: "
@@ -639,18 +687,27 @@ class ConfuciusRealtimeSession:
 
     # -- public session API -------------------------------------------------
 
-    def push_audio(self, raw: bytes) -> dict[str, str]:
+    def push_audio(
+        self,
+        raw: bytes,
+        *,
+        block: bool = False,
+        timeout_s: float | None = None,
+    ) -> dict[str, str]:
         """Convert one f32le frame and enqueue it; return the current snapshot.
 
-        Realtime path: non-blocking enqueue — when the backlog cap (~1 s of
-        audio) is exceeded this fails explicitly instead of silently dropping.
+        Realtime path defaults to a non-blocking enqueue — when the backlog
+        cap (~1 s of audio) is exceeded this fails explicitly instead of
+        silently dropping. ``block=True`` waits up to ``timeout_s`` for room
+        on THIS socket only; a timeout does not accept the frame.
         """
         if self._finished:
             raise RuntimeError("confucius-asr session already finished")
         self._check_error()
         pcm = f32le_to_pcm16le(raw)
         if pcm:
-            self._enqueue(pcm, block=False)
+            self._enqueue(pcm, block=block, timeout=timeout_s)
+            self.audio_accepted = True
         with self._lock:
             text = "".join(self._transcript_parts)
         return {"text": text}
@@ -669,6 +726,7 @@ class ConfuciusRealtimeSession:
             raise ValueError(f"PCM16 audio must be a multiple of 2 bytes, got {len(pcm)}")
         if pcm:
             self._enqueue(pcm, block=block, timeout=timeout_s)
+            self.audio_accepted = True
         with self._lock:
             text = "".join(self._transcript_parts)
         return {"text": text}
@@ -811,6 +869,19 @@ class ConfuciusRealtimeSession:
                 pass
         except Exception:  # noqa: BLE001
             pass
+        # websocket-client answers a peer CLOSE inside recv_data_frame() by
+        # calling send_close(), which flips ``connected`` to False; its
+        # close() then returns immediately WITHOUT releasing the TCP socket.
+        # shutdown() closes the transport unconditionally, so the peer really
+        # sees this session end (the server's single-model lock is released)
+        # and a blocked receiver thread is woken. Always attempt it — the
+        # connected flag says nothing about whether the socket was freed.
+        shutdown = getattr(ws, "shutdown", None)
+        if callable(shutdown):
+            try:
+                shutdown()
+            except Exception:  # noqa: BLE001
+                pass
 
     @property
     def elapsed_ms(self) -> float:
@@ -867,7 +938,24 @@ class ConfuciusASRProvider(ASRProvider):
             return "zhen"  # server maps "zhen" to auto-detect (None)
         return lang
 
-    def start_realtime_session(self, *, hotwords: list[str]) -> ConfuciusRealtimeSession:
+    def start_realtime_session(
+        self,
+        *,
+        hotwords: list[str],
+        prefix_context: str = "",
+        cancel_event: threading.Event | None = None,
+    ) -> ConfuciusRealtimeSession:
+        # ``prefix_context`` is accepted for caller compatibility only and is
+        # deliberately IGNORED.  ``system_prompt`` is the ASR model's
+        # recognition prompt, not continuation history: injecting previously
+        # committed transcript here makes the model replay that text as newly
+        # recognized audio.  Measured on the r3 fixture (same audio hash as
+        # r4): 390 normalized chars / 18 reference occurrences with the
+        # injected prefix vs 300 / 15 ground truth; r4 with the injection
+        # disabled passed strictly (300 / 15, all 108.1 s).  The corrector
+        # keeps the real committed context separately in
+        # ``continuous_dictation.build_corrector``, so nothing is lost here.
+        del prefix_context  # ignored on purpose; see comment above
         session = ConfuciusRealtimeSession(
             ws_url=self.endpoint,
             api_key=self.api_key,
@@ -877,7 +965,7 @@ class ConfuciusASRProvider(ASRProvider):
             use_vad=self.use_vad,
             ws_module=self._ws_module,
         )
-        session.start()
+        session.start(cancel_event=cancel_event)
         return session
 
     def transcribe_file(self, wav_path: Path, *, hotwords: list[str]) -> ASRResult:

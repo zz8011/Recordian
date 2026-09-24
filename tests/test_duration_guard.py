@@ -10,6 +10,7 @@ import io
 import queue
 import threading
 import time
+from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -114,7 +115,7 @@ def _ptt_args(**overrides: object) -> argparse.Namespace:
     return argparse.Namespace(**values)
 
 
-def _make_ptt(monkeypatch, provider, *, start_worker=None, timers=None):  # noqa: ANN001, ANN202
+def _make_ptt(monkeypatch, provider, *, start_worker=None, timers=None, args_overrides=None):  # noqa: ANN001, ANN202
     events: list[dict[str, object]] = []
     if timers is None:
         timers = _TimerFactory()
@@ -150,7 +151,7 @@ def _make_ptt(monkeypatch, provider, *, start_worker=None, timers=None):  # noqa
     monkeypatch.setattr("recordian.recording_controller.run_postprocess_pipeline", _fake_pipeline)
 
     start, stop, exit_daemon, stop_event = build_ptt_hotkey_handlers(
-        args=_ptt_args(),
+        args=_ptt_args(**(args_overrides or {})),
         on_result=events.append,
         on_error=events.append,
         on_busy=events.append,
@@ -815,3 +816,196 @@ def test_tray_committed_result_unchanged() -> None:
     assert "你好" in fake.state.detail
     assert overlay_calls and overlay_calls[-1][0] == "idle"
     assert notifications == []
+
+
+# ---------------------------------------------------------------------------
+# Continuous capability vs the 25 s guard
+# ---------------------------------------------------------------------------
+
+def _continuous_worker(continuous: bool) -> _RealtimeASRWorkerHandle:  # noqa: ANN202
+    thread = threading.Thread(target=lambda: None, daemon=True)
+    thread.start()
+    return _RealtimeASRWorkerHandle(thread=thread, continuous=continuous)
+
+
+def test_confirmed_continuous_worker_skips_duration_limit(monkeypatch) -> None:
+    """Once the worker confirmed continuous capability (segments-capable
+    composition session + Confucius realtime), the 25 s fallback guard is a
+    no-op: rotation enforces the per-socket audio budget instead."""
+    h = _make_ptt(
+        monkeypatch,
+        _ConfuciusProvider(),
+        start_worker=lambda **kwargs: _continuous_worker(True),
+    )
+    assert h.start() is True
+    timer = h.timers.created[0]
+
+    timer.fire()
+    time.sleep(0.1)
+    assert h.stops["count"] == 0, "continuous turn must survive the 25 s guard"
+    assert _limit_events(h.events) == [], "no duration warning on a normal internal boundary"
+
+    # A repeated late fire stays a no-op; the user stop still works once.
+    timer.fire_force()
+    assert h.stops["count"] == 0
+    assert h.stop() is True
+    assert h.pipeline_done.wait(timeout=1.0) is True
+    assert h.stops["count"] == 1
+
+
+def test_unconfirmed_worker_does_not_skip_duration_limit(monkeypatch) -> None:
+    """A registered worker whose continuous capability was never confirmed
+    (old plugin / refused / preview-only) must NOT disarm the guard."""
+    h = _make_ptt(
+        monkeypatch,
+        _ConfuciusProvider(),
+        start_worker=lambda **kwargs: _continuous_worker(False),
+    )
+    assert h.start() is True
+    h.timers.created[0].fire()
+    assert h.pipeline_done.wait(timeout=1.0) is True
+    assert h.stops["count"] == 1
+    assert len(_limit_events(h.events)) == 1
+
+
+def test_continuous_skip_is_bound_to_the_exact_handle(monkeypatch) -> None:
+    """A stale timer from session 1 must not be disarmed by session 2's
+    continuous worker, nor stop session 2."""
+    workers: list[_RealtimeASRWorkerHandle] = []
+
+    def _worker_start(**kwargs):  # noqa: ANN003
+        worker = _continuous_worker(True)
+        workers.append(worker)
+        return worker
+
+    h = _make_ptt(monkeypatch, _ConfuciusProvider(), start_worker=_worker_start)
+    assert h.start() is True
+    # Session 1 is continuous: its own timer is disarmed.
+    h.timers.created[0].fire()
+    assert h.stops["count"] == 0
+
+    # User stops session 1 and starts session 2 (non-continuous worker).
+    assert h.stop() is True
+    assert h.pipeline_done.wait(timeout=1.0) is True
+    workers.clear()
+
+    def _worker_start_plain(**kwargs):  # noqa: ANN003
+        worker = _continuous_worker(False)
+        workers.append(worker)
+        return worker
+
+    monkeypatch.setattr("recordian.recording_controller._start_realtime_asr_worker", _worker_start_plain)
+    _wait_next_start(h)
+    assert len(h.timers.created) == 2
+
+    # Session 1's stale timer fires late: identity check fails, no stop.
+    h.timers.created[0].fire_force()
+    assert h.stops["count"] == 1
+    # Session 2's own timer is armed and stops it (worker not continuous).
+    h.timers.created[1].fire()
+    assert h.stops["count"] == 2
+
+
+# ---------------------------------------------------------------------------
+# Fatal capture callback (handle-scoped mic stop)
+# ---------------------------------------------------------------------------
+
+def test_capture_fatal_callback_stops_exact_handle(monkeypatch) -> None:
+    """The worker's fatal callback stops the microphone through the exact
+    record handle it was bound to; a late fire from a dead session cannot
+    stop the next recording."""
+    captured: list[Callable] = []
+
+    def _worker_start(**kwargs):  # noqa: ANN003
+        captured.append(kwargs["on_capture_fatal"])
+        return _continuous_worker(True)
+
+    h = _make_ptt(monkeypatch, _ConfuciusProvider(), start_worker=_worker_start)
+    assert h.start() is True
+    assert len(captured) == 1
+
+    captured[0]("monitor_backlog_overflow")
+    assert h.pipeline_done.wait(timeout=1.0) is True
+    assert h.stops["count"] == 1, "fatal from the live worker stops its own recording"
+    assert any(
+        "realtime_capture_fatal" in str(e.get("message", "")) for e in h.events
+    )
+
+    # Next session runs; the OLD callback firing late must be a no-op.
+    _wait_next_start(h)
+    assert h.stops["count"] == 1
+    captured[0]("late_stale_fatal")
+    time.sleep(0.1)
+    assert h.stops["count"] == 1, "stale fatal must not stop the newer recording"
+    assert h.stop() is True
+    assert h.stops["count"] == 2
+
+
+class _StubRefiner:
+    provider_name = "stub-refiner"
+    model_name = "stub-model"
+
+    def __init__(self, **kwargs: object) -> None:
+        pass
+
+
+def _refine_args() -> dict[str, object]:
+    return {
+        "enable_text_refine": True,
+        "refine_provider": "local",
+        "refine_prompt": "润色",
+    }
+
+
+def test_segments_committed_suppresses_pipeline_refiner(monkeypatch) -> None:
+    """Once prefix segments were committed through the IME token, the
+    postprocess pipeline must not get the full-paragraph refiner."""
+    monkeypatch.setattr("recordian.providers.Qwen3TextRefiner", _StubRefiner)
+
+    worker_handle = _continuous_worker(True)
+    worker_handle.segments_committed = 2
+    worker_handle.final_text = "第一段。第二段。"
+    worker_handle.outcome = "committed"
+    worker_handle.commit_info = {
+        "backend": "fcitx",
+        "committed": True,
+        "detail": "continuous_final",
+        "outcome": "committed",
+        "segments_committed": 2,
+    }
+
+    h = _make_ptt(
+        monkeypatch,
+        _ConfuciusProvider(),
+        start_worker=lambda **kwargs: worker_handle,
+        args_overrides=_refine_args(),
+    )
+    assert h.start() is True
+    assert h.stop() is True
+    assert h.pipeline_done.wait(timeout=1.0) is True
+    assert len(h.contexts) == 1
+    context = h.contexts[0]
+    assert context.prefetched_commit_info["segments_committed"] == 2
+    assert context.prefetched_commit_info["committed"] is True
+    assert context.refiner is None, "full-paragraph refiner must be withheld after segment commits"
+
+
+def test_no_segments_keeps_pipeline_refiner(monkeypatch) -> None:
+    """A realtime worker that committed no segments keeps normal refine."""
+    monkeypatch.setattr("recordian.providers.Qwen3TextRefiner", _StubRefiner)
+
+    worker_handle = _continuous_worker(False)
+    worker_handle.final_text = "短句"
+    worker_handle.outcome = "committed"
+    worker_handle.commit_info = {"backend": "fcitx", "committed": True, "detail": "ok"}
+
+    h = _make_ptt(
+        monkeypatch,
+        _ConfuciusProvider(),
+        start_worker=lambda **kwargs: worker_handle,
+        args_overrides=_refine_args(),
+    )
+    assert h.start() is True
+    assert h.stop() is True
+    assert h.pipeline_done.wait(timeout=1.0) is True
+    assert h.contexts[0].refiner is not None

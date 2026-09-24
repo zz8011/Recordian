@@ -3,9 +3,16 @@
 Provides helper functions for:
 - Computing incremental deltas between partial transcription results.
 - Optimistic first-partial detection for low-latency streaming commit.
-- Normalizing final transcription text (stutter/repeat removal, trimming).
+- Normalizing final transcription text (stutter/repeat removal, spoken
+  number/URL formatting, trimming).
 """
 from __future__ import annotations
+
+_CJK_NUMERIC_CHARS = frozenset("零〇一二两三四五六七八九十百千万亿")
+
+
+def _is_cjk_numeric_run(text: str) -> bool:
+    return bool(text) and all(ch in _CJK_NUMERIC_CHARS for ch in text)
 
 
 def _append_only_delta(previous: str, current: str) -> tuple[str, str]:
@@ -117,12 +124,62 @@ def _optimistic_first_partial(text: str) -> str:
     return candidate.strip()
 
 
-def _normalize_final_text(text: str) -> str:
-    """Normalize a final transcription result by removing duplicated
-    halves and trailing repeated segments.
+def _dedupe_protected_spans(text: str) -> list[tuple[int, int]]:
+    """ASCII digit runs, URLs, emails, and code literals are content, not
+    ASR duplication artefacts (``1111`` must not collapse to ``1``)."""
+    from .hotword_corrector import (
+        _BACKTICK_RE,
+        _CODE_RE,
+        _EMAIL_RE,
+        _FENCE_RE,
+        _LATIN_NUM_RE,
+        _URL_RE,
+    )
 
-    This handles common ASR artefacts where the model outputs the same
-    content twice (full-text duplication or trailing segment repetition).
+    spans: list[tuple[int, int]] = []
+    for pattern in (_FENCE_RE, _BACKTICK_RE, _URL_RE, _EMAIL_RE, _CODE_RE, _LATIN_NUM_RE):
+        spans.extend((match.start(), match.end()) for match in pattern.finditer(text))
+    return spans
+
+
+def _fully_covered(start: int, end: int, spans: list[tuple[int, int]]) -> bool:
+    return any(begin <= start and end <= stop for begin, stop in spans)
+
+
+def _dedupe_repeats(normalized: str) -> str:
+    # Remove exact full-text duplication (e.g. "hello worldhello world" → "hello world").
+    # A purely numeric run (八八八八, 零零, 1111) or a protected literal
+    # (URL/email/code) is literal spoken content, never collapsed.
+    protected = _dedupe_protected_spans(normalized)
+    while True:
+        half = len(normalized) // 2
+        if len(normalized) % 2 == 0 and half > 0 and normalized[:half] == normalized[half:]:
+            segment = normalized[half:]
+            if _is_cjk_numeric_run(segment) or _fully_covered(half, len(normalized), protected):
+                break
+            normalized = normalized[:half]
+            protected = [span for span in protected if span[1] <= half]
+            continue
+        break
+    # Remove trailing repeated segment (up to 16 chars)
+    max_tail = min(16, len(normalized) // 2)
+    for tail in range(max_tail, 1, -1):
+        seg = normalized[-tail:]
+        if not normalized.endswith(seg + seg):
+            continue
+        if _is_cjk_numeric_run(seg) or _fully_covered(len(normalized) - tail, len(normalized), protected):
+            continue
+        normalized = normalized[:-tail]
+        break
+    return normalized
+
+
+def _normalize_final_text(text: str) -> str:
+    """Normalize a final transcription result.
+
+    Removes duplicated halves / trailing repeated segments (keeping literal
+    spoken digit runs intact), then formats unambiguous spoken numbers and
+    URL dots. Both steps are idempotent.
 
     Parameters
     ----------
@@ -137,21 +194,10 @@ def _normalize_final_text(text: str) -> str:
     normalized = text.strip()
     if not normalized:
         return ""
-    # Remove exact full-text duplication (e.g. "hello worldhello world" → "hello world")
-    while True:
-        half = len(normalized) // 2
-        if len(normalized) % 2 == 0 and half > 0 and normalized[:half] == normalized[half:]:
-            normalized = normalized[:half]
-            continue
-        break
-    # Remove trailing repeated segment (up to 16 chars)
-    max_tail = min(16, len(normalized) // 2)
-    for tail in range(max_tail, 1, -1):
-        seg = normalized[-tail:]
-        if normalized.endswith(seg + seg):
-            normalized = normalized[:-tail]
-            break
-    return normalized
+    normalized = _dedupe_repeats(normalized)
+    from .spoken_formatting import format_spoken_text
+
+    return format_spoken_text(normalized)
 
 
 def wrap_overlay_caption(text: str, *, max_chars: int = 22, max_lines: int = 3) -> str:

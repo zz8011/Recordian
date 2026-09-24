@@ -7,11 +7,14 @@ rejected with ``session audio budget exceeded`` and the audio already
 recognized in that session is lost: the client suppresses the fallback
 (``path=realtime_stale_suppressed``) and the whole turn comes back empty.
 
-This module is the SINGLE client-side source of the protective limit:
-recording is ended through the existing normal stop/EOS path comfortably
-before the server budget is hit. It is an explicitly documented protective
-segment limit — not seamless segmentation, and it never restarts the
-microphone by itself.
+This module is the SINGLE client-side source of the protective numbers.
+``CONFUCIUS_RECORDING_LIMIT_S`` (25s) is only for a turn whose realtime
+worker was NOT created (oneshot / non-streaming fallback). An active
+Confucius realtime worker keeps the one microphone and rotates ASR
+sessions on sample counts instead: soft cut at
+``CONTINUOUS_SEGMENT_MIN_S`` on a silence run, hard cut at
+``CONTINUOUS_SEGMENT_MAX_S`` (still under the 30s server budget).
+The guard never restarts the microphone by itself.
 
 The server module cannot be imported here (it pulls in the GPU inference
 stack), so the budget value is mirrored below with a two-way anchor
@@ -32,6 +35,24 @@ CONFUCIUS_SERVER_SESSION_BUDGET_S = 30.0
 # in the monitor pipe but not yet fed, 160 ms chunk scheduling, and recorder
 # teardown latency, so that fed samples stay below the budget.
 CONFUCIUS_RECORDING_LIMIT_S = 25.0
+
+# Continuous worker rotation (audio samples, not a second mic and not a
+# raised server budget). Silence window is 400 ms, inside the 320–480 ms
+# band. Hard cap stays 6 s under the 30 s server sample budget.
+CONTINUOUS_SEGMENT_MIN_S = 15.0
+CONTINUOUS_SEGMENT_MAX_S = 24.0
+CONTINUOUS_SILENCE_S = 0.40
+CONTINUOUS_SILENCE_RMS = 0.008
+CONTINUOUS_HELD_TAIL_CHARS = 64
+CONTINUOUS_CONTEXT_CHARS = 256
+CONTINUOUS_PREEDIT_CHARS = 512
+# The native composition token dies after 120 s of inactivity. During long
+# silence no segment commits happen, so the worker re-touches the SAME token
+# with an empty/current preedit refresh on this audio-counted interval
+# (no text written, no new BeginSession).
+CONTINUOUS_IME_REFRESH_S = 30.0
+# Per-reader fanout backlog. The pump never blocks; the reader errors.
+MONITOR_BACKLOG_S = 8.0
 
 _CONFUCIUS_PROVIDER_NAME = "confucius-asr"
 

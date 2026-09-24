@@ -7,9 +7,13 @@ accumulator and producing the final transcription.
 from __future__ import annotations
 
 import argparse
+import array
+import inspect
+import math
+import re
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -17,6 +21,10 @@ from . import streaming_correction as _streaming_correction
 
 # NOTE: These imports will be replaced by state_manager imports once that
 #       module is available.  For now they are passed in as parameters.
+from .duration_guard import (
+    CONTINUOUS_CONTEXT_CHARS,
+    CONTINUOUS_HELD_TAIL_CHARS,
+)
 from .hotword_corrector import lexicon_from_args
 from .linux_commit import (
     CompositionRefusedError,
@@ -80,6 +88,67 @@ class _RealtimeASRWorkerHandle:
     # zero commits, zero backspaces, no fallback of any kind. The ASR still
     # runs so the transcript stays available for manual copy.
     composition_refused: bool = False
+    # Successful CommitSegment calls on the original token. Postprocess must
+    # not refine or re-commit the whole file over this prefix.
+    segments_committed: int = 0
+    continuous: bool = False
+    transcript_path: str = ""
+
+
+# Glue tails stay raw across a segment cut (no space when joined). An ASCII
+# word tail is also held so the next English word can take one space; it is
+# not run through the formatter by itself.
+_GLUE_TAIL_RE = re.compile(
+    r"(?:https?://\S+"
+    r"|www(?:点|\.)[0-9A-Za-z点.\-]*"
+    r"|[0-9A-Za-z]+(?:点[0-9A-Za-z.\-]+)+"
+    r"|\d{1,3}(?:\.\d{1,3}){2,3}"
+    r"|\d[\d.,:/%+-]*"
+    r"|[零〇一二两三四五六七八九十百千万亿点．.]+"
+    r")$"
+)
+_WORD_TAIL_RE = re.compile(r"[A-Za-z]+(?:'[A-Za-z]+)?$")
+
+
+def _split_held_tail(text: str, *, limit: int = CONTINUOUS_HELD_TAIL_CHARS) -> tuple[str, str]:
+    """Split a raw trailing number, URL, Chinese numeral, or English word.
+
+    The caller formats only the returned prefix. The tail stays raw and is
+    joined to the next ASR hypothesis before a new formatter run.
+    """
+    if not text:
+        return "", ""
+    glue = _GLUE_TAIL_RE.search(text)
+    word = _WORD_TAIL_RE.search(text)
+    match: re.Match[str] | None
+    if glue is not None and word is not None:
+        match = glue if len(glue.group(0)) >= len(word.group(0)) else word
+    else:
+        match = glue or word
+    if match is None:
+        return text, ""
+    held = match.group(0)
+    if not held:
+        return text, ""
+    if len(held) <= limit:
+        return text[: match.start()], held
+    cut = match.start() + (len(held) - limit)
+    return text[:cut], held[-limit:]
+
+
+def _pcm_rms(raw: bytes) -> float:
+    usable = len(raw) - (len(raw) % 4)
+    if usable <= 0:
+        return 0.0
+    samples = array.array("f")
+    samples.frombytes(raw[:usable])
+    count = len(samples)
+    if count <= 0:
+        return 0.0
+    total = 0.0
+    for value in samples:
+        total += float(value) * float(value)
+    return math.sqrt(total / count)
 
 
 # ---------------------------------------------------------------------------
@@ -318,6 +387,7 @@ def _start_realtime_asr_worker(
     normalize_final_text: Callable[[str], str],
     on_state: Callable[[dict[str, object]], None],
     refine_enabled: bool = False,
+    on_capture_fatal: Callable[[str], None] | None = None,
 ) -> _RealtimeASRWorkerHandle | None:
     """Start a background thread that drives a realtime ASR session.
 
@@ -376,6 +446,15 @@ def _start_realtime_asr_worker(
         asr_session = None
         corrector = None
         streaming_committer = resolve_streaming_committer(committer)
+
+        def _fatal(reason: str) -> None:
+            if cancel_event.is_set() or not callable(on_capture_fatal):
+                return
+            try:
+                on_capture_fatal(str(reason))
+            except Exception:  # noqa: BLE001
+                pass
+
         try:
             if enable_local_commit and not cancel_event.is_set():
                 # The cancel check gates Begin itself: a controller deadline
@@ -418,6 +497,7 @@ def _start_realtime_asr_worker(
                         }
                     )
                     session = None
+                    _fatal("composition_refused")
                 except Exception as exc:  # noqa: BLE001
                     on_state(
                         {
@@ -456,13 +536,14 @@ def _start_realtime_asr_worker(
                     }
                 )
 
-            def _build_streaming_corrector() -> _streaming_correction.StreamingHotwordCorrector:
+            def _build_streaming_corrector(context: str = "") -> Any:
                 """Bounded streaming corrector (deterministic + SemIf judge).
 
                 Deterministic snapshot on submit, same-snapshot result on
                 poll, one end-of-sentence budget on finish. Constructed with
                 the session hotwords plus the args-level replacement lexicon
-                so "错词→正词" pairs apply during streaming too.
+                so "错词→正词" pairs apply during streaming too. ``context``
+                is the bounded previous-segment tail, judgment input only.
                 """
                 effective = list(resolve_hotwords())
                 _lex, pairs = lexicon_from_args(args)
@@ -477,14 +558,62 @@ def _start_realtime_asr_worker(
                         continue
                     seen.add(t)
                     merged.append(t)
-                # Attribute access on the module (not a from-import binding)
-                # so tests and integrations can swap the corrector.
-                return _streaming_correction.StreamingHotwordCorrector(
-                    merged,
-                    endpoint=str(getattr(args, "semif_endpoint", "") or ""),
-                    timeout_s=float(getattr(args, "semif_timeout_s", 0.12) or 0.12),
-                    enabled=bool(getattr(args, "enable_semif_correction", False)),
+                bounded_context = str(context or "")[-CONTINUOUS_CONTEXT_CHARS:]
+                # Same factory as the final path so contextual_aliases are not
+                # dropped on the realtime side. Attribute lookup stays on the
+                # module so tests can swap the factory or the class it builds.
+                factory = getattr(_streaming_correction, "corrector_from_args", None)
+                if callable(factory):
+                    return factory(args, merged, context=bounded_context)
+                kwargs: dict[str, Any] = {
+                    "endpoint": str(getattr(args, "semif_endpoint", "") or ""),
+                    "timeout_s": float(getattr(args, "semif_timeout_s", 0.12) or 0.12),
+                    "enabled": bool(getattr(args, "enable_semif_correction", False)),
+                }
+                params: Mapping[str, inspect.Parameter]
+                try:
+                    params = inspect.signature(
+                        _streaming_correction.StreamingHotwordCorrector
+                    ).parameters
+                except (TypeError, ValueError):
+                    params = {}
+                if not params or "context" in params:
+                    kwargs["context"] = bounded_context
+                if (not params or "contextual_aliases" in params) and hasattr(
+                    args, "contextual_aliases"
+                ):
+                    kwargs["contextual_aliases"] = getattr(args, "contextual_aliases", None)
+                return _streaming_correction.StreamingHotwordCorrector(merged, **kwargs)
+
+            if (
+                session is not None
+                and bool(getattr(session, "supports_segments", False))
+                and callable(getattr(session, "commit_segment", None))
+                and getattr(provider, "provider_name", "") == "confucius-asr"
+            ):
+                worker.continuous = True
+                from .continuous_dictation import run_continuous_dictation
+
+                run_continuous_dictation(
+                    worker=worker,
+                    session=session,
+                    provider=provider,
+                    reader=reader,
+                    cancel_event=cancel_event,
+                    args=args,
+                    chunk_bytes=chunk_bytes,
+                    sample_rate=sample_rate,
+                    channels=channels,
+                    build_corrector=_build_streaming_corrector,
+                    resolve_hotwords=resolve_hotwords,
+                    normalize_final_text=normalize_final_text,
+                    on_state=on_state,
+                    on_capture_fatal=_fatal,
+                    refine_enabled=refine_enabled,
+                    auto_hard_enter=auto_hard_enter,
+                    streaming_committer=streaming_committer,
                 )
+                return
 
             session_hotwords = resolve_hotwords()
             corrector = _build_streaming_corrector()

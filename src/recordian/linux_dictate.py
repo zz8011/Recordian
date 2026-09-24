@@ -6,17 +6,18 @@ import json
 import logging
 import math
 import os
-import queue
 import signal
 import subprocess
 import threading
 import time
+from collections import deque
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from shutil import which
 from tempfile import TemporaryDirectory
 from typing import Any, BinaryIO, cast
 
+from .duration_guard import MONITOR_BACKLOG_S
 from .linux_commit import resolve_committer, send_hard_enter
 from .providers import ASRProvider, HttpCloudProvider, QwenASRProvider
 from .remote_paste.client import add_remote_paste_args, resolve_remote_paste_routing, send_remote_paste_from_args
@@ -99,91 +100,147 @@ class RecordProcessHandle:
     monitor_hub: Any | None = None
 
 
-_MONITOR_EOF = object()
+class MonitorOverflowError(RuntimeError):
+    """One reader fell behind the capture pump.
+
+    The pump does not block and does not drop bytes quietly: this reader's
+    next drained read raises, and further chunks are not queued for it.
+    """
+
+
+class _ReaderSlot:
+    def __init__(self, max_bytes: int) -> None:
+        self.max_bytes = max(1, int(max_bytes))
+        self.cv = threading.Condition()
+        self.chunks: deque[bytes] = deque()
+        self.buffered = 0
+        self.eof = False
+        self.overflow = False
+        self.closed = False
 
 
 class _MonitorReader:
-    def __init__(self, owner: _MonitorFanout, q: queue.Queue[object]) -> None:
+    def __init__(self, owner: _MonitorFanout, slot: _ReaderSlot) -> None:
         self._owner = owner
-        self._queue = q
+        self._slot = slot
         self._buffer = bytearray()
-        self._eof = False
         self._closed = False
 
     def read(self, size: int = -1) -> bytes:
-        if self._closed:
-            return b""
         if size == 0:
             return b""
         want = -1 if size is None else int(size)
-        while not self._eof and (want < 0 or len(self._buffer) < want):
-            item = self._queue.get()
-            if item is _MONITOR_EOF:
-                self._eof = True
-                break
-            if isinstance(item, bytes) and item:
-                self._buffer.extend(item)
-        if want < 0:
+        slot = self._slot
+        with slot.cv:
+            while True:
+                while slot.chunks and (want < 0 or len(self._buffer) < want):
+                    chunk = slot.chunks.popleft()
+                    slot.buffered -= len(chunk)
+                    self._buffer.extend(chunk)
+                if want >= 0 and len(self._buffer) >= want:
+                    break
+                if slot.overflow and not self._buffer:
+                    raise MonitorOverflowError(
+                        f"monitor reader backlog exceeded ({slot.max_bytes} bytes)"
+                    )
+                if slot.eof or slot.closed or self._closed:
+                    break
+                if slot.overflow:
+                    break
+                slot.cv.wait()
+        if want < 0 or want > len(self._buffer):
             out = bytes(self._buffer)
             self._buffer.clear()
-            return out
-        if want <= 0:
-            return b""
-        out = bytes(self._buffer[:want])
-        del self._buffer[:want]
+        else:
+            out = bytes(self._buffer[:want])
+            del self._buffer[:want]
+        if not out and not self._buffer:
+            with slot.cv:
+                if slot.overflow:
+                    raise MonitorOverflowError(
+                        f"monitor reader backlog exceeded ({slot.max_bytes} bytes)"
+                    )
         return out
 
     def close(self) -> None:
         if self._closed:
             return
         self._closed = True
-        self._owner.remove_reader(self._queue)
+        slot = self._slot
+        with slot.cv:
+            slot.closed = True
+            slot.cv.notify_all()
+        self._owner.remove_reader(slot)
         self._buffer.clear()
 
 
 class _MonitorFanout:
-    def __init__(self, source: BinaryIO, *, chunk_size: int = 4096) -> None:
+    def __init__(
+        self,
+        source: BinaryIO,
+        *,
+        chunk_size: int = 4096,
+        max_backlog_bytes: int | None = None,
+    ) -> None:
         self._source = source
         self._chunk_size = max(1, int(chunk_size))
+        # Default is 8 s of 16 kHz mono f32. Callers with a known rate pass
+        # the real size; the pump still never blocks on a slow reader.
+        if max_backlog_bytes is None:
+            max_backlog_bytes = int(MONITOR_BACKLOG_S * 16000 * 4)
+        self._max_bytes = max(self._chunk_size, int(max_backlog_bytes))
         self._lock = threading.Lock()
-        self._queues: list[queue.Queue[object]] = []
+        self._slots: list[_ReaderSlot] = []
         self._closed = False
         self._thread = threading.Thread(target=self._run, name="recordian-monitor-fanout", daemon=True)
         self._thread.start()
 
     def open_reader(self) -> _MonitorReader:
-        q: queue.Queue[object] = queue.Queue()
+        slot = _ReaderSlot(self._max_bytes)
         with self._lock:
             if self._closed:
-                q.put(_MONITOR_EOF)
+                slot.eof = True
             else:
-                self._queues.append(q)
-        return _MonitorReader(self, q)
+                self._slots.append(slot)
+        return _MonitorReader(self, slot)
 
-    def remove_reader(self, q: queue.Queue[object]) -> None:
+    def remove_reader(self, slot: _ReaderSlot) -> None:
         with self._lock:
-            if q in self._queues:
-                self._queues.remove(q)
+            if slot in self._slots:
+                self._slots.remove(slot)
 
     def close(self) -> None:
         with self._lock:
             if self._closed:
                 return
             self._closed = True
-            queues = list(self._queues)
-            self._queues.clear()
+            slots = list(self._slots)
+            self._slots.clear()
         try:
             self._source.close()
         except Exception:
             pass
-        for q in queues:
-            q.put(_MONITOR_EOF)
+        for slot in slots:
+            with slot.cv:
+                slot.eof = True
+                slot.cv.notify_all()
 
-    def _broadcast(self, payload: object) -> None:
+    def _broadcast(self, payload: bytes) -> None:
         with self._lock:
-            queues = list(self._queues)
-        for q in queues:
-            q.put(payload)
+            slots = list(self._slots)
+        for slot in slots:
+            with slot.cv:
+                if slot.closed or slot.eof or slot.overflow:
+                    continue
+                if slot.buffered + len(payload) > slot.max_bytes:
+                    # Explicit overflow: do not enqueue, do not block the pump,
+                    # do not pretend the reader is still caught up.
+                    slot.overflow = True
+                    slot.cv.notify_all()
+                    continue
+                slot.chunks.append(payload)
+                slot.buffered += len(payload)
+                slot.cv.notify()
 
     def _run(self) -> None:
         try:
@@ -576,7 +633,12 @@ def start_record_process(
         bufsize=0 if monitor_enabled else -1,
     )
     _ACTIVE_PROCESSES.append(proc)
-    monitor_hub = _MonitorFanout(cast(BinaryIO, proc.stdout)) if monitor_enabled and proc.stdout is not None else None
+    backlog_bytes = int(MONITOR_BACKLOG_S * int(args.sample_rate) * max(1, int(args.channels)) * 4)
+    monitor_hub = (
+        _MonitorFanout(cast(BinaryIO, proc.stdout), max_backlog_bytes=backlog_bytes)
+        if monitor_enabled and proc.stdout is not None
+        else None
+    )
     return RecordProcessHandle(
         process=proc,
         monitor_stream=cast(BinaryIO | None, monitor_hub.open_reader()) if monitor_hub is not None else None,

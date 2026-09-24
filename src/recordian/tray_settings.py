@@ -9,6 +9,7 @@ from recordian.preset_manager import PresetManager
 from recordian.recommended_profile import (
     BUSY_SAVE_MESSAGE,
     CONFUCIUS_STOCK_MIGRATION_NOTICE,
+    CORRECTION_PROVIDER_CHOICES,
     DICTATION_BUSY_STATUSES,
     LANGUAGE_CHOICES,
     PROVIDER_CHOICES,
@@ -24,7 +25,16 @@ from recordian.recommended_profile import (
     recommended_profile_values,
 )
 from recordian.refine_model_discovery import fetch_model_list
-from recordian.runtime_config import normalize_runtime_config
+from recordian.runtime_config import (
+    DEFAULT_JEV_TIMEOUT_S,
+    DEFAULT_SEMIF_TIMEOUT_S,
+    format_contextual_aliases,
+    normalize_contextual_aliases,
+    normalize_correction_provider,
+    normalize_jev_timeout_s,
+    normalize_runtime_config,
+    normalize_semif_timeout_s,
+)
 from recordian.setting_effects import SettingEffect, combined_setting_effect, effect_label, effect_status_message
 from recordian.tray_settings_utils import KEY_LABEL_MAP
 from recordian.tray_utils import save_config_changes
@@ -391,6 +401,20 @@ def open_settings_gtk(
                 grid.attach(widget, 1, row, 1, 1)
                 entries[key] = ("combo", widget)
                 tracked.append(widget)
+            elif kind == "text":
+                widget = Gtk.TextView()
+                widget.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
+                widget.get_buffer().set_text(str(value))
+                widget.set_hexpand(True)
+                scroll = Gtk.ScrolledWindow()
+                scroll.set_hexpand(True)
+                scroll.set_min_content_height(72)
+                scroll.set_shadow_type(Gtk.ShadowType.IN)
+                scroll.add(widget)
+                grid.attach(scroll, 1, row, 1, 1)
+                entries[key] = ("text", widget)
+                tracked.append(scroll)
+                tracked.append(widget)
             elif kind == "file":
                 row_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
                 row_box.set_hexpand(True)
@@ -689,27 +713,54 @@ def open_settings_gtk(
             sec_asr,
             row,
             key="enable_semif_correction",
-            label="额外热词确认",
+            label="上下文纠词",
             value=current.get("enable_semif_correction", False),
             kind="bool",
             default_bool=False,
-            hint="默认关闭。只有常用词对不上时才去问一次，失败就保留原文。",
+            hint="默认关闭。只在已声明的别名上问一次语义角色，失败、超时或拿不准都保留原文。",
+        )
+        row = _add_field(
+            sec_asr,
+            row,
+            key="correction_provider",
+            label="纠词来源",
+            value=current.get("correction_provider", "semif"),
+            kind="mapped",
+            choices=CORRECTION_PROVIDER_CHOICES,
+            hint="复用 jev 的登录，密钥由 jev 管理；选择官方 Jev 无需填写地址。内网 SemIf 才使用下面的地址。",
         )
         row = _add_field(
             sec_asr,
             row,
             key="semif_endpoint",
-            label="热词确认地址",
+            label="内网 SemIf 地址",
             value=current.get("semif_endpoint", ""),
-            hint="关闭额外热词确认时，这里的地址会保留，但不会使用。",
+            hint="只在选择内网 SemIf 时使用。换成官方 Jev 后地址仍会保存，但不会连接。",
         )
         row = _add_field(
             sec_asr,
             row,
             key="semif_timeout_s",
-            label="热词确认等待 (秒)",
-            value=current.get("semif_timeout_s", 0.12),
+            label="SemIf 等待 (秒)",
+            value=current.get("semif_timeout_s", DEFAULT_SEMIF_TIMEOUT_S),
             hint="默认 0.12 秒，必须大于 0 且不超过 0.35 秒。",
+        )
+        row = _add_field(
+            sec_asr,
+            row,
+            key="jev_timeout_s",
+            label="Jev 等待 (秒)",
+            value=current.get("jev_timeout_s", DEFAULT_JEV_TIMEOUT_S),
+            hint="默认 1.5 秒，不超过 2 秒。这是整句判断的总时间，预览不会等它。",
+        )
+        row = _add_field(
+            sec_asr,
+            row,
+            key="contextual_aliases",
+            label="语境别名",
+            value=format_contextual_aliases(current.get("contextual_aliases", [])),
+            kind="text",
+            hint="每行一条，如 jeff→jev::软件工具。也可以用逗号分隔。只有整句语境明确时才替换，拿不准就保留原文。",
         )
         _add_field(
             sec_asr,
@@ -1677,6 +1728,9 @@ def open_settings_gtk(
             if kind == "combo":
                 text = widget.get_active_text()
                 return text if text is not None else ""
+            if kind == "text":
+                buffer = widget.get_buffer()
+                return buffer.get_text(buffer.get_start_iter(), buffer.get_end_iter(), True)
             return widget.get_text()
 
         def _set_entry_text(key: str, value: str) -> None:
@@ -1705,6 +1759,9 @@ def open_settings_gtk(
                 return
             if kind == "entry":
                 widget.set_text(str(value))
+                return
+            if kind == "text":
+                widget.get_buffer().set_text(str(value))
                 return
             if kind == "mapped":
                 token = str(value)
@@ -1801,7 +1858,17 @@ def open_settings_gtk(
             _set_rows_sensitive(wake_dependent, bool(_get_value("enable_voice_wake")))
             btn_record_owner_sample.set_sensitive(bool(_get_value("enable_voice_wake")))
             _set_rows_sensitive(remote_dependent, bool(_get_value("enable_remote_paste")))
-            _set_rows_sensitive(("semif_endpoint", "semif_timeout_s"), bool(_get_value("enable_semif_correction")))
+            correction_on = bool(_get_value("enable_semif_correction"))
+            provider_id = normalize_correction_provider(_get_value("correction_provider"))
+            semif_selected = provider_id == "semif"
+            _set_rows_sensitive(
+                ("correction_provider", "contextual_aliases"),
+                correction_on,
+            )
+            _set_rows_visible(("semif_endpoint", "semif_timeout_s"), semif_selected)
+            _set_rows_visible(("jev_timeout_s",), not semif_selected)
+            _set_rows_sensitive(("semif_endpoint", "semif_timeout_s"), correction_on and semif_selected)
+            _set_rows_sensitive(("jev_timeout_s",), correction_on and not semif_selected)
 
         def _reconcile_confucius_endpoint(*, announce: bool) -> None:
             if str(_get_value("asr_provider")).strip() != "confucius-asr":
@@ -1845,6 +1912,7 @@ def open_settings_gtk(
             "enable_semif_correction",
         ):
             entries[master_key][1].connect("notify::active", _sync_feature_sensitivity)
+        entries["correction_provider"][1].connect("changed", _sync_feature_sensitivity)
 
         btn_record_owner_sample.connect("clicked", lambda *_: app.open_speaker_enrollment_wizard())
 
@@ -1915,8 +1983,15 @@ def open_settings_gtk(
                     "asr_api_key": str(_get_value("asr_api_key")).strip(),
                     "asr_timeout_s": _parse_float_field("asr_timeout_s", float(current.get("asr_timeout_s", 30.0))),
                     "enable_semif_correction": bool(_get_value("enable_semif_correction")),
+                    "correction_provider": normalize_correction_provider(_get_value("correction_provider")),
                     "semif_endpoint": str(_get_value("semif_endpoint")).strip(),
-                    "semif_timeout_s": _parse_float_field("semif_timeout_s", float(current.get("semif_timeout_s", 0.12))),
+                    "semif_timeout_s": normalize_semif_timeout_s(
+                        _parse_float_field("semif_timeout_s", float(current.get("semif_timeout_s", DEFAULT_SEMIF_TIMEOUT_S)))
+                    ),
+                    "jev_timeout_s": normalize_jev_timeout_s(
+                        _parse_float_field("jev_timeout_s", float(current.get("jev_timeout_s", DEFAULT_JEV_TIMEOUT_S)))
+                    ),
+                    "contextual_aliases": normalize_contextual_aliases(str(_get_value("contextual_aliases"))),
                     "device": str(_get_value("device")).strip() or str(current.get("device", "cuda")),
                     "enable_text_refine": bool(_get_value("enable_text_refine")),
                     "refine_provider": str(_get_value("refine_provider")).strip(),

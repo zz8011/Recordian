@@ -451,3 +451,358 @@ def test_concurrent_submit_poll_cancel() -> None:
     corrector.close()
     assert errors == []
     assert all(not thread.is_alive() for thread in threads)
+
+
+# --- Contextual alias (heard → word with declared meaning) semantic-role judge ---
+
+_ALIAS = [{"heard": "jeff", "word": "jev", "meaning": "软件工具"}]
+_ROLE_KEYS = ("tool", "person", "unclear")
+
+
+def _role_peaked(choice: str) -> dict[str, float]:
+    probabilities = dict.fromkeys(_ROLE_KEYS, 0.0)
+    probabilities[choice] = 1.0
+    return probabilities
+
+
+def _role_answers(choices: dict[str, str]) -> dict[str, object]:
+    return {
+        name: {"type": "choice", "choice": choice, "probabilities": _role_peaked(choice)}
+        for name, choice in choices.items()
+    }
+
+
+def _alias_corrector(session: _Session, **kwargs: object) -> StreamingHotwordCorrector:
+    return StreamingHotwordCorrector(
+        [],
+        endpoint="http://192.168.5.111:42032/v1/systemone",
+        timeout_s=float(kwargs.pop("timeout_s", 0.3)),
+        enabled=True,
+        session=session,
+        contextual_aliases=_ALIAS,
+        **kwargs,
+    )
+
+
+def test_alias_tool_role_replaces_exact_span() -> None:
+    def handler(call: dict[str, object]) -> dict[str, object]:
+        questions = call["json"]["questions"]
+        assert set(questions) == {"role"}
+        assert set(questions["role"]["criteria"]) == set(_ROLE_KEYS)
+        assert "软件工具" in questions["role"]["instructions"]
+        assert "jev" in questions["role"]["instructions"]
+        return {"answers": _role_answers({"role": "tool"})}
+
+    session = _Session(handler)
+    corrector = _alias_corrector(session)
+    try:
+        text = "打开jeff工具检查这个项目"
+        assert corrector.submit(text) == text
+        assert corrector.finish(text) == "打开jev工具检查这个项目"
+        assert len(session.calls) == 1
+    finally:
+        corrector.close()
+
+
+def test_alias_person_role_and_abstain_keep_original() -> None:
+    for choice in ("person", "unclear"):
+        answers = _role_answers({"role": choice})
+        session = _Session(lambda call, body=answers: {"answers": body})
+        corrector = _alias_corrector(session)
+        try:
+            text = "Jeff是我的美国同事"
+            assert corrector.finish(text) == text
+        finally:
+            corrector.close()
+
+
+def test_alias_weak_distribution_keeps_original() -> None:
+    weak = {"tool": 0.6, "person": 0.3, "unclear": 0.1}
+    session = _Session(
+        lambda call: {"answers": {"role": {"choice": "tool", "probabilities": weak}}}
+    )
+    corrector = _alias_corrector(session)
+    try:
+        text = "用jeff运行浏览器测试"
+        assert corrector.finish(text) == text
+    finally:
+        corrector.close()
+
+
+def test_alias_meta_mention_never_judged() -> None:
+    session = _Session(lambda call: (_ for _ in ()).throw(AssertionError(call)))
+    corrector = _alias_corrector(session)
+    try:
+        assert corrector.finish("不是jev而是Jeff") == "不是jev而是Jeff"
+        assert corrector.finish("不要把Jeff改成jev") == "不要把Jeff改成jev"
+        assert session.calls == []
+    finally:
+        corrector.close()
+
+
+def test_alias_protected_spans_never_judged() -> None:
+    session = _Session(lambda call: (_ for _ in ()).throw(AssertionError(call)))
+    corrector = _alias_corrector(session)
+    try:
+        assert corrector.finish("运行`jeff --version`看看") == "运行`jeff --version`看看"
+        assert corrector.finish("发到jeff@example.com") == "发到jeff@example.com"
+        assert corrector.finish("打开www.jeff.com") == "打开www.jeff.com"
+        assert corrector.finish("jeff_count大于三") == "jeff_count大于三"
+        assert session.calls == []
+    finally:
+        corrector.close()
+
+
+def test_alias_repeated_heard_token_abstains() -> None:
+    # Co-occurrence sentences are provably unreliable on the reference model
+    # (person spans dragged to tool at 0.76-0.98), so repeats never judge.
+    session = _Session(lambda call: (_ for _ in ()).throw(AssertionError(call)))
+    corrector = _alias_corrector(session)
+    try:
+        text = "打开jeff，然后重启jeff"
+        assert corrector.finish(text) == text
+        mixed = "打开jeff工具，发给Jeff看"
+        assert corrector.finish(mixed) == mixed
+        assert session.calls == []
+    finally:
+        corrector.close()
+
+
+def test_alias_multiple_distinct_aliases_judge_independently() -> None:
+    aliases = [
+        {"heard": "jeff", "word": "jev", "meaning": "软件工具"},
+        {"heard": "cody", "word": "Kodi", "meaning": "播放器软件"},
+    ]
+
+    def handler(call: dict[str, object]) -> dict[str, object]:
+        state = call["json"]["state"]
+        choice = "tool" if state.endswith("「jeff」") else "person"
+        return {"answers": _role_answers({"role": choice})}
+
+    session = _Session(handler)
+    corrector = StreamingHotwordCorrector(
+        [],
+        endpoint="http://192.168.5.111:42032/v1/systemone",
+        timeout_s=0.3,
+        enabled=True,
+        session=session,
+        contextual_aliases=aliases,
+    )
+    try:
+        text = "打开jeff工具，再问问cody"
+        assert corrector.finish(text) == "打开jev工具，再问问cody"
+        assert len(session.calls) == 2
+    finally:
+        corrector.close()
+
+
+def test_context_included_in_state_but_never_returned() -> None:
+    captured: list[dict[str, object]] = []
+
+    def handler(call: dict[str, object]) -> dict[str, object]:
+        captured.append(call["json"])
+        return {"answers": _role_answers({"role": "tool"})}
+
+    session = _Session(handler)
+    context = "上一段尾部" * 60  # 300 chars, longer than the 256-char bound
+    corrector = _alias_corrector(session, context=context)
+    try:
+        text = "用jeff运行浏览器测试"
+        result = corrector.finish(text)
+        assert result == "用jev运行浏览器测试"
+        assert "上一段" not in result
+        state = captured[0]["state"]
+        tail_line = state.split("\n", 1)[0]
+        assert tail_line.startswith("上一段：")
+        assert len(tail_line) - len("上一段：") == 256
+    finally:
+        corrector.close()
+
+
+def test_disabled_alias_never_connects() -> None:
+    session = _Session(lambda call: (_ for _ in ()).throw(AssertionError(call)))
+    corrector = StreamingHotwordCorrector(
+        [],
+        endpoint="http://192.168.5.111:42032/v1/systemone",
+        timeout_s=0.3,
+        enabled=False,
+        session=session,
+        contextual_aliases=_ALIAS,
+    )
+    try:
+        text = "打开jeff工具检查这个项目"
+        assert corrector.submit(text) == text
+        assert corrector.finish(text) == text
+        assert session.calls == []
+    finally:
+        corrector.close()
+
+
+def test_invalid_alias_entries_ignored() -> None:
+    session = _Session(lambda call: (_ for _ in ()).throw(AssertionError(call)))
+    corrector = StreamingHotwordCorrector(
+        [],
+        endpoint="http://192.168.5.111:42032/v1/systemone",
+        timeout_s=0.3,
+        enabled=True,
+        session=session,
+        contextual_aliases=[
+            {"heard": "", "word": "jev", "meaning": "软件工具"},
+            {"heard": "jeff", "word": "", "meaning": "软件工具"},
+            {"heard": "jeff", "word": "jev", "meaning": ""},
+            {"heard": "jeff", "word": "jeff", "meaning": "软件工具"},
+            "jeff→jev::软件工具",
+        ],
+    )
+    try:
+        text = "打开jeff工具检查这个项目"
+        assert corrector.finish(text) == text
+        assert session.calls == []
+    finally:
+        corrector.close()
+
+
+def test_corrector_from_args_centralizes_wiring() -> None:
+    import argparse
+
+    from recordian.streaming_correction import corrector_from_args
+
+    args = argparse.Namespace(
+        enable_semif_correction=True,
+        semif_endpoint="http://127.0.0.1:9/v1/systemone",
+        semif_timeout_s=0.3,
+        contextual_aliases=_ALIAS,
+    )
+    corrector = corrector_from_args(args, ["时期"], context="前文")
+    try:
+        assert corrector._endpoint == "http://127.0.0.1:9/v1/systemone"
+        assert corrector._timeout_s == 0.3
+        assert corrector._enabled is True
+        assert corrector._context == "前文"
+        assert corrector._aliases == [("jeff", "jev", "软件工具")]
+        assert corrector._provider == "semif"
+    finally:
+        corrector.close()
+
+    disabled = corrector_from_args(argparse.Namespace(), ["时期"])
+    try:
+        assert disabled._enabled is False
+        assert disabled._endpoint == ""
+        assert disabled._context == ""
+        assert disabled._aliases == []
+        assert disabled._provider == "semif"
+    finally:
+        disabled.close()
+
+    jev_args = argparse.Namespace(
+        enable_semif_correction=True,
+        correction_provider="jev",
+        semif_endpoint="",
+        semif_timeout_s=0.12,
+        jev_timeout_s=9,
+        contextual_aliases=_ALIAS,
+    )
+    jev_corrector = corrector_from_args(jev_args, ["时期"], context="前文")
+    try:
+        assert jev_corrector._provider == "jev"
+        assert jev_corrector._timeout_s == 2.0
+        assert jev_corrector._endpoint == ""
+        assert jev_corrector._aliases == [("jeff", "jev", "软件工具")]
+    finally:
+        jev_corrector.close()
+
+
+def test_rapid_partials_single_bounded_request_and_final_applies() -> None:
+    # Rapidly changing partials: earlier pending jobs are dropped, a stale
+    # result never applies, and finish() returns the judged final text.
+    def handler(call: dict[str, object]) -> dict[str, object]:
+        time.sleep(0.05)
+        state = call["json"]["state"]
+        choice = "tool" if state.endswith("「jeff」") else "person"
+        return {"answers": _role_answers({"role": choice})}
+
+    session = _Session(handler)
+    corrector = _alias_corrector(session, timeout_s=0.3)
+    try:
+        assert corrector.submit("打开") == "打开"
+        assert corrector.submit("打开jeff") == "打开jeff"
+        final = "打开jeff工具检查这个项目"
+        assert corrector.submit(final) == final
+        assert corrector.finish(final) == "打开jev工具检查这个项目"
+        assert len(session.calls) <= 2
+        states = [call["json"]["state"] for call in session.calls]
+        assert any(s.startswith(final) for s in states)
+    finally:
+        corrector.close()
+
+
+def test_rapid_partials_slow_request_finish_abstains_but_never_stale() -> None:
+    # A request slower than the one finish budget abstains. The late reply
+    # is ignored, including for this same snapshot, and never applied to
+    # a different sentence.
+    def handler(call: dict[str, object]) -> dict[str, object]:
+        time.sleep(0.25)
+        return {"answers": _role_answers({"role": "tool"})}
+
+    session = _Session(handler)
+    corrector = _alias_corrector(session, timeout_s=0.1)
+    try:
+        final = "用jeff运行浏览器测试"
+        assert corrector.submit(final) == final
+        started = time.monotonic()
+        assert corrector.finish(final) == final  # bounded abstain
+        assert time.monotonic() - started < 0.2
+        time.sleep(0.3)  # the late reply must not land after the deadline
+        assert corrector.poll(final) == final
+        assert corrector.poll("用jeff干别的") == "用jeff干别的"
+    finally:
+        corrector.close()
+
+
+def test_negation_guarded_alias_never_judged() -> None:
+    session = _Session(lambda call: (_ for _ in ()).throw(AssertionError(call)))
+    corrector = _alias_corrector(session)
+    try:
+        assert corrector.finish("不要打开jeff") == "不要打开jeff"
+        assert session.calls == []
+    finally:
+        corrector.close()
+
+
+def test_bare_mention_without_software_context_is_not_judged() -> None:
+    session = _Session(lambda call: {"answers": _role_answers({"role": "tool"})})
+    corrector = _alias_corrector(session)
+    try:
+        for text in ("jeff今天怎么样", "Jeff怎么样", "我想起了Jeff", "Jeff挺不错的"):
+            assert corrector.finish(text) == text
+        assert session.calls == []
+    finally:
+        corrector.close()
+
+
+def test_open_and_install_are_eligible_and_previous_tool_context_counts() -> None:
+    session = _Session(lambda call: {"answers": _role_answers({"role": "tool"})})
+    corrector = _alias_corrector(session)
+    try:
+        assert corrector.finish("打开jeff") == "打开jev"
+        assert corrector.finish("安装jeff") == "安装jev"
+    finally:
+        corrector.close()
+    session = _Session(lambda call: {"answers": _role_answers({"role": "tool"})})
+    with_tail = _alias_corrector(session, context="上一段正在用软件工具跑测试")
+    try:
+        assert with_tail.finish("再用jeff跑一次") == "再用jev跑一次"
+        assert len(session.calls) == 1
+    finally:
+        with_tail.close()
+
+
+def test_debug_mail_keyword_does_not_replace_a_person_verdict() -> None:
+    session = _Session(lambda call: {"answers": _role_answers({"role": "person"})})
+    corrector = _alias_corrector(session)
+    try:
+        text = "我给Jeff发邮件请他调试脚本"
+        assert corrector.finish(text) == text
+        assert len(session.calls) == 1
+    finally:
+        corrector.close()

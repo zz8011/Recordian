@@ -53,6 +53,10 @@ def test_recommended_profile_preserves_secrets_hotwords_and_unknown_fields() -> 
         "auto_hard_enter": True,
         "enable_text_refine": True,
         "enable_streaming_refine": True,
+        "enable_semif_correction": True,
+        "correction_provider": "jev",
+        "jev_timeout_s": 1.5,
+        "contextual_aliases": [{"heard": "jeff", "word": "jev", "meaning": "软件工具"}],
     }
     merged = merge_recommended_profile(current)
     profile = recommended_profile_values()
@@ -76,7 +80,17 @@ def test_recommended_profile_preserves_secrets_hotwords_and_unknown_fields() -> 
     assert merged["enable_text_refine"] is False
     assert merged["enable_voice_wake"] is False
     assert merged["enable_remote_paste"] is False
-    assert merged["enable_semif_correction"] is False
+    # A user's configured SemIf and contextual aliases survive the profile;
+    # the profile itself stays silent so fresh generic defaults remain off.
+    assert "enable_semif_correction" not in profile
+    assert merged["enable_semif_correction"] is True
+    assert merged["contextual_aliases"] == [{"heard": "jeff", "word": "jev", "meaning": "软件工具"}]
+    assert "correction_provider" not in profile
+    assert "jev_timeout_s" not in profile
+    assert merged["correction_provider"] == "jev"
+    assert merged["jev_timeout_s"] == 1.5
+    assert "enable_semif_correction" not in merge_recommended_profile({})
+    assert merge_recommended_profile({}).get("enable_semif_correction", False) is False
     assert merged["trigger_mode"] == "ptt"
     assert merged["hotkey"] == "<ctrl_r>"
     assert merged["toggle_hotkey"] == "<alt_r>"
@@ -471,6 +485,73 @@ def _base_current(**overrides: Any) -> dict[str, Any]:
     }
     current.update(overrides)
     return current
+
+
+def test_settings_correction_provider_alias_and_recommend(tmp_path: Path) -> None:
+    gtk, glib = _gtk()
+    original = _base_current(
+        enable_semif_correction=True,
+        correction_provider="jev",
+        semif_endpoint="http://10.2.2.2:9/semif",
+        semif_timeout_s=0.3,
+        jev_timeout_s=1.4,
+        contextual_aliases=[{"heard": "jeff", "word": "jev", "meaning": "软件工具"}],
+        asr_context="微信,编辑器",
+        hotword=["自定义热词"],
+    )
+    app = _fake_app(tmp_path, original)
+    window = _open_settings(app, gtk, glib, original)
+    assert _switch_for(window, gtk, "上下文纠词").get_active()
+    provider = _grid_sibling(window, gtk, "纠词来源", gtk.ComboBoxText)
+    assert provider.get_active_text() == "官方Jev（沿用本机登录）"
+    hint_text = " ".join(label.get_text() for label in _labels(window, gtk))
+    assert "复用 jev 的登录，密钥由 jev 管理" in hint_text
+    assert "无需填写地址" in hint_text
+    assert "本机已登录" not in hint_text
+    assert "目前能登录" not in hint_text
+    assert provider.get_visible()
+    endpoint = _grid_sibling(window, gtk, "内网 SemIf 地址", gtk.Entry)
+    assert endpoint.get_text() == "http://10.2.2.2:9/semif"
+    assert endpoint.get_visible() is False
+    jev_timeout = _grid_sibling(window, gtk, "Jev 等待 (秒)", gtk.Entry)
+    assert jev_timeout.get_visible()
+    assert jev_timeout.get_text() == "1.4"
+    alias = _grid_sibling(window, gtk, "语境别名", gtk.TextView)
+    buffer = alias.get_buffer()
+    alias_text = buffer.get_text(buffer.get_start_iter(), buffer.get_end_iter(), True)
+    assert "jeff→jev::软件工具" in alias_text
+    assert _grid_sibling(window, gtk, "常用词", gtk.Entry).get_text() == "微信,编辑器"
+
+    provider.set_active(1)
+    _pump(glib)
+    assert provider.get_active_text() == "内网SemIf"
+    assert endpoint.get_visible() is True
+    assert jev_timeout.get_visible() is False
+    provider.set_active(0)
+    _pump(glib)
+
+    _button(window, gtk, "使用本机推荐配置").clicked()
+    _pump(glib)
+    assert _switch_for(window, gtk, "上下文纠词").get_active()
+    assert provider.get_active_text() == "官方Jev（沿用本机登录）"
+    assert endpoint.get_text() == "http://10.2.2.2:9/semif"
+    alias_text = buffer.get_text(buffer.get_start_iter(), buffer.get_end_iter(), True)
+    assert "jeff→jev::软件工具" in alias_text
+    assert _grid_sibling(window, gtk, "常用词", gtk.Entry).get_text() == "微信,编辑器"
+
+    _button(window, gtk, "保存并生效").clicked()
+    _pump(glib)
+    saved = ConfigManager.load(app.config_path)
+    assert saved["correction_provider"] == "jev"
+    assert saved["enable_semif_correction"] is True
+    assert saved["semif_endpoint"] == "http://10.2.2.2:9/semif"
+    assert saved["jev_timeout_s"] == 1.4
+    assert saved["contextual_aliases"] == [{"heard": "jeff", "word": "jev", "meaning": "软件工具"}]
+    assert saved["asr_context"] == "微信,编辑器"
+    raw = json.loads(app.config_path.read_text(encoding="utf-8"))
+    assert raw["hotword"] == ["自定义热词"]
+    window.destroy()
+    _pump(glib)
 
 
 def test_settings_provider_visibility_and_no_model_fetch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

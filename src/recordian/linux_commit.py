@@ -200,13 +200,18 @@ class FcitxStreamingSession:
         *,
         preedit_capable: bool,
         info: str = "",
+        supports_segments: bool = False,
     ) -> None:
         self.committer = committer
         self.token = token
         self.preedit_capable = preedit_capable
         self.info = info
+        # True only when BeginSession's descriptor carried segments=1.
+        # Older bridges omit the marker and keep the short-session API.
+        self.supports_segments = bool(supports_segments)
         self.stale_reason = ""
         self._closed = False
+        self._next_segment = 1
         self._lock = threading.Lock()
 
     @property
@@ -261,6 +266,94 @@ class FcitxStreamingSession:
                 outcome="stale",
             )
         return CommitResult(backend="fcitx", committed=True, detail=detail, outcome="committed")
+
+    def commit_segment(self, text: str) -> CommitResult:
+        """Commit one continuous chunk on the original token.
+
+        Sequence starts at 1 and increases only for a call this client
+        actually sends. The addon accepts only that exact next sequence.
+        A duplicate, a skip, a stale guard, or a lost reply closes this
+        client. Nothing is retried, the session is not reopened, and
+        CommitText / CommitSession are not used as a fallback. A confirmed
+        segment leaves the same token active for a later final commit.
+        """
+        with self._lock:
+            if self._closed:
+                return CommitResult(
+                    backend="fcitx",
+                    committed=False,
+                    detail=f"segment_stale:{self.stale_reason or 'closed'}",
+                    outcome="stale",
+                )
+            if not self.supports_segments:
+                # Short-session bridges have no CommitSegment. Leave this
+                # client open so CommitSession can still finish the utterance.
+                return CommitResult(
+                    backend="fcitx",
+                    committed=False,
+                    detail="segments_unsupported",
+                    outcome="stale",
+                )
+            sequence = self._next_segment
+            # Reserve the sequence before the call. On failure the client
+            # closes, so the number is never reused and never skipped ahead
+            # by a follow-up call.
+            self._next_segment = sequence + 1
+        try:
+            detail = _fcitx_busctl_call(
+                "CommitSegment", "sus", [self.token, str(sequence), str(text)]
+            )
+        except (CommitError, OSError) as exc:
+            message = str(exc)
+            error_name = _parse_dbus_error_name(message)
+            stale = error_name == "StaleSession" or "StaleSession" in message
+            with self._lock:
+                self._closed = True
+            if stale:
+                self._mark_stale("session_invalidated")
+            elif error_name == "BadSequence":
+                self._mark_stale("bad_sequence")
+            else:
+                # Timeout or a reply with no structured name: the segment
+                # may already have been written. Terminal uncertain.
+                self._mark_stale("segment_failed")
+            if not stale:
+                try:
+                    _fcitx_busctl_call("CancelSession", "s", [self.token])
+                    message = f"{message};preedit_cancelled"
+                except (CommitError, OSError):
+                    message = f"{message};preedit_may_linger"
+            outcome = "stale" if (stale or error_name == "BadSequence") else "uncertain"
+            return CommitResult(
+                backend="fcitx",
+                committed=False,
+                detail=f"segment_failed:{message}",
+                outcome=outcome,
+            )
+        # The addon names the sequence it accepted: "segment <n> ".
+        # "segment 1 " must not accept "segment 12 " or "segment 2 ".
+        ack_prefix = f"segment {sequence} "
+        if not str(detail).startswith(ack_prefix):
+            with self._lock:
+                self._closed = True
+            self._mark_stale("segment_unconfirmed")
+            try:
+                _fcitx_busctl_call("CancelSession", "s", [self.token])
+                detail = f"{detail};preedit_cancelled"
+            except (CommitError, OSError):
+                detail = f"{detail};preedit_may_linger"
+            return CommitResult(
+                backend="fcitx",
+                committed=False,
+                detail=f"segment_failed:{detail}",
+                outcome="uncertain",
+            )
+        return CommitResult(
+            backend="fcitx",
+            committed=True,
+            detail=detail,
+            outcome="committed",
+        )
 
     def commit(self, text: str) -> CommitResult:
         with self._lock:
@@ -394,10 +487,13 @@ class FcitxCommitter(TextCommitter):
             raise CompositionRefusedError("fcitx BeginSession returned empty descriptor")
         token = parts[0]
         preedit_capable = "preedit=1" in parts[1:]
+        # Exact field. Older bridges omit it; "segments=10" must not match.
+        supports_segments = "segments=1" in parts[1:]
         return FcitxStreamingSession(
             self,
             token,
             preedit_capable=preedit_capable,
+            supports_segments=supports_segments,
             info=descriptor,
         )
 

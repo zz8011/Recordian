@@ -182,6 +182,20 @@ class App:
             self.proc.terminate()
 
 
+def latest_text(app: App) -> str:
+    texts = app.texts()
+    return texts[-1] if texts else ""
+
+
+def wait_contains(app: App, marker: str, timeout: float = 3.0) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if marker in latest_text(app):
+            return True
+        time.sleep(0.05)
+    return False
+
+
 def record(name: str, ok: bool, detail: str = "") -> bool:
     status = "PASS" if ok else "FAIL"
     results.append((name, status, detail))
@@ -194,6 +208,20 @@ def record(name: str, ok: bool, detail: str = "") -> bool:
 def skip(name: str, reason: str) -> None:
     results.append((name, "SKIP", reason))
     log(f"SCENARIO {name}: SKIP {reason}")
+
+
+def environment(name: str, detail: str) -> None:
+    """Setup never reached the product assertion. Not a pass and not a product failure."""
+    results.append((name, "ENV", detail))
+    log(f"SCENARIO {name}: ENV {detail}")
+
+
+def gtk_segments_only() -> bool:
+    return os.environ.get("RECORDIAN_NATIVE_FOCUS") == "gtk-segments"
+
+
+def browser_segments_only() -> bool:
+    return os.environ.get("RECORDIAN_NATIVE_FOCUS") == "browser-segments"
 
 
 def limitation(name: str, detail: str) -> None:
@@ -212,7 +240,14 @@ def setup_layout() -> None:
     share = os.path.join(TMP, "share", "fcitx5", "addon")
     libdir = os.path.join(TMP, "lib", "fcitx5")
     confdir = os.path.join(TMP, "config", "fcitx5")
-    for path in (share, libdir, confdir, os.path.join(TMP, "cache"), os.path.join(TMP, "run")):
+    for path in (
+        share,
+        libdir,
+        confdir,
+        os.path.join(TMP, "cache"),
+        os.path.join(TMP, "data"),
+        os.path.join(TMP, "run"),
+    ):
         os.makedirs(path, exist_ok=True)
     os.chmod(os.path.join(TMP, "run"), 0o700)
     conf_src = os.path.join(CANDIDATE_SRC, "..", "fcitx", "recordian-commit", "recordian-commit.conf")
@@ -238,9 +273,13 @@ def setup_layout() -> None:
 
 def child_env() -> dict[str, str]:
     env = os.environ.copy()
+    # Private bus only. Drop a Wayland display inherited from the host so
+    # GTK/fcitx stay on the Xvfb DISPLAY this process was given.
+    env.pop("WAYLAND_DISPLAY", None)
     env.update(
         {
             "XDG_DATA_DIRS": f"{os.path.join(TMP, 'share')}:/usr/local/share:/usr/share",
+            "XDG_DATA_HOME": os.path.join(TMP, "data"),
             "XDG_CONFIG_HOME": os.path.join(TMP, "config"),
             "XDG_CACHE_HOME": os.path.join(TMP, "cache"),
             "XDG_RUNTIME_DIR": os.path.join(TMP, "run"),
@@ -324,6 +363,265 @@ def begin_with_focus_retry(committer, wid: int, timeout: float = 12.0):
     raise CommitError(f"BeginSession never found a focused input context: {last_err}")
 
 
+def read_clipboard() -> str:
+    return subprocess.run(
+        ["xclip", "-selection", "clipboard", "-o"],
+        capture_output=True, text=True, timeout=5,
+    ).stdout
+
+
+def window_geometry(wid: int) -> tuple[int, int, int, int]:
+    geo = subprocess.run(
+        ["xdotool", "getwindowgeometry", str(wid)],
+        capture_output=True, text=True, timeout=5,
+    ).stdout
+    gx = gy = 0
+    gw = gh = 800
+    for line in geo.splitlines():
+        if "Position:" in line:
+            nums = re.findall(r"-?\d+", line)
+            gx, gy = int(nums[0]), int(nums[1])
+        if "Geometry:" in line:
+            nums = re.findall(r"\d+", line)
+            gw, gh = int(nums[0]), int(nums[1])
+    return gx, gy, gw, gh
+
+
+def copy_browser_field(gx: int, gy: int, gw: int, gh: int, frac_y: float) -> str:
+    """Plain click, then select-all copy. The click collapses a leftover selection."""
+    xdotool("mousemove", str(gx + gw // 2), str(gy + int(gh * frac_y)))
+    xdotool("click", "1")
+    time.sleep(0.5)
+    xdotool("key", "ctrl+a")
+    time.sleep(0.2)
+    xdotool("key", "ctrl+c")
+    time.sleep(0.5)
+    return read_clipboard()
+
+
+# One token, three segments, one final commit. Chinese + ASCII, and one emoji
+# so the surrounding-text echo has to use a Unicode scalar past the BMP.
+_BROWSER_PARTS = ("甲段Zh", "乙段En", "丙段🎯")
+_BROWSER_FINAL = "收尾End"
+_BROWSER_DUP = "DUP戊重复"
+_BROWSER_SKIP = "SKIP己跳号"
+
+
+def exercise_browser_segments(
+    bwid: int,
+    gx: int, gy: int, gw: int, gh: int,
+    frac_y: float,
+    prefix: str,
+    scenario: str,
+) -> None:
+    """CommitSegment x3 + CommitSession on the already focused Chrome field.
+
+    Duplicate sequence 1 and skipped sequence 4 must not write. The clipboard
+    after the field is copied must equal prefix + the three parts + the final
+    text, each part once.
+    """
+    from recordian.linux_commit import FcitxCommitter
+
+    try:
+        focus_window(bwid)
+        time.sleep(0.3)
+        xdotool("mousemove", str(gx + gw // 2), str(gy + int(gh * frac_y)))
+        xdotool("click", "1")
+        time.sleep(0.6)
+        session = begin_with_focus_retry(FcitxCommitter(), bwid, timeout=15.0)
+        token = session.token
+        marker_ok = bool(session.supports_segments and "segments=1" in session.info.split())
+        log(f"{scenario} token={token} supports_segments={session.supports_segments} info={session.info}")
+        pre = session.update_preedit("预编辑甲PRE")
+        acks: list = []
+        ic_calls: list[list[str]] = []
+
+        def _segment(index: int, text: str) -> None:
+            def _act() -> None:
+                acks.append(session.commit_segment(text))
+            ic_calls.append(monitor_ic_calls(_act, f"{scenario}-seg{index}"))
+
+        _segment(1, _BROWSER_PARTS[0])
+        mid = session.update_preedit("预编辑乙PRE")
+        _segment(2, _BROWSER_PARTS[1])
+        same_token = session.active and session.token == token
+        dup = busctl_raw("CommitSegment", "sus", [token, "1", _BROWSER_DUP])
+        skipped = busctl_raw("CommitSegment", "sus", [token, "4", _BROWSER_SKIP])
+        _segment(3, _BROWSER_PARTS[2])
+        done = session.commit(_BROWSER_FINAL)
+        again = session.commit("第二次不应")
+        time.sleep(0.6)
+        clip = copy_browser_field(gx, gy, gw, gh, frac_y)
+        expected = prefix + "".join(_BROWSER_PARTS) + _BROWSER_FINAL
+        dup_err = (dup.stderr or "") + (dup.stdout or "")
+        skip_err = (skipped.stderr or "") + (skipped.stdout or "")
+        record(
+            scenario,
+            marker_ok
+            and pre.committed
+            and mid.committed
+            and len(acks) == 3
+            and all(item.committed for item in acks)
+            and all(str(item.detail).startswith(f"segment {n} ") for n, item in enumerate(acks, 1))
+            and same_token
+            and dup.returncode != 0
+            and "BadSequence" in dup_err
+            and skipped.returncode != 0
+            and "BadSequence" in skip_err
+            and _BROWSER_DUP not in clip
+            and _BROWSER_SKIP not in clip
+            and "预编辑" not in clip
+            and done.committed
+            and str(done.detail).startswith("committed")
+            and not again.committed
+            and not session.active
+            and clip == expected
+            and all(clip.count(part) == 1 for part in _BROWSER_PARTS)
+            and clip.count(_BROWSER_FINAL) == 1,
+            f"acks={[item.detail for item in acks]} same_token={same_token} "
+            f"dup={dup_err.strip()[:80]!r} skip={skip_err.strip()[:80]!r} "
+            f"final={done.detail[:40]!r} again={again.detail[:40]!r} "
+            f"ic={ic_calls} clip={clip!r} expected={expected!r}",
+        )
+    except Exception as exc:  # noqa: BLE001
+        clip = ""
+        try:
+            clip = copy_browser_field(gx, gy, gw, gh, frac_y)
+        except Exception as clip_exc:  # noqa: BLE001
+            clip = f"<unread {type(clip_exc).__name__}: {clip_exc}>"
+        record(scenario, False, f"{type(exc).__name__}: {exc} clip={clip!r}")
+
+
+def open_private_chrome() -> tuple[subprocess.Popen | None, int | None]:
+    """Launch Chrome at the shared textarea/contenteditable page. Private profile only."""
+    browser_tmp = os.path.join(TMP, "browser")
+    os.makedirs(os.path.join(browser_tmp, "home"), exist_ok=True)
+    page = os.path.join(browser_tmp, "page.html")
+    with open(page, "w", encoding="utf-8") as fh:
+        fh.write(
+            "<!doctype html><html><head><meta charset=utf-8>"
+            "<title>Recordian Native Browser Test</title></head>"
+            "<body style='margin:0'>"
+            "<textarea id=t autofocus style='width:98vw;height:52vh;font-size:20px'></textarea>"
+            "<div id=e contenteditable=true "
+            "style='width:98vw;height:32vh;border:2px solid #888;font-size:20px'>editable:</div>"
+            "<script>window.addEventListener('load',()=>document.getElementById('t').focus())</script>"
+            "</body></html>"
+        )
+    chrome_bin = shutil.which("google-chrome")
+    if not chrome_bin:
+        return None, None
+    benv = child_env()
+    benv["HOME"] = os.path.join(browser_tmp, "home")
+    chrome = subprocess.Popen(
+        [chrome_bin, f"--user-data-dir={browser_tmp}/profile",
+         "--no-first-run", "--no-default-browser-check", "--password-store=basic",
+         "--disable-session-crashed-bubble", "--disable-extensions",
+         "--disable-dev-shm-usage", "--disable-gpu", "--new-window",
+         f"file://{page}"],
+        env=benv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        start_new_session=True)
+    bwid = None
+    deadline = time.monotonic() + 40
+    while time.monotonic() < deadline:
+        if chrome.poll() is not None:
+            break
+        found = subprocess.run(
+            ["xdotool", "search", "--onlyvisible", "--name", "Recordian Native Browser Test"],
+            capture_output=True, text=True, timeout=5)
+        if found.returncode == 0 and found.stdout.strip():
+            bwid = int(found.stdout.strip().splitlines()[-1])
+            break
+        time.sleep(0.5)
+    return chrome, bwid
+
+
+def stop_chrome(chrome: subprocess.Popen | None) -> None:
+    if chrome is None or chrome.poll() is not None:
+        return
+    try:
+        os.killpg(os.getpgid(chrome.pid), signal.SIGTERM)
+        chrome.wait(timeout=5)
+    except (OSError, subprocess.TimeoutExpired):
+        try:
+            os.killpg(os.getpgid(chrome.pid), signal.SIGKILL)
+        except OSError:
+            pass
+
+
+def run_browser_segment_cases(chrome: subprocess.Popen | None = None, bwid: int | None = None) -> None:
+    """s10b textarea and s14b contenteditable. Caller owns an already-open Chrome, or we launch one."""
+    own_chrome = chrome is None
+    if own_chrome:
+        if shutil.which("google-chrome") is None:
+            skip("s10b_browser_textarea_segments_once", "google-chrome not installed")
+            skip("s14b_browser_contenteditable_segments_once", "google-chrome not installed")
+            return
+        chrome, bwid = open_private_chrome()
+    try:
+        if bwid is None:
+            skip(
+                "s10b_browser_textarea_segments_once",
+                f"chrome window never appeared (poll={chrome.poll() if chrome else None}); browser path unproven",
+            )
+            skip(
+                "s14b_browser_contenteditable_segments_once",
+                "chrome window never appeared; contenteditable segment path unproven",
+            )
+            return
+        log(f"chrome wid={bwid} segments")
+        if not own_chrome:
+            focus_window(bwid)
+            xdotool("key", "ctrl+r")
+            time.sleep(1.5)
+        gx, gy, gw, gh = window_geometry(bwid)
+        exercise_browser_segments(
+            bwid, gx, gy, gw, gh, 0.25, "",
+            "s10b_browser_textarea_segments_once",
+        )
+        exercise_browser_segments(
+            bwid, gx, gy, gw, gh, 0.80, "editable:",
+            "s14b_browser_contenteditable_segments_once",
+        )
+    finally:
+        if own_chrome:
+            stop_chrome(chrome)
+
+
+def shutdown(log_path: str, app: App | None = None, other: App | None = None) -> int:
+    if app is not None:
+        app.stop()
+    if other is not None:
+        other.stop()
+    if fcitx is not None:
+        fcitx.terminate()
+        try:
+            fcitx.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            fcitx.kill()
+    skipped = [name for name, status, _ in results if status == "SKIP"]
+    limitations = [name for name, status, _ in results if status == "LIMITATION"]
+    environments = [name for name, status, _ in results if status == "ENV"]
+    log("=== native session summary ===")
+    for name, status, detail in results:
+        log(f"{status} {name} :: {detail[:160]}")
+    try:
+        with open(log_path, encoding="utf-8", errors="replace") as fh:
+            tail = fh.read()[-4000:]
+        log(f"=== fcitx5.log tail ===\n{tail}")
+    except OSError:
+        pass
+    if failures:
+        log(f"VERDICT: FAIL {failures} (limitations: {limitations or 'none'}; env: {environments or 'none'})")
+        return 1
+    log(
+        "VERDICT: PASS "
+        f"(skipped: {skipped or 'none'}; known platform limitations: {limitations or 'none'}; "
+        f"env: {environments or 'none'})"
+    )
+    return 0
+
+
 def wait_addon(timeout: float = 25.0) -> bool:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -335,6 +633,129 @@ def wait_addon(timeout: float = 25.0) -> bool:
             return True
         time.sleep(0.25)
     return False
+
+
+def _fresh_gtk_entry(label: str) -> App:
+    fresh = App([
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "gtk_entry_app.py"),
+        label,
+    ])
+    if fresh.wait_line("READY") is None or fresh.wid is None:
+        raise RuntimeError(f"{label} GTK entry did not become ready")
+    return fresh
+
+
+def run_empty_surround_regressions(return_wid: int) -> None:
+    """Fresh entries. Do not set_text before the positive commit.
+
+    GTK reports no surrounding text until the first own commit. Seeding the
+    field would hide that. The prefix case is the negative: an unknown
+    before plus unrelated text must not keep the token alive.
+    """
+    from recordian.linux_commit import FcitxCommitter
+
+    positive = None
+    try:
+        positive = _fresh_gtk_entry("empty-surround")
+        if not focus_window(positive.wid or 0):
+            record("s30_empty_surround_many_preedits_then_segment", False, "could not focus fresh entry")
+        else:
+            time.sleep(0.3)
+            session = begin_with_focus_retry(FcitxCommitter(), positive.wid or 0)
+            preedit_ok = True
+            for i in range(8):
+                updated = session.update_preedit(f"预编辑空快照{i}")
+                preedit_ok = preedit_ok and updated.committed and session.active
+                time.sleep(0.04)
+            first = "空快照首段甲"
+            second = "二段乙"
+            seg1 = session.commit_segment(first)
+            seen1 = wait_contains(positive, first)
+            seg2 = session.commit_segment(second)
+            seen2 = wait_contains(positive, first + second)
+            buf = latest_text(positive)
+            record(
+                "s30_empty_surround_many_preedits_then_segment",
+                preedit_ok
+                and seg1.committed
+                and seg2.committed
+                and seen1
+                and seen2
+                and session.active
+                and session.token
+                and buf == first + second
+                and buf.count(first) == 1
+                and buf.count(second) == 1
+                and "预编辑" not in buf,
+                f"seg1={seg1.detail[:60]} seg2={seg2.detail[:60]} buf={buf!r}",
+            )
+    except Exception as exc:  # noqa: BLE001
+        record("s30_empty_surround_many_preedits_then_segment", False, f"{type(exc).__name__}: {exc}")
+    finally:
+        if positive is not None:
+            positive.stop()
+
+    prefix_app = None
+    try:
+        prefix_app = _fresh_gtk_entry("foreign-prefix")
+        if not focus_window(prefix_app.wid or 0):
+            record("s31_unknown_before_unrelated_prefix_stays_stale", False, "could not focus prefix entry")
+        else:
+            time.sleep(0.2)
+            prefix_app.send("SET 外来前缀不相干")
+            time.sleep(0.4)
+            session = begin_with_focus_retry(FcitxCommitter(), prefix_app.wid or 0)
+            for i in range(4):
+                session.update_preedit(f"预编辑外来{i}")
+                time.sleep(0.04)
+            first = session.commit_segment("本段Zh")
+            time.sleep(0.3)
+            probe = session.commit_segment("第二段不应")
+            buf = latest_text(prefix_app)
+            record(
+                "s31_unknown_before_unrelated_prefix_stays_stale",
+                (not probe.committed)
+                and probe.outcome in {"stale", "uncertain"}
+                and "第二段不应" not in buf
+                and "外来前缀不相干" in buf,
+                f"first={first.detail[:80]} first_outcome={first.outcome} "
+                f"probe={probe.detail[:80]} probe_outcome={probe.outcome} buf={buf!r}",
+            )
+    except Exception as exc:  # noqa: BLE001
+        record("s31_unknown_before_unrelated_prefix_stays_stale", False, f"{type(exc).__name__}: {exc}")
+    finally:
+        if prefix_app is not None:
+            prefix_app.stop()
+
+    key_app = None
+    try:
+        key_app = _fresh_gtk_entry("foreign-key")
+        if not focus_window(key_app.wid or 0):
+            record("s32_foreign_key_before_empty_surround_commit_stale", False, "could not focus key entry")
+        else:
+            time.sleep(0.2)
+            session = begin_with_focus_retry(FcitxCommitter(), key_app.wid or 0)
+            session.update_preedit("按键前预编辑")
+            time.sleep(0.15)
+            xdotool("type", "--delay", "40", "q")
+            time.sleep(0.4)
+            typed = session.commit_segment("按键不应段")
+            buf = latest_text(key_app)
+            record(
+                "s32_foreign_key_before_empty_surround_commit_stale",
+                (not typed.committed)
+                and typed.outcome == "stale"
+                and not session.active
+                and "按键不应段" not in buf,
+                f"detail={typed.detail[:80]} outcome={typed.outcome} buf={buf!r}",
+            )
+    except Exception as exc:  # noqa: BLE001
+        record("s32_foreign_key_before_empty_surround_commit_stale", False, f"{type(exc).__name__}: {exc}")
+    finally:
+        if key_app is not None:
+            key_app.stop()
+        if return_wid:
+            focus_window(return_wid)
 
 
 def main() -> int:
@@ -358,6 +779,16 @@ def main() -> int:
         log(f"addon did not come up; fcitx5 log tail:\n{open(log_path, encoding='utf-8').read()[-2000:]}")
         return 2
     record("addon_loaded_ping", True, "real compiled addon answers Ping on isolated bus")
+
+    if browser_segments_only():
+        # GTK, ASR, and the Cursor editor are not started. CommitSession-only
+        # browser rows stay SKIP; the segment rows below are the assertion.
+        skip("s10_browser_textarea_commit_once", "RECORDIAN_NATIVE_FOCUS=browser-segments skips CommitSession-only browser case")
+        skip("s14_browser_contenteditable_commit_once", "RECORDIAN_NATIVE_FOCUS=browser-segments skips CommitSession-only browser case")
+        skip("s16_editor_commit_once", "RECORDIAN_NATIVE_FOCUS=browser-segments skips editor")
+        skip("s17_real_asr_worker_commit_once", "RECORDIAN_NATIVE_FOCUS=browser-segments skips ASR")
+        run_browser_segment_cases()
+        return shutdown(log_path)
 
     from recordian.linux_commit import CommitError, FcitxCommitter
 
@@ -1057,287 +1488,690 @@ def main() -> int:
                     dummy17.kill()
 
     # -- S10: real browser textarea, preedit -> commit exactly once ----------
-    chrome = None
-    try:
-        browser_tmp = os.path.join(TMP, "browser")
-        os.makedirs(os.path.join(browser_tmp, "home"), exist_ok=True)
-        page = os.path.join(browser_tmp, "page.html")
-        with open(page, "w", encoding="utf-8") as fh:
-            fh.write(
-                "<!doctype html><html><head><meta charset=utf-8>"
-                "<title>Recordian Native Browser Test</title></head>"
-                "<body style='margin:0'>"
-                "<textarea id=t autofocus style='width:98vw;height:52vh;font-size:20px'></textarea>"
-                "<div id=e contenteditable=true "
-                "style='width:98vw;height:32vh;border:2px solid #888;font-size:20px'>editable:</div>"
-                "<script>window.addEventListener('load',()=>document.getElementById('t').focus())</script>"
-                "</body></html>"
-            )
-        chrome_bin = shutil.which("google-chrome")
-        if not chrome_bin:
-            skip("s10_browser_textarea_commit_once", "google-chrome not installed")
-        else:
-            benv = child_env()
-            benv["HOME"] = os.path.join(browser_tmp, "home")
-            chrome = subprocess.Popen(
-                [chrome_bin, f"--user-data-dir={browser_tmp}/profile",
-                 "--no-first-run", "--no-default-browser-check", "--password-store=basic",
-                 "--disable-session-crashed-bubble", "--disable-extensions",
-                 "--disable-dev-shm-usage", "--disable-gpu", "--new-window",
-                 f"file://{page}"],
-                env=benv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                start_new_session=True)  # own process group: cleanup = killpg
-            bwid = None
-            deadline = time.monotonic() + 40
-            while time.monotonic() < deadline:
-                if chrome.poll() is not None:
-                    break
-                p = subprocess.run(
-                    ["xdotool", "search", "--onlyvisible", "--name", "Recordian Native Browser Test"],
-                    capture_output=True, text=True, timeout=5)
-                if p.returncode == 0 and p.stdout.strip():
-                    bwid = int(p.stdout.strip().splitlines()[-1])
-                    break
-                time.sleep(0.5)
-            if bwid is None:
-                skip("s10_browser_textarea_commit_once",
-                     f"chrome window never appeared (poll={chrome.poll()}); browser path unproven")
+    if gtk_segments_only():
+        skip("s10_browser_textarea_commit_once", "RECORDIAN_NATIVE_FOCUS=gtk-segments skips browser")
+        skip("s14_browser_contenteditable_commit_once", "RECORDIAN_NATIVE_FOCUS=gtk-segments skips browser")
+        skip("s10b_browser_textarea_segments_once", "RECORDIAN_NATIVE_FOCUS=gtk-segments skips browser")
+        skip("s14b_browser_contenteditable_segments_once", "RECORDIAN_NATIVE_FOCUS=gtk-segments skips browser")
+    else:
+        chrome = None
+        try:
+            browser_tmp = os.path.join(TMP, "browser")
+            os.makedirs(os.path.join(browser_tmp, "home"), exist_ok=True)
+            page = os.path.join(browser_tmp, "page.html")
+            with open(page, "w", encoding="utf-8") as fh:
+                fh.write(
+                    "<!doctype html><html><head><meta charset=utf-8>"
+                    "<title>Recordian Native Browser Test</title></head>"
+                    "<body style='margin:0'>"
+                    "<textarea id=t autofocus style='width:98vw;height:52vh;font-size:20px'></textarea>"
+                    "<div id=e contenteditable=true "
+                    "style='width:98vw;height:32vh;border:2px solid #888;font-size:20px'>editable:</div>"
+                    "<script>window.addEventListener('load',()=>document.getElementById('t').focus())</script>"
+                    "</body></html>"
+                )
+            chrome_bin = shutil.which("google-chrome")
+            if not chrome_bin:
+                skip("s10_browser_textarea_commit_once", "google-chrome not installed")
+                skip("s10b_browser_textarea_segments_once", "google-chrome not installed")
+                skip("s14b_browser_contenteditable_segments_once", "google-chrome not installed")
             else:
-                log(f"chrome wid={bwid}")
-                focus_window(bwid)
-                time.sleep(0.5)
-                geo = subprocess.run(["xdotool", "getwindowgeometry", str(bwid)],
-                                     capture_output=True, text=True, timeout=5).stdout
-                gx = gy = 0
-                gw = gh = 800
-                for line in geo.splitlines():
-                    if "Position:" in line:
-                        nums = re.findall(r"-?\d+", line)
-                        gx, gy = int(nums[0]), int(nums[1])
-                    if "Geometry:" in line:
-                        nums = re.findall(r"\d+", line)
-                        gw, gh = int(nums[0]), int(nums[1])
+                benv = child_env()
+                benv["HOME"] = os.path.join(browser_tmp, "home")
+                chrome = subprocess.Popen(
+                    [chrome_bin, f"--user-data-dir={browser_tmp}/profile",
+                     "--no-first-run", "--no-default-browser-check", "--password-store=basic",
+                     "--disable-session-crashed-bubble", "--disable-extensions",
+                     "--disable-dev-shm-usage", "--disable-gpu", "--new-window",
+                     f"file://{page}"],
+                    env=benv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                    start_new_session=True)  # own process group: cleanup = killpg
+                bwid = None
+                deadline = time.monotonic() + 40
+                while time.monotonic() < deadline:
+                    if chrome.poll() is not None:
+                        break
+                    p = subprocess.run(
+                        ["xdotool", "search", "--onlyvisible", "--name", "Recordian Native Browser Test"],
+                        capture_output=True, text=True, timeout=5)
+                    if p.returncode == 0 and p.stdout.strip():
+                        bwid = int(p.stdout.strip().splitlines()[-1])
+                        break
+                    time.sleep(0.5)
+                if bwid is None:
+                    skip("s10_browser_textarea_commit_once",
+                         f"chrome window never appeared (poll={chrome.poll()}); browser path unproven")
+                    skip("s10b_browser_textarea_segments_once",
+                         f"chrome window never appeared (poll={chrome.poll()}); browser path unproven")
+                    skip("s14b_browser_contenteditable_segments_once",
+                         "chrome window never appeared; contenteditable segment path unproven")
+                else:
+                    log(f"chrome wid={bwid}")
+                    focus_window(bwid)
+                    time.sleep(0.5)
+                    geo = subprocess.run(["xdotool", "getwindowgeometry", str(bwid)],
+                                         capture_output=True, text=True, timeout=5).stdout
+                    gx = gy = 0
+                    gw = gh = 800
+                    for line in geo.splitlines():
+                        if "Position:" in line:
+                            nums = re.findall(r"-?\d+", line)
+                            gx, gy = int(nums[0]), int(nums[1])
+                        if "Geometry:" in line:
+                            nums = re.findall(r"\d+", line)
+                            gw, gh = int(nums[0]), int(nums[1])
 
-                def _click_and_read_clipboard(frac_y: float) -> str:
-                    xdotool("mousemove", str(gx + gw // 2), str(gy + int(gh * frac_y)))
-                    xdotool("click", "1")
+                    def _click_and_read_clipboard(frac_y: float) -> str:
+                        xdotool("mousemove", str(gx + gw // 2), str(gy + int(gh * frac_y)))
+                        xdotool("click", "1")
+                        time.sleep(0.6)
+                        xdotool("key", "ctrl+a")
+                        time.sleep(0.2)
+                        xdotool("key", "ctrl+c")
+                        time.sleep(0.5)
+                        return subprocess.run(["xclip", "-selection", "clipboard", "-o"],
+                                              capture_output=True, text=True, timeout=5).stdout
+
+                    # textarea occupies the top ~52% of the page
+                    xdotool("mousemove", str(gx + gw // 2), str(gy + int(gh * 0.25)))
+                    xdotool("click", "1")  # ensure the textarea owns DOM focus
+                    time.sleep(0.6)
+                    sb = begin_with_focus_retry(FcitxCommitter(), bwid, timeout=15.0)
+                    log(f"browser session: preedit_capable={sb.preedit_capable} info={sb.info}")
+                    sb.update_preedit("浏览器预编辑 preEdit 中文 English 🎙️")
+                    time.sleep(0.3)
+                    final_b = "浏览器最终🎯文本 mix 中文 English 123！"
+                    rb = sb.commit(final_b)
                     time.sleep(0.6)
                     xdotool("key", "ctrl+a")
                     time.sleep(0.2)
                     xdotool("key", "ctrl+c")
                     time.sleep(0.5)
-                    return subprocess.run(["xclip", "-selection", "clipboard", "-o"],
+                    clip = subprocess.run(["xclip", "-selection", "clipboard", "-o"],
                                           capture_output=True, text=True, timeout=5).stdout
-
-                # textarea occupies the top ~52% of the page
-                xdotool("mousemove", str(gx + gw // 2), str(gy + int(gh * 0.25)))
-                xdotool("click", "1")  # ensure the textarea owns DOM focus
-                time.sleep(0.6)
-                sb = begin_with_focus_retry(FcitxCommitter(), bwid, timeout=15.0)
-                log(f"browser session: preedit_capable={sb.preedit_capable} info={sb.info}")
-                sb.update_preedit("浏览器预编辑 preEdit 中文 English 🎙️")
-                time.sleep(0.3)
-                final_b = "浏览器最终🎯文本 mix 中文 English 123！"
-                rb = sb.commit(final_b)
-                time.sleep(0.6)
-                xdotool("key", "ctrl+a")
-                time.sleep(0.2)
-                xdotool("key", "ctrl+c")
-                time.sleep(0.5)
-                clip = subprocess.run(["xclip", "-selection", "clipboard", "-o"],
-                                      capture_output=True, text=True, timeout=5).stdout
-                record(
-                    "s10_browser_textarea_commit_once",
-                    rb.committed and clip == final_b,
-                    f"commit={rb.detail[:60]} clipboard_equals_final={clip == final_b} clip_len={len(clip)}",
-                )
-
-                # -- S14: contenteditable div (same private Chrome) ----------
-                # The div sits below the textarea (~80% height). It contains a
-                # fixed "editable:" prefix; clipboard equality is checked
-                # against prefix+final. Focus with a PLAIN click: ctrl+a would
-                # select the prefix and the commit would replace it (standard
-                # IM selection semantics, not a product defect).
-                try:
-                    xdotool("mousemove", str(gx + gw // 2), str(gy + int(gh * 0.80)))
-                    xdotool("click", "1")
-                    time.sleep(0.6)
-                    se = begin_with_focus_retry(FcitxCommitter(), bwid, timeout=15.0)
-                    log(f"contenteditable session: preedit_capable={se.preedit_capable} info={se.info}")
-                    se.update_preedit("可编辑区预编辑 editAble 中文 English 🎤")
-                    time.sleep(0.3)
-                    final_e = "可编辑区最终🎯文本 contentEditable 中文 English 456！"
-                    re_ = se.commit(final_e)
-                    time.sleep(0.6)
-                    clip_e = _click_and_read_clipboard(0.80)
-                    expected_e = f"editable:{final_e}"
                     record(
-                        "s14_browser_contenteditable_commit_once",
-                        re_.committed and clip_e == expected_e,
-                        f"commit={re_.detail[:60]} clipboard_equals_expected={clip_e == expected_e} "
-                        f"clip={clip_e[:80]!r}",
+                        "s10_browser_textarea_commit_once",
+                        rb.committed and clip == final_b,
+                        f"commit={rb.detail[:60]} clipboard_equals_final={clip == final_b} clip_len={len(clip)}",
                     )
-                except Exception as exc:  # noqa: BLE001
-                    record("s14_browser_contenteditable_commit_once", False, f"{type(exc).__name__}: {exc}")
-    except Exception as exc:  # noqa: BLE001
-        record("s10_browser_textarea_commit_once", False, f"{type(exc).__name__}: {exc}")
-    finally:
-        if chrome is not None and chrome.poll() is None:
-            try:
-                os.killpg(os.getpgid(chrome.pid), signal.SIGTERM)
-                chrome.wait(timeout=5)
-            except (OSError, subprocess.TimeoutExpired):
+
+                    # -- S14: contenteditable div (same private Chrome) ----------
+                    # The div sits below the textarea (~80% height). It contains a
+                    # fixed "editable:" prefix; clipboard equality is checked
+                    # against prefix+final. Focus with a PLAIN click: ctrl+a would
+                    # select the prefix and the commit would replace it (standard
+                    # IM selection semantics, not a product defect).
+                    try:
+                        xdotool("mousemove", str(gx + gw // 2), str(gy + int(gh * 0.80)))
+                        xdotool("click", "1")
+                        time.sleep(0.6)
+                        se = begin_with_focus_retry(FcitxCommitter(), bwid, timeout=15.0)
+                        log(f"contenteditable session: preedit_capable={se.preedit_capable} info={se.info}")
+                        se.update_preedit("可编辑区预编辑 editAble 中文 English 🎤")
+                        time.sleep(0.3)
+                        final_e = "可编辑区最终🎯文本 contentEditable 中文 English 456！"
+                        re_ = se.commit(final_e)
+                        time.sleep(0.6)
+                        clip_e = _click_and_read_clipboard(0.80)
+                        expected_e = f"editable:{final_e}"
+                        record(
+                            "s14_browser_contenteditable_commit_once",
+                            re_.committed and clip_e == expected_e,
+                            f"commit={re_.detail[:60]} clipboard_equals_expected={clip_e == expected_e} "
+                            f"clip={clip_e[:80]!r}",
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        record("s14_browser_contenteditable_commit_once", False, f"{type(exc).__name__}: {exc}")
+                    try:
+                        run_browser_segment_cases(chrome, bwid)
+                    except Exception as exc:  # noqa: BLE001
+                        recorded = {name for name, _status, _detail in results}
+                        detail = f"{type(exc).__name__}: {exc}"
+                        if "s10b_browser_textarea_segments_once" not in recorded:
+                            record("s10b_browser_textarea_segments_once", False, detail)
+                        if "s14b_browser_contenteditable_segments_once" not in recorded:
+                            record("s14b_browser_contenteditable_segments_once", False, detail)
+        except Exception as exc:  # noqa: BLE001
+            record("s10_browser_textarea_commit_once", False, f"{type(exc).__name__}: {exc}")
+        finally:
+            if chrome is not None and chrome.poll() is None:
                 try:
-                    os.killpg(os.getpgid(chrome.pid), signal.SIGKILL)
-                except OSError:
-                    pass
+                    os.killpg(os.getpgid(chrome.pid), signal.SIGTERM)
+                    chrome.wait(timeout=5)
+                except (OSError, subprocess.TimeoutExpired):
+                    try:
+                        os.killpg(os.getpgid(chrome.pid), signal.SIGKILL)
+                    except OSError:
+                        pass
 
     # -- S16: real editor (Cursor / Electron, private profile) ---------------
     # Seeded scratch file, isolated user-data/extensions/HOME, no extensions,
     # no user project/account. Focus proven by reading back the seed content
     # via clipboard before Begin; after commit the buffer must equal
     # seed+final exactly (commit at document end, no synthetic typing).
-    editor = None
-    try:
-        editor_bin = None
-        for cand in ("/usr/share/cursor/cursor",):
-            if os.path.isfile(cand) and os.access(cand, os.X_OK):
-                editor_bin = cand
-                break
-        if editor_bin is None:
-            skip("s16_editor_commit_once", "cursor binary not found")
-        else:
-            # NOTE: `cursor --version` hangs in this sandboxed context
-            # (Electron first-run singleton behavior); version is read from
-            # the window title instead.
-            ed_tmp = os.path.join(TMP, "editor")
-            os.makedirs(os.path.join(ed_tmp, "home"), exist_ok=True)
-            seed_text = "seed种子🌱文本:"
-            seed = os.path.join(ed_tmp, "seed.txt")
-            with open(seed, "w", encoding="utf-8") as fh:
-                fh.write(seed_text)
-            eenv = child_env()
-            eenv["HOME"] = os.path.join(ed_tmp, "home")
-            editor = subprocess.Popen(
-                [editor_bin, f"--user-data-dir={ed_tmp}/user-data",
-                 f"--extensions-dir={ed_tmp}/ext", "--disable-extensions",
-                 "--new-window", "--skip-welcome", "--skip-release-notes",
-                 "--disable-workspace-trust", "--disable-crash-reporter",
-                 "--disable-gpu", seed],
-                env=eenv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                start_new_session=True)  # own process group: cleanup = killpg
-            ewid = None
-            deadline = time.monotonic() + 90
-            while time.monotonic() < deadline:
-                if editor.poll() is not None:
-                    break
-                p = subprocess.run(
-                    ["xdotool", "search", "--onlyvisible", "--class", "cursor"],
-                    capture_output=True, text=True, timeout=5)
-                if p.returncode == 0 and p.stdout.strip():
-                    ewid = int(p.stdout.strip().splitlines()[-1])
-                    # Editor loads the seed file asynchronously; wait until
-                    # the window title names it (proof the file is open).
-                    wname = subprocess.run(["xdotool", "getwindowname", str(ewid)],
-                                           capture_output=True, text=True, timeout=5).stdout
-                    if "seed.txt" in wname:
-                        break
-                time.sleep(1.0)
-            if ewid is None:
-                skip("s16_editor_commit_once",
-                     f"cursor window never appeared in 90s (poll={editor.poll()}); editor path unproven")
-            else:
-                wname = subprocess.run(["xdotool", "getwindowname", str(ewid)],
-                                       capture_output=True, text=True, timeout=5).stdout.strip()
-                log(f"cursor wid={ewid} title={wname!r}")
-
-                def _read_editor_buffer() -> str:
-                    xdotool("key", "ctrl+a")
-                    time.sleep(0.3)
-                    xdotool("key", "ctrl+c")
-                    time.sleep(0.5)
-                    return subprocess.run(["xclip", "-selection", "clipboard", "-o"],
-                                          capture_output=True, text=True, timeout=5).stdout
-
-                focus_window(ewid)
-                time.sleep(1.0)
-                geo = subprocess.run(["xdotool", "getwindowgeometry", str(ewid)],
-                                     capture_output=True, text=True, timeout=5).stdout
-                gx = gy = 0
-                gw = gh = 800
-                for line in geo.splitlines():
-                    if "Position:" in line:
-                        nums = re.findall(r"-?\d+", line)
-                        gx, gy = int(nums[0]), int(nums[1])
-                    if "Geometry:" in line:
-                        nums = re.findall(r"\d+", line)
-                        gw, gh = int(nums[0]), int(nums[1])
-                xdotool("mousemove", str(gx + gw // 2), str(gy + gh // 2))
-                xdotool("click", "1")  # focus the editor pane
-                time.sleep(1.0)
-                before = _read_editor_buffer()
-                seed_ok = before == seed_text
-                log(f"editor buffer before: {before[:60]!r} seed_ok={seed_ok}")
-                if not seed_ok:
-                    record("s16_editor_commit_once", False,
-                           f"editor focus/seed unproven: buffer={before[:80]!r}")
-                else:
-                    xdotool("key", "ctrl+a")   # collapse selection…
-                    xdotool("key", "ctrl+End")  # …caret to document end
-                    time.sleep(0.4)
-                    se = begin_with_focus_retry(FcitxCommitter(), ewid, timeout=15.0)
-                    log(f"editor session: preedit_capable={se.preedit_capable} info={se.info}")
-                    se.update_preedit("编辑器预编辑 editorPre 中文 English 🎤")
-                    time.sleep(0.3)
-                    final16 = "编辑器最终🎯文本 cursorEditor 中文 English 789！"
-                    res16 = se.commit(final16)
-                    time.sleep(0.8)
-                    after = _read_editor_buffer()
-                    expected16 = seed_text + final16
-                    record(
-                        "s16_editor_commit_once",
-                        res16.committed and after == expected16,
-                        f"commit={res16.detail[:60]} buffer_equals_seed_plus_final={after == expected16} "
-                        f"after_tail={after[-60:]!r}",
-                    )
-    except Exception as exc:  # noqa: BLE001
-        record("s16_editor_commit_once", False, f"{type(exc).__name__}: {exc}")
-    finally:
-        if editor is not None and editor.poll() is None:
-            try:
-                os.killpg(os.getpgid(editor.pid), signal.SIGTERM)
-                editor.wait(timeout=5)
-            except (OSError, subprocess.TimeoutExpired):
-                try:
-                    os.killpg(os.getpgid(editor.pid), signal.SIGKILL)
-                except OSError:
-                    pass
-
-    app.stop()
-    other.stop()
-    if fcitx is not None:
-        fcitx.terminate()
+    if gtk_segments_only():
+        skip("s16_editor_commit_once", "RECORDIAN_NATIVE_FOCUS=gtk-segments skips editor")
+    else:
+        editor = None
         try:
-            fcitx.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            fcitx.kill()
+            editor_bin = None
+            for cand in ("/usr/share/cursor/cursor",):
+                if os.path.isfile(cand) and os.access(cand, os.X_OK):
+                    editor_bin = cand
+                    break
+            if editor_bin is None:
+                skip("s16_editor_commit_once", "cursor binary not found")
+            else:
+                # NOTE: `cursor --version` hangs in this sandboxed context
+                # (Electron first-run singleton behavior); version is read from
+                # the window title instead.
+                ed_tmp = os.path.join(TMP, "editor")
+                os.makedirs(os.path.join(ed_tmp, "home"), exist_ok=True)
+                seed_text = "seed种子🌱文本:"
+                seed = os.path.join(ed_tmp, "seed.txt")
+                with open(seed, "w", encoding="utf-8") as fh:
+                    fh.write(seed_text)
+                eenv = child_env()
+                eenv["HOME"] = os.path.join(ed_tmp, "home")
+                editor = subprocess.Popen(
+                    [editor_bin, f"--user-data-dir={ed_tmp}/user-data",
+                     f"--extensions-dir={ed_tmp}/ext", "--disable-extensions",
+                     "--new-window", "--skip-welcome", "--skip-release-notes",
+                     "--disable-workspace-trust", "--disable-crash-reporter",
+                     "--disable-gpu", seed],
+                    env=eenv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                    start_new_session=True)  # own process group: cleanup = killpg
+                ewid = None
+                deadline = time.monotonic() + 90
+                while time.monotonic() < deadline:
+                    if editor.poll() is not None:
+                        break
+                    p = subprocess.run(
+                        ["xdotool", "search", "--onlyvisible", "--class", "cursor"],
+                        capture_output=True, text=True, timeout=5)
+                    if p.returncode == 0 and p.stdout.strip():
+                        ewid = int(p.stdout.strip().splitlines()[-1])
+                        # Editor loads the seed file asynchronously; wait until
+                        # the window title names it (proof the file is open).
+                        wname = subprocess.run(["xdotool", "getwindowname", str(ewid)],
+                                               capture_output=True, text=True, timeout=5).stdout
+                        if "seed.txt" in wname:
+                            break
+                    time.sleep(1.0)
+                if ewid is None:
+                    skip("s16_editor_commit_once",
+                         f"cursor window never appeared in 90s (poll={editor.poll()}); editor path unproven")
+                else:
+                    wname = subprocess.run(["xdotool", "getwindowname", str(ewid)],
+                                           capture_output=True, text=True, timeout=5).stdout.strip()
+                    log(f"cursor wid={ewid} title={wname!r}")
 
-    skipped = [name for name, status, _ in results if status == "SKIP"]
-    limitations = [name for name, status, _ in results if status == "LIMITATION"]
-    log("=== native session summary ===")
-    for name, status, detail in results:
-        log(f"{status} {name} :: {detail[:160]}")
+                    def _read_editor_buffer() -> str:
+                        xdotool("key", "ctrl+a")
+                        time.sleep(0.3)
+                        xdotool("key", "ctrl+c")
+                        time.sleep(0.5)
+                        return subprocess.run(["xclip", "-selection", "clipboard", "-o"],
+                                              capture_output=True, text=True, timeout=5).stdout
+
+                    focus_window(ewid)
+                    time.sleep(1.0)
+                    geo = subprocess.run(["xdotool", "getwindowgeometry", str(ewid)],
+                                         capture_output=True, text=True, timeout=5).stdout
+                    gx = gy = 0
+                    gw = gh = 800
+                    for line in geo.splitlines():
+                        if "Position:" in line:
+                            nums = re.findall(r"-?\d+", line)
+                            gx, gy = int(nums[0]), int(nums[1])
+                        if "Geometry:" in line:
+                            nums = re.findall(r"\d+", line)
+                            gw, gh = int(nums[0]), int(nums[1])
+                    xdotool("mousemove", str(gx + gw // 2), str(gy + gh // 2))
+                    xdotool("click", "1")  # focus the editor pane
+                    time.sleep(1.0)
+                    before = _read_editor_buffer()
+                    seed_ok = before == seed_text
+                    log(f"editor buffer before: {before[:60]!r} seed_ok={seed_ok}")
+                    if not seed_ok:
+                        environment(
+                            "s16_editor_commit_once",
+                            "editor focus/seed unproven before any commit; "
+                            f"title={wname!r} buffer={before[:80]!r}",
+                        )
+                    else:
+                        xdotool("key", "ctrl+a")   # collapse selection…
+                        xdotool("key", "ctrl+End")  # …caret to document end
+                        time.sleep(0.4)
+                        se = begin_with_focus_retry(FcitxCommitter(), ewid, timeout=15.0)
+                        log(f"editor session: preedit_capable={se.preedit_capable} info={se.info}")
+                        se.update_preedit("编辑器预编辑 editorPre 中文 English 🎤")
+                        time.sleep(0.3)
+                        final16 = "编辑器最终🎯文本 cursorEditor 中文 English 789！"
+                        res16 = se.commit(final16)
+                        time.sleep(0.8)
+                        after = _read_editor_buffer()
+                        expected16 = seed_text + final16
+                        record(
+                            "s16_editor_commit_once",
+                            res16.committed and after == expected16,
+                            f"commit={res16.detail[:60]} buffer_equals_seed_plus_final={after == expected16} "
+                            f"after_tail={after[-60:]!r}",
+                        )
+        except Exception as exc:  # noqa: BLE001
+            record("s16_editor_commit_once", False, f"{type(exc).__name__}: {exc}")
+        finally:
+            if editor is not None and editor.poll() is None:
+                try:
+                    os.killpg(os.getpgid(editor.pid), signal.SIGTERM)
+                    editor.wait(timeout=5)
+                except (OSError, subprocess.TimeoutExpired):
+                    try:
+                        os.killpg(os.getpgid(editor.pid), signal.SIGKILL)
+                    except OSError:
+                        pass
+
+    # -- S18: CommitSegment keeps one token; final CommitSession once --------
+    # Sequence starts at 1. A repeated sequence and a skip are refused with
+    # no write. The same token then accepts the next exact sequence and one
+    # final CommitSession.
     try:
-        with open(log_path, encoding="utf-8", errors="replace") as fh:
-            tail = fh.read()[-4000:]
-        log(f"=== fcitx5.log tail ===\n{tail}")
-    except OSError:
-        pass
-    if failures:
-        log(f"VERDICT: FAIL {failures} (limitations: {limitations or 'none'})")
-        return 1
-    log(f"VERDICT: PASS (skipped: {skipped or 'none'}; known platform limitations: {limitations or 'none'})")
-    return 0
+        focus_window(app.wid)
+        time.sleep(0.3)
+        s18 = begin_with_focus_retry(FcitxCommitter(), app.wid)
+        marker_ok = s18.supports_segments and "segments=1" in s18.info.split()
+        record(
+            "s18_segments_capability",
+            marker_ok,
+            f"supports_segments={s18.supports_segments} info={s18.info}",
+        )
+        pre = s18.update_preedit("段间预编辑甲")
+        seg1 = s18.commit_segment("SEG1甲连续")
+        seg1_seen = wait_contains(app, "SEG1甲连续")
+        time.sleep(0.2)
+        mid = s18.update_preedit("段间预编辑乙")
+        seg2 = s18.commit_segment("SEG2乙连续")
+        seg2_seen = wait_contains(app, "SEG2乙连续")
+        time.sleep(0.2)
+        same_token = s18.active and s18.token
+        dup = busctl_raw("CommitSegment", "sus", [s18.token, "1", "DUP戊重复段"])
+        skipped = busctl_raw("CommitSegment", "sus", [s18.token, "4", "SKIP己跳号段"])
+        time.sleep(0.3)
+        dup_err = dup.stderr + dup.stdout
+        skip_err = skipped.stderr + skipped.stdout
+        seg3 = s18.commit_segment("SEG3丙连续")
+        seg3_seen = wait_contains(app, "SEG3丙连续")
+        final18 = "FINAL丁收尾"
+        done = s18.commit(final18)
+        again = s18.commit("FINAL丁第二次")
+        time.sleep(0.3)
+        buf = latest_text(app)
+        record(
+            "s18_segment_same_token_final_once",
+            pre.committed
+            and mid.committed
+            and seg1.committed
+            and seg2.committed
+            and seg3.committed
+            and seg1_seen
+            and seg2_seen
+            and seg3_seen
+            and bool(same_token)
+            and dup.returncode != 0
+            and "BadSequence" in dup_err
+            and skipped.returncode != 0
+            and "BadSequence" in skip_err
+            and "DUP戊重复段" not in buf
+            and "SKIP己跳号段" not in buf
+            and buf.count("SEG1甲连续") == 1
+            and buf.count("SEG2乙连续") == 1
+            and buf.count("SEG3丙连续") == 1
+            and done.committed
+            and done.detail.startswith("committed")
+            and not again.committed
+            and buf.count(final18) == 1
+            and not s18.active,
+            f"seg={[seg1.detail, seg2.detail, seg3.detail]} dup={dup_err.strip()[:80]!r} "
+            f"skip={skip_err.strip()[:80]!r} final={done.detail[:40]!r} again={again.detail[:40]!r} "
+            f"buf_tail={buf[-80:]!r}",
+        )
+    except Exception as exc:  # noqa: BLE001
+        record("s18_segment_same_token_final_once", False, f"{type(exc).__name__}: {exc}")
+
+    # -- S19: cancel after a segment keeps that commit and rejects the next --
+    try:
+        focus_window(app.wid)
+        time.sleep(0.2)
+        s19 = begin_with_focus_retry(FcitxCommitter(), app.wid)
+        kept = s19.commit_segment("KEEP子已提交段")
+        keep_seen = wait_contains(app, "KEEP子已提交段")
+        s19.update_preedit("DRAFT丑仅预编辑")
+        time.sleep(0.2)
+        cancelled = s19.cancel()
+        time.sleep(0.3)
+        probe = busctl_raw("CommitSegment", "sus", [s19.token, "2", "AFTERCANCEL寅"])
+        time.sleep(0.2)
+        buf = latest_text(app)
+        record(
+            "s19_cancel_after_segment",
+            kept.committed
+            and keep_seen
+            and cancelled.committed
+            and not s19.active
+            and probe.returncode != 0
+            and "StaleSession" in (probe.stderr + probe.stdout)
+            and buf.count("KEEP子已提交段") == 1
+            and "AFTERCANCEL寅" not in buf,
+            f"cancel={cancelled.detail} probe={(probe.stderr or probe.stdout).strip()[:80]!r} "
+            f"draft_leaked={'DRAFT丑仅预编辑' in buf}",
+        )
+    except Exception as exc:  # noqa: BLE001
+        record("s19_cancel_after_segment", False, f"{type(exc).__name__}: {exc}")
+
+    # -- S20: focus away rejects the segment; focus back does not revive it --
+    try:
+        focus_window(app.wid)
+        time.sleep(0.2)
+        s20 = begin_with_focus_retry(FcitxCommitter(), app.wid)
+        token20 = s20.token
+        focus_window(other.wid)
+        app.wait_line("FOCUS_OUT", timeout=5.0)
+        time.sleep(0.3)
+        lost = s20.commit_segment("FOCUS庚失焦段")
+        focus_window(app.wid)
+        time.sleep(0.4)
+        revived = s20.commit_segment("FOCUS庚回来段")
+        probe = busctl_raw("CommitSegment", "sus", [token20, "1", "FOCUS庚原token"])
+        time.sleep(0.2)
+        buf = latest_text(app)
+        record(
+            "s20_focus_away_back_segment_rejected",
+            (not lost.committed)
+            and lost.outcome in {"stale", "uncertain"}
+            and (not revived.committed)
+            and (not s20.active)
+            and probe.returncode != 0
+            and "StaleSession" in (probe.stderr + probe.stdout)
+            and "FOCUS庚" not in buf,
+            f"lost={lost.detail[:80]} revived={revived.detail[:60]} "
+            f"probe={(probe.stderr or probe.stdout).strip()[:80]!r}",
+        )
+    except Exception as exc:  # noqa: BLE001
+        record("s20_focus_away_back_segment_rejected", False, f"{type(exc).__name__}: {exc}")
+
+    # -- S21: a user editing key rejects the segment with no write -----------
+    try:
+        focus_window(app.wid)
+        time.sleep(0.2)
+        s21 = begin_with_focus_retry(FcitxCommitter(), app.wid)
+        s21.update_preedit("按键前占位")
+        time.sleep(0.15)
+        xdotool("type", "--delay", "40", "z")
+        time.sleep(0.4)
+        probe = busctl_raw("CommitSegment", "sus", [s21.token, "1", "KEY辛按键段"])
+        client = s21.commit_segment("KEY辛客户端")
+        time.sleep(0.2)
+        buf = latest_text(app)
+        record(
+            "s21_user_key_rejects_segment",
+            probe.returncode != 0
+            and "StaleSession" in (probe.stderr + probe.stdout)
+            and not client.committed
+            and not s21.active
+            and "KEY辛" not in buf,
+            f"probe={(probe.stderr or probe.stdout).strip()[:80]!r} client={client.detail[:60]}",
+        )
+    except Exception as exc:  # noqa: BLE001
+        record("s21_user_key_rejects_segment", False, f"{type(exc).__name__}: {exc}")
+
+    # -- S22: mouse reset in the same field rejects the segment --------------
+    try:
+        focus_window(app.wid)
+        time.sleep(0.2)
+        s22 = begin_with_focus_retry(FcitxCommitter(), app.wid)
+        s22.update_preedit("重置前占位")
+        time.sleep(0.2)
+        geo = subprocess.run(
+            ["xdotool", "getwindowgeometry", str(app.wid)],
+            capture_output=True, text=True, timeout=5,
+        ).stdout
+        gx = gy = 0
+        gh = 40
+        for line in geo.splitlines():
+            if "Position:" in line:
+                nums = re.findall(r"-?\d+", line)
+                gx, gy = int(nums[0]), int(nums[1])
+            if "Geometry:" in line:
+                nums = re.findall(r"\d+", line)
+                gh = int(nums[1])
+        xdotool("mousemove", str(gx + 12), str(gy + min(gh // 2, 60)))
+        xdotool("click", "1")
+        time.sleep(0.4)
+        probe = busctl_raw("CommitSegment", "sus", [s22.token, "1", "RESET壬重置段"])
+        time.sleep(0.2)
+        buf = latest_text(app)
+        rejected = probe.returncode != 0 and "StaleSession" in (probe.stderr + probe.stdout)
+        record(
+            "s22_reset_rejects_segment",
+            rejected and "RESET壬重置段" not in buf,
+            f"probe={(probe.stderr or probe.stdout).strip()[:80]!r}",
+        )
+        if not rejected:
+            s22.cancel()
+    except Exception as exc:  # noqa: BLE001
+        record("s22_reset_rejects_segment", False, f"{type(exc).__name__}: {exc}")
+
+    # -- S23: foreign preedit rejects the segment and is left in place -------
+    try:
+        focus_window(app.wid)
+        time.sleep(0.2)
+        xdotool("key", "ctrl+space")
+        time.sleep(0.4)
+        xdotool("type", "--delay", "45", "ma")
+        time.sleep(0.5)
+        probe_begin = gdbus_raw("BeginSession", [""])
+        foreign_visible = (
+            probe_begin.returncode != 0
+            and "ExistingPreedit" in (probe_begin.stderr + probe_begin.stdout)
+        )
+        if not foreign_visible:
+            xdotool("key", "Escape")
+            xdotool("key", "ctrl+space")
+            time.sleep(0.3)
+            skip(
+                "s23_foreign_preedit_rejects_segment",
+                "isolated fcitx did not keep a user preedit "
+                f"({(probe_begin.stderr or probe_begin.stdout).strip()[:80]})",
+            )
+        else:
+            # Own the field only after the user composition is cleared, then
+            # let pinyin replace the client preedit under the live token.
+            xdotool("key", "Escape")
+            time.sleep(0.3)
+            s23 = begin_with_focus_retry(FcitxCommitter(), app.wid)
+            s23.update_preedit("己方预编辑FOREIGN")
+            time.sleep(0.2)
+            xdotool("type", "--delay", "45", "ma")
+            time.sleep(0.5)
+            probe = busctl_raw(
+                "CommitSegment", "sus", [s23.token, "1", "FOREIGN癸外来段"]
+            )
+            time.sleep(0.2)
+            buf = latest_text(app)
+            rejected = probe.returncode != 0 and (
+                "StaleSession" in (probe.stderr + probe.stdout)
+            )
+            record(
+                "s23_foreign_preedit_rejects_segment",
+                rejected and "FOREIGN癸外来段" not in buf,
+                f"probe={(probe.stderr or probe.stdout).strip()[:90]!r}",
+            )
+            if not rejected:
+                s23.cancel()
+            xdotool("key", "Escape")
+            xdotool("key", "ctrl+space")
+            time.sleep(0.3)
+    except Exception as exc:  # noqa: BLE001
+        record("s23_foreign_preedit_rejects_segment", False, f"{type(exc).__name__}: {exc}")
+        xdotool("key", "Escape")
+        xdotool("keyup", "Control_L")
+
+    # -- S24: a segment echo must not resurrect across a later user key ------
+    try:
+        focus_window(app.wid)
+        time.sleep(0.2)
+        s24 = begin_with_focus_retry(FcitxCommitter(), app.wid)
+        kept = s24.commit_segment("AFTERKEY甲段")
+        seen = wait_contains(app, "AFTERKEY甲段")
+        time.sleep(0.2)
+        xdotool("type", "--delay", "40", "q")
+        time.sleep(0.4)
+        probe = busctl_raw("CommitSegment", "sus", [s24.token, "2", "AFTERKEY乙不应"])
+        time.sleep(0.2)
+        buf = latest_text(app)
+        record(
+            "s24_segment_then_key_rejects",
+            kept.committed
+            and seen
+            and probe.returncode != 0
+            and "StaleSession" in (probe.stderr + probe.stdout)
+            and "AFTERKEY乙不应" not in buf
+            and "AFTERKEY甲段q" in buf,
+            f"kept={kept.detail[:40]} probe={(probe.stderr or probe.stdout).strip()[:70]!r}",
+        )
+    except Exception as exc:  # noqa: BLE001
+        record("s24_segment_then_key_rejects", False, f"{type(exc).__name__}: {exc}")
+
+    # -- S25: a segment echo must not survive a later caret move -------------
+    try:
+        focus_window(app.wid)
+        time.sleep(0.2)
+        s25 = begin_with_focus_retry(FcitxCommitter(), app.wid)
+        kept = s25.commit_segment("AFTERCLICK甲段")
+        seen = wait_contains(app, "AFTERCLICK甲段")
+        time.sleep(0.2)
+        # A bare click on a committed GtkEntry does not always move the caret
+        # or emit Reset. Showing our preedit makes the click the same Reset
+        # path s8 already measured (Reset + SetSurroundingText).
+        s25.update_preedit("光标前预编辑")
+        time.sleep(0.15)
+        geo = subprocess.run(
+            ["xdotool", "getwindowgeometry", str(app.wid)],
+            capture_output=True, text=True, timeout=5,
+        ).stdout
+        gx = gy = 0
+        gh = 40
+        for line in geo.splitlines():
+            if "Position:" in line:
+                nums = re.findall(r"-?\d+", line)
+                gx, gy = int(nums[0]), int(nums[1])
+            if "Geometry:" in line:
+                nums = re.findall(r"\d+", line)
+                gh = int(nums[1])
+
+        def _click25() -> None:
+            xdotool("mousemove", str(gx + 12), str(gy + min(gh // 2, 60)))
+            xdotool("click", "1")
+
+        members25 = monitor_ic_calls(_click25, "s25-click")
+        probe = busctl_raw("CommitSegment", "sus", [s25.token, "2", "AFTERCLICK乙不应"])
+        time.sleep(0.2)
+        buf = latest_text(app)
+        record(
+            "s25_segment_then_caret_rejects",
+            kept.committed
+            and seen
+            and probe.returncode != 0
+            and "StaleSession" in (probe.stderr + probe.stdout)
+            and "AFTERCLICK乙不应" not in buf,
+            f"ic_calls={members25} probe={(probe.stderr or probe.stdout).strip()[:80]!r}",
+        )
+        if probe.returncode == 0:
+            s25.cancel()
+    except Exception as exc:  # noqa: BLE001
+        record("s25_segment_then_caret_rejects", False, f"{type(exc).__name__}: {exc}")
+
+    # -- S26: set_text after a segment, recorded from the events GTK sends ---
+    try:
+        focus_window(app.wid)
+        time.sleep(0.2)
+        s26 = begin_with_focus_retry(FcitxCommitter(), app.wid)
+        kept = s26.commit_segment("AFTERSET甲段")
+        seen = wait_contains(app, "AFTERSET甲段")
+        time.sleep(0.2)
+
+        def _set26() -> None:
+            app.send("SET 程序改写后的正文AFTERSET")
+
+        members = monitor_ic_calls(_set26, "s26-set-text")
+        time.sleep(0.3)
+        probe = busctl_raw("CommitSegment", "sus", [s26.token, "2", "AFTERSET乙不应"])
+        time.sleep(0.2)
+        buf = latest_text(app)
+        rejected = (
+            probe.returncode != 0
+            and "StaleSession" in (probe.stderr + probe.stdout)
+            and "AFTERSET乙不应" not in buf
+        )
+        if rejected and kept.committed and seen:
+            record(
+                "s26_segment_then_set_text_rejects",
+                True,
+                f"ic_calls={members} probe={(probe.stderr or probe.stdout).strip()[:60]!r}",
+            )
+        else:
+            limitation(
+                "s26_segment_then_set_text_rejects",
+                "programmatic set_text did not invalidate the segment token; "
+                f"kept={kept.committed} seen={seen} ic_calls={members} "
+                f"probe_rc={probe.returncode} probe={(probe.stderr or probe.stdout).strip()[:60]!r} "
+                f"leaked={'AFTERSET乙不应' in buf}",
+            )
+            if probe.returncode == 0:
+                s26.cancel()
+    except Exception as exc:  # noqa: BLE001
+        record("s26_segment_then_set_text_rejects", False, f"{type(exc).__name__}: {exc}")
+
+    # -- S27: focus away/back does not resurrect the segment token -----------
+    try:
+        focus_window(app.wid)
+        time.sleep(0.2)
+        s27 = begin_with_focus_retry(FcitxCommitter(), app.wid)
+        token27 = s27.token
+        kept = s27.commit_segment("AFTERFOCUS甲段")
+        seen = wait_contains(app, "AFTERFOCUS甲段")
+        time.sleep(0.2)
+        focus_window(other.wid)
+        app.wait_line("FOCUS_OUT", timeout=5.0)
+        time.sleep(0.3)
+        focus_window(app.wid)
+        time.sleep(0.4)
+        probe = busctl_raw("CommitSegment", "sus", [token27, "2", "AFTERFOCUS乙不应"])
+        time.sleep(0.2)
+        buf = latest_text(app)
+        revived = "AFTERFOCUS乙不应" in buf
+        fresh = begin_with_focus_retry(FcitxCommitter(), app.wid)
+        old_again = busctl_raw("CommitSegment", "sus", [token27, "2", "AFTERFOCUS丙不应"])
+        fresh.cancel()
+        record(
+            "s27_segment_focus_away_back_no_resurrect",
+            kept.committed
+            and seen
+            and (not revived)
+            and probe.returncode != 0
+            and "StaleSession" in (probe.stderr + probe.stdout)
+            and fresh.token != token27
+            and old_again.returncode != 0
+            and "AFTERFOCUS丙不应" not in latest_text(app),
+            f"probe={(probe.stderr or probe.stdout).strip()[:60]!r} "
+            f"old_again={(old_again.stderr or old_again.stdout).strip()[:40]!r} "
+            f"fresh_is_new={fresh.token != token27}",
+        )
+    except Exception as exc:  # noqa: BLE001
+        record("s27_segment_focus_away_back_no_resurrect", False, f"{type(exc).__name__}: {exc}")
+
+    run_empty_surround_regressions(app.wid or 0)
+    return shutdown(log_path, app, other)
 
 
 if __name__ == "__main__":

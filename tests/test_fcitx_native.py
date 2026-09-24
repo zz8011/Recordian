@@ -134,12 +134,22 @@ def test_native_fcitx_session_contract():
     )
     gtk_py = _find_gtk_python()
     tmp = tempfile.mkdtemp(prefix="recordian-native-")
+    for sub in ("config", "data", "cache", "home"):
+        os.makedirs(os.path.join(tmp, sub), exist_ok=True)
+    runtime = os.path.join(tmp, "run")
+    os.makedirs(runtime, exist_ok=True)
+    os.chmod(runtime, 0o700)
 
     xvfb, display = _start_xvfb()
     try:
         env = {
             **os.environ,
             "DISPLAY": display,
+            "HOME": os.path.join(tmp, "home"),
+            "XDG_CONFIG_HOME": os.path.join(tmp, "config"),
+            "XDG_DATA_HOME": os.path.join(tmp, "data"),
+            "XDG_CACHE_HOME": os.path.join(tmp, "cache"),
+            "XDG_RUNTIME_DIR": runtime,
             "RECORDIAN_NATIVE_TMP": tmp,
             "RECORDIAN_NATIVE_BUILD": str(build),
             "RECORDIAN_CANDIDATE_SRC": str(REPO / "src"),
@@ -149,15 +159,17 @@ def test_native_fcitx_session_contract():
             "QT_IM_MODULE": "fcitx",
             "XMODIFIERS": "@im=fcitx",
         }
-        # Deliberately do NOT inherit the user's real session: dbus-run-session
-        # replaces DBUS_SESSION_BUS_ADDRESS with a private bus.
+        # Private bus inside this Xvfb. Do not keep the host session bus or Wayland.
+        env.pop("WAYLAND_DISPLAY", None)
+        env.pop("DBUS_SESSION_BUS_ADDRESS", None)
+        focus = os.environ.get("RECORDIAN_NATIVE_FOCUS", "")
         run = subprocess.run(
             ["dbus-run-session", "--", sys.executable, str(DRIVER)],
             env=env,
             cwd=str(REPO),
             capture_output=True,
             text=True,
-            timeout=300,
+            timeout=400 if focus == "browser-segments" else 300,
         )
         raw = run.stdout + ("\n--- stderr ---\n" + run.stderr if run.stderr else "")
         validation_log.write_text(
@@ -174,7 +186,17 @@ def test_native_fcitx_session_contract():
             f"native session driver failed rc={run.returncode}; "
             f"full log: {validation_log}\n{summary}"
         )
-        assert "SCENARIO s1_commit_unicode_once: PASS" in run.stdout, summary
+        if focus == "browser-segments":
+            assert "SCENARIO s10b_browser_textarea_segments_once: PASS" in run.stdout, summary
+            assert "SCENARIO s14b_browser_contenteditable_segments_once: PASS" in run.stdout, summary
+            assert "SCENARIO s16_editor_commit_once: SKIP" in run.stdout, summary
+            assert "SCENARIO s17_real_asr_worker_commit_once: SKIP" in run.stdout, summary
+        else:
+            assert "SCENARIO s1_commit_unicode_once: PASS" in run.stdout, summary
+            if focus == "gtk-segments":
+                assert "SCENARIO s30_empty_surround_many_preedits_then_segment: PASS" in run.stdout, summary
+                assert "SCENARIO s31_unknown_before_unrelated_prefix_stays_stale: PASS" in run.stdout, summary
+                assert "SCENARIO s32_foreign_key_before_empty_surround_commit_stale: PASS" in run.stdout, summary
     finally:
         # Only processes this test started: Xvfb by PID. fcitx5 and the GTK
         # apps are children of the driver and already reaped by it; the

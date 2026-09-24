@@ -436,6 +436,20 @@ def build_ptt_hotkey_handlers(
         # stop the NEW recording (TOCTOU). A lost race is a silent no-op —
         # the user-visible limit notification is emitted only for the stop
         # that was actually accepted.
+        with state_lock:
+            worker = state.get("realtime_asr_worker")
+            if (
+                state.get("process") is record_handle
+                and isinstance(worker, _RealtimeASRWorkerHandle)
+                and bool(getattr(worker, "continuous", False))
+            ):
+                # Continuous capability CONFIRMED (segments-capable
+                # composition session + Confucius realtime worker): segment
+                # rotation enforces the per-socket audio budget on sample
+                # counts, so the 25 s fallback guard must not kill the one
+                # microphone. Mere worker existence (old plugin / refused /
+                # preview-only) does NOT skip — the guard stays in force.
+                return
         _stop_recording(expected_handle=record_handle, limit_s=limit_s)
 
     def _start_recording(trigger_source: str = "hotkey") -> bool:
@@ -528,6 +542,20 @@ def build_ptt_hotkey_handlers(
             routing = resolve_remote_paste_routing(args)
             # Reads the config file — keep file IO outside state_lock.
             auto_hard_enter = _resolve_auto_hard_enter(args)
+
+            def _capture_fatal(reason: str) -> None:
+                # Bound to THIS start's exact record handle: a fatal from the
+                # realtime/continuous worker (network, monitor overflow,
+                # stale/uncertain IME) stops only its own recording. A late
+                # fire after the slot was consumed is a silent no-op.
+                on_state(
+                    {
+                        "event": "log",
+                        "message": f"realtime_capture_fatal: {reason} — 终止本次采集",
+                    }
+                )
+                _stop_recording(expected_handle=record_handle)
+
             # Protective duration limit (duration_guard.py). Confucius only;
             # other providers get no timer.
             duration_limit_s = recording_limit_s_for_provider(provider)
@@ -565,6 +593,7 @@ def build_ptt_hotkey_handlers(
                         normalize_final_text=_normalize_final_text,
                         on_state=on_state,
                         refine_enabled=refiner is not None,
+                        on_capture_fatal=_capture_fatal,
                     )
                     if realtime_worker is not None:
                         if state.get("process") is record_handle:
@@ -798,6 +827,7 @@ def build_ptt_hotkey_handlers(
                 realtime_composition_session: object | None = None
                 realtime_semif_applied = False
                 realtime_composition_started = False
+                realtime_segments_committed = 0
                 if isinstance(realtime_asr_worker, _RealtimeASRWorkerHandle):
                     asr_timeout_s = float(getattr(args, "asr_timeout_s", 30.0))
                     realtime_composition_started = bool(
@@ -898,13 +928,40 @@ def build_ptt_hotkey_handlers(
                         )
                         if realtime_asr_worker.error:
                             on_state({"event": "log", "message": f"realtime_asr_failed: {realtime_asr_worker.error}"})
-                            # worker.final_text is empty on failure: a partial
-                            # hypothesis is never treated as the final
-                            # transcript. When a composition session was
+                            # A failure does not imply an empty
+                            # worker.final_text: continuous dictation keeps the
+                            # prefix it already committed, while a preview-only
+                            # failure leaves no final text at all. Neither a
+                            # partial hypothesis nor that committed prefix is
+                            # treated as the final transcript. When a
+                            # composition session was
                             # bound, commit_info carries an uncertain/stale
                             # outcome and the pipeline suppresses the
                             # fallback; preview-only failures fall back to
                             # the full-audio transcription below.
+                # Once any prefix segment was committed through the IME token,
+                # the full-paragraph refiner must not rewrite that prefix:
+                # the pipeline gets no refiner at all, and its existing
+                # "already committed" contract keeps the prefetched commit
+                # (no re-transcription, no second commit, no file fallback).
+                if isinstance(realtime_asr_worker, _RealtimeASRWorkerHandle):
+                    realtime_segments_committed = int(
+                        getattr(realtime_asr_worker, "segments_committed", 0) or 0
+                    )
+                    if not realtime_outcome:
+                        realtime_outcome = str(getattr(realtime_asr_worker, "outcome", "") or "")
+                pipeline_refiner = refiner if realtime_segments_committed == 0 else None
+                if refiner is not None and realtime_segments_committed > 0:
+                    on_state(
+                        {
+                            "event": "log",
+                            "message": (
+                                "continuous_refine_suppressed: "
+                                f"segments_committed={realtime_segments_committed} — "
+                                "已提交前缀不参与整段 refine"
+                            ),
+                        }
+                    )
                 run_postprocess_pipeline(
                     PostprocessPipelineContext(
                         args=args,
@@ -916,7 +973,7 @@ def build_ptt_hotkey_handlers(
                         owner_last_score=owner_last_score,
                         state=state,
                         provider=provider,
-                        refiner=refiner,
+                        refiner=pipeline_refiner,
                         committer=committer,
                         auto_lexicon=auto_lexicon,
                         refine_postprocess_rule=refine_postprocess_rule,
@@ -935,6 +992,29 @@ def build_ptt_hotkey_handlers(
                         on_error=on_error,
                     )
                 )
+                if (
+                    realtime_segments_committed > 0
+                    and realtime_outcome not in {"committed", "released_for_refine"}
+                ):
+                    # A continuous turn that committed a prefix and then
+                    # failed is NOT a success: the pipeline result carries the
+                    # preserved prefix (never a fallback re-commit), and this
+                    # error keeps the failure visible to the user instead of
+                    # masquerading as a clean commit.
+                    try:
+                        on_error(
+                            {
+                                "event": "error",
+                                "error": (
+                                    "continuous_partial_failure: "
+                                    f"segments_committed={realtime_segments_committed} "
+                                    f"outcome={realtime_outcome or 'uncertain'} — "
+                                    "已提交前缀保留，剩余内容未写入"
+                                ),
+                            }
+                        )
+                    except Exception:  # noqa: BLE001
+                        pass
                 leftover_session = getattr(realtime_asr_worker, "composition_session", None)
                 cancel_leftover = getattr(leftover_session, "cancel", None)
                 if callable(cancel_leftover):

@@ -80,9 +80,10 @@ gdbus call --session --dest org.fcitx.Fcitx5 --object-path /controller \
 | 方法 | 签名 | 说明 |
 |------|------|------|
 | `Ping` | `() → s` | 存活探测，返回 `ok` |
-| `BeginSession` | `(s) → s` | 把流式会话绑定到**当前焦点**且非 dummy、非密码的 IC；返回 `<token> preedit=<0/1> frontend=<f> program=<p>` |
+| `BeginSession` | `(s) → s` | 把流式会话绑定到**当前焦点**且非 dummy、非密码的 IC；返回 `<token> preedit=<0/1> frontend=<f> program=<p> segments=1`。`segments=1` 表示本桥支持 `CommitSegment`；旧桥没有该标记 |
 | `UpdatePreedit` | `(ss) → s` | 只替换绑定 IC 的 client preedit，不提交、不抢焦点 |
-| `CommitSession` | `(ss) → s` | 清空 preedit 后把最终文本**提交一次**，token 随即失效 |
+| `CommitSegment` | `(sus) → s` | 在**同一 token** 上提交一段。`sequence` 从 1 起，每次接受后恰好 +1。重复或跳号拒绝且不写入、不推进、不消费 token。成功返回 `segment <n> <frontend> <program>`（空文本为 `segment <n> cleared`）。失焦、按键、reset、敏感能力、TTL、外来 preedit 与 `CommitSession` 相同，命中则本段不写 |
+| `CommitSession` | `(ss) → s` | 清空 preedit 后把最终文本**提交一次**，token 随即失效。分段成功之后仍用开始时的同一个 token |
 | `CancelSession` | `(s) → s` | 清空 preedit、丢弃会话，不提交 |
 | `CommitText` | `(s) → s` | 旧非流式接口：严格要求当前有焦点 IC，无 `mostRecentInputContext` 回退 |
 
@@ -99,13 +100,21 @@ gdbus call --session --dest org.fcitx.Fcitx5 --object-path /controller \
 - toolkit Reset（同输入框内鼠标点击 / 应用主动 reset）、光标或
   SurroundingText 变化、手动切换输入法（真实事件 watcher：
   `InputContextReset` / `InputContextSurroundingTextUpdated` /
-  `InputContextSwitchInputMethod`）；
+  `InputContextSwitchInputMethod`）。`CommitSegment` 自己的提交会带来
+  一次周围文本更新：只接受「提交前文本/选区（Unicode 光标）插入本段后」
+  的那一帧，以及与该帧完全相同的重复回执。其它文本或光标变化、Reset、
+  失焦仍然失效。待确认标记在回执、取消、失败和 TTL 时清掉；
 - 同一焦点上开始新会话（旧 token 失效并**从会话表移除**——容量只统计
   活跃会话，同一焦点的连发 Begin 不会因残留 finished 条目耗尽
   `kMaxSessions`）；
 - token 已 Commit/Cancel，或超过 **120s 无活动 TTL**（自最后一次成功
-  UpdatePreedit——含 preview-only no-op——起算，而非 Begin 后 120s；
-  TTL 到期只清除本会话自己拥有的 preedit，不残留）。
+  UpdatePreedit——含 preview-only no-op——或成功的 CommitSegment 起算，
+  而非 Begin 后 120s；TTL 到期只清除本会话自己拥有的 preedit，不残留）。
+
+`CommitSegment` 的序号错误（`BadSequence`）不使 token 失效，也不写入。
+回复丢失时客户端必须把该次调用当作终态不确定：不得重试同一序号、不得
+改发下一个序号、不得重新 Begin、不得退回 `CommitText`。最终仍由一次
+`CommitSession` 消费 token。
 
 ### 安全与兼容性约定
 

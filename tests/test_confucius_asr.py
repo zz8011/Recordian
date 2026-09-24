@@ -33,6 +33,7 @@ from recordian.providers.confucius_asr import (
     MAX_SYSTEM_PROMPT_CHARS,
     REALTIME_CHUNK_SIZE_SEC,
     ConfuciusASRProvider,
+    ConfuciusBusyRejected,
     ConfuciusProtocolError,
     ConfuciusRealtimeSession,
     compose_system_prompt,
@@ -327,6 +328,97 @@ def _f32_frame(n_samples: int = 160) -> bytes:
     return np.zeros(n_samples, dtype="<f4").tobytes()
 
 
+class _PeerCloseWebSocket(FakeWebSocket):
+    """websocket-client transport semantics for a peer-initiated CLOSE.
+
+    The real ``recv_data_frame()`` answers a peer CLOSE with ``send_close()``,
+    which flips ``connected`` to False; ``close()`` then returns immediately
+    WITHOUT releasing the TCP socket. Only ``shutdown()`` frees the transport.
+    """
+
+    def __init__(self, greeting: object = None, on_eos=None):
+        super().__init__(greeting, on_eos)
+        self.connected = True
+        self.transport_closed = False
+        self.shutdown_calls = 0
+
+    def recv_data_frame(self, control_frame: bool = False):
+        opcode, frame = super().recv_data_frame(control_frame=control_frame)
+        if opcode == _OP_CLOSE:
+            # Exactly websocket-client: the CLOSE is acknowledged and
+            # ``connected`` is cleared before the caller sees the frame.
+            self.connected = False
+        return opcode, frame
+
+    def close(self, timeout=None):
+        if not self.connected:
+            # The bug under test: the real close() gives up here and leaves
+            # the socket (and the server's single-model lock) alive.
+            return
+        super().close(timeout=timeout)
+        self.transport_closed = True
+
+    def shutdown(self):
+        self.shutdown_calls += 1
+        self.connected = False
+        if not self.transport_closed:
+            self.transport_closed = True
+            super().close(timeout=None)  # wake a receiver parked on recv
+
+
+class _ModelLockWSModule(_FakeWSModuleExceptions):
+    """Proxy for the server's single-model lock.
+
+    While the previous socket's transport was never shut down, a new
+    connection receives CLOSE 4429 (busy); once the transport is closed, the
+    healthy socket is handed out.
+    """
+
+    def __init__(self, first: _PeerCloseWebSocket, second: FakeWebSocket) -> None:
+        self.first = first
+        self.second = second
+        self.urls: list[str] = []
+        self._handed_out = False
+
+    def create_connection(self, url, timeout=None):
+        self.urls.append(url)
+        if not self._handed_out:
+            self._handed_out = True
+            return self.first
+        if not self.first.transport_closed:
+            busy = FakeWebSocket()
+            busy.feed_close(4429)
+            return busy
+        return self.second
+
+
+class TestPeerCloseTransportTeardown:
+    def test_peer_close_shuts_down_transport_so_next_session_is_not_busy(self):
+        first = _PeerCloseWebSocket(
+            greeting=_connected_greeting(),
+            on_eos=lambda ws: (ws.feed(_success(" final", reset=True)), ws.feed_close(1000)),
+        )
+        second = FakeWebSocket(greeting=_connected_greeting())
+        module = _ModelLockWSModule(first, second)
+
+        session = _make_session(first, ws_module=module)
+        result = session.finish()
+        assert result.text == " final"
+
+        # The peer CLOSE cleared ``connected`` before finish() closed the
+        # socket: close() was a no-op, so shutdown() must have freed it.
+        assert first.connected is False
+        assert first.shutdown_calls >= 1, (
+            "ws.shutdown() must be called even when close() found connected=False"
+        )
+        assert first.transport_closed is True
+
+        # Rapid next session: a leaked transport would hold the model lock and
+        # hand out CLOSE 4429; the closed transport hands out the healthy one.
+        nxt = _make_session(second, ws_module=module)
+        nxt.cancel()
+
+
 # ---------------------------------------------------------------------------
 # Handshake
 # ---------------------------------------------------------------------------
@@ -432,6 +524,94 @@ class TestHandshake:
             sanitize_ws_url("ws://user:pass@127.0.0.1:8272/asr?token=abc")
             == "ws://127.0.0.1:8272/asr"
         )
+
+
+# ---------------------------------------------------------------------------
+# Committed-prefix replay regression (r3/r4 causal comparison)
+# ---------------------------------------------------------------------------
+class TestCommittedPrefixNotReplayed:
+    """The previous committed transcript must never enter ``system_prompt``.
+
+    r3 (default flags, fixture/audio hash identical to r4) injected the
+    committed tail as ``已提交: ...`` and the model replayed it: normalized
+    audio replay 390 chars / 18 reference occurrences vs the 300 / 15 ground
+    truth. r4 with the prefix injection disabled passed strictly. These tests
+    capture the real outgoing header on the frame-level fake socket, so a
+    regression fails at the wire boundary, not in a helper.
+    """
+
+    def _provider(self, ws: FakeWebSocket, **kwargs) -> ConfuciusASRProvider:
+        return ConfuciusASRProvider(
+            "ws://127.0.0.1:8272/asr_stream_api_v1",
+            api_key="sekrit",
+            language="Chinese",
+            ws_module=FakeWSModule(ws),
+            **kwargs,
+        )
+
+    def test_prefix_ignored_but_configured_context_and_hotwords_kept(self):
+        ws = FakeWebSocket(greeting=_connected_greeting())
+        provider = self._provider(ws, context="会议记录")
+        committed = "上一段已经提交的文字不应重新进入ASR提示"
+        session = provider.start_realtime_session(hotwords=["露西", "小二"], prefix_context=committed)
+        try:
+            header = json.loads(ws.sent_text[0])
+        finally:
+            session.cancel()
+
+        prompt = header["system_prompt"]
+        assert committed not in prompt
+        assert "已提交" not in prompt
+        # The explicit configured context/hotwords prompt is retained.
+        assert "会议记录" in prompt
+        assert "露西" in prompt and "小二" in prompt
+        # Normal start shape is unchanged.
+        assert header["requestId"]
+        assert header["channels"] == 1
+        assert header["sample_rate"] == 16000
+        assert header["language"] == "Chinese"
+        assert header["secret_key"] == "sekrit"
+        assert header["use_vad"] is False
+        assert header["mode"] == "slow"
+
+    def test_cancel_event_still_accepted_and_honored(self):
+        ws = FakeWebSocket(greeting=_connected_greeting())
+        provider = self._provider(ws)
+        session = provider.start_realtime_session(
+            hotwords=["甲"], prefix_context="旧文本", cancel_event=threading.Event()
+        )
+        try:
+            assert len(ws.sent_text) == 1  # normal start still connects and handshakes
+            assert "旧文本" not in ws.sent_text[0]
+        finally:
+            session.cancel()
+
+        # A pre-set event still aborts before any connection attempt.
+        dead = FakeWebSocket()
+        dead_module = FakeWSModule(dead)
+        cancelled = ConfuciusASRProvider(
+            "ws://127.0.0.1:8272/asr_stream_api_v1", ws_module=dead_module
+        )
+        event = threading.Event()
+        event.set()
+        with pytest.raises(RuntimeError, match="cancelled before ready"):
+            cancelled.start_realtime_session(hotwords=[], prefix_context="旧文本", cancel_event=event)
+        assert dead_module.urls == []
+        assert dead.closed is False
+
+    def test_prompt_stays_within_existing_budget_without_prefix(self):
+        ws = FakeWebSocket(greeting=_connected_greeting())
+        provider = self._provider(ws, context="会" * (MAX_SYSTEM_PROMPT_CHARS + 1000))
+        session = provider.start_realtime_session(hotwords=["甲"], prefix_context="错" * 256)
+        try:
+            header = json.loads(ws.sent_text[0])
+        finally:
+            session.cancel()
+        prompt = header["system_prompt"]
+        assert len(prompt) <= MAX_SYSTEM_PROMPT_CHARS
+        assert prompt.startswith("会")
+        assert "热词参考: 甲" in prompt
+        assert "错" not in prompt
 
 
 # ---------------------------------------------------------------------------
@@ -1316,3 +1496,110 @@ class TestLoopback:
         assert server.binary_frames == n_frames  # every frame arrived, in order
         audio_seconds = n_frames * REALTIME_CHUNK_SIZE_SEC
         assert elapsed < audio_seconds + 10.0  # inside the declared deadline
+
+
+# ---------------------------------------------------------------------------
+# CLOSE 4429 (server busy) handshake retry policy
+# ---------------------------------------------------------------------------
+class _ScriptedWSModule(_FakeWSModuleExceptions):
+    """Hands out a freshly built socket per connection attempt."""
+
+    def __init__(self, factories: list):
+        self.factories = list(factories)
+        self.attempts = 0
+        self.sockets: list[FakeWebSocket] = []
+
+    def create_connection(self, url, timeout=None):
+        self.attempts += 1
+        ws = self.factories[min(self.attempts - 1, len(self.factories) - 1)]()
+        self.sockets.append(ws)
+        return ws
+
+
+def _busy_socket() -> FakeWebSocket:
+    ws = FakeWebSocket()
+    ws.feed_close(4429)
+    return ws
+
+
+class TestBusyRetry:
+    def test_4429_before_pcm_is_retried_then_connects(self):
+        module = _ScriptedWSModule([_busy_socket, lambda: FakeWebSocket(greeting=_connected_greeting())])
+        session = _retry_session(module)
+        started = time.monotonic()
+        try:
+            session.start(busy_retry_s=2.0)
+        finally:
+            session.cancel()
+        elapsed = time.monotonic() - started
+        assert module.attempts == 2
+        assert module.sockets[0].closed, "the rejected socket is closed before retrying"
+        assert session.audio_accepted is False
+        assert elapsed < 1.0, "first backoff step is 0.1 s"
+
+    def test_4429_retry_budget_is_bounded(self):
+        module = _ScriptedWSModule([_busy_socket])
+        session = _retry_session(module)
+        started = time.monotonic()
+        with pytest.raises(ConfuciusBusyRejected):
+            session.start(busy_retry_s=0.35)
+        elapsed = time.monotonic() - started
+        assert module.attempts >= 2
+        assert elapsed < 1.0, "retry loop must stop at the busy budget"
+        assert session.audio_accepted is False
+
+    def test_4429_retry_is_cancel_aware(self):
+        module = _ScriptedWSModule([_busy_socket])
+        session = _retry_session(module)
+        cancel_event = threading.Event()
+        threading.Timer(0.15, cancel_event.set).start()
+        started = time.monotonic()
+        with pytest.raises(RuntimeError, match="cancelled"):
+            session.start(cancel_event=cancel_event, busy_retry_s=5.0)
+        assert time.monotonic() - started < 1.0
+
+    def test_precancelled_start_never_connects(self):
+        module = _ScriptedWSModule([_busy_socket])
+        session = _retry_session(module)
+        cancel_event = threading.Event()
+        cancel_event.set()
+        with pytest.raises(RuntimeError, match="cancelled"):
+            session.start(cancel_event=cancel_event)
+        assert module.attempts == 0
+
+    def test_other_handshake_close_codes_are_not_retried(self):
+        def _auth_rejected() -> FakeWebSocket:
+            ws = FakeWebSocket()
+            ws.feed_close(4401)
+            return ws
+
+        module = _ScriptedWSModule([_auth_rejected])
+        session = _retry_session(module)
+        with pytest.raises(ConfuciusProtocolError, match="4401"):
+            session.start(busy_retry_s=2.0)
+        assert module.attempts == 1
+
+    def test_4429_after_audio_accepted_is_terminal(self):
+        ws = FakeWebSocket(greeting=_connected_greeting())
+        session = _make_session(ws)
+        try:
+            session.push_audio(_f32_frame(160))
+            assert session.audio_accepted is True
+            ws.feed_close(4429)
+            # Terminal failure, never a silent retry of accepted audio.
+            with pytest.raises(ConfuciusProtocolError):
+                session.finish()
+        finally:
+            session.cancel()
+
+
+def _retry_session(module: _ScriptedWSModule) -> ConfuciusRealtimeSession:
+    return ConfuciusRealtimeSession(
+        ws_url="ws://127.0.0.1:8272/asr_stream_api_v1",
+        api_key=None,
+        language="",
+        system_prompt="",
+        timeout_s=2.0,
+        use_vad=False,
+        ws_module=module,
+    )

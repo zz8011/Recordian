@@ -33,6 +33,9 @@
 | `providers/confucius_asr.py` | Confucius4-R2T2 streaming provider (WebSocket client, v1 protocol) |
 | `server/confucius_streaming_server.py` | Local single-user Confucius streaming server (see `server/README-confucius.md`) |
 | `hotword_corrector.py` | Deterministic hotword correction (常用词/asr_context + `错词→正词` + ASCII/拼音), runs ASR → refine 之间 |
+| `continuous_dictation.py` / `duration_guard.py` | One microphone and IME token across sample-counted Confucius segments; bounded raw tail and failure handling |
+| `streaming_correction.py` / `semif_judge.py` / `jev_judge.py` | Optional asynchronous candidate judgment via SemIf or official Jev, contextual aliases, and shared corrector factory |
+| `spoken_formatting.py` / `text_cleanup.py` | Spoken numbers and URL dots, with literal-text protection |
 | `auto_lexicon.py` | Auto-learned hotword lexicon (fragment-filtered, separate auto quota) |
 | `hotkey_dictate.py` | Hotkey-based dictation |
 | `voice_wake.py` | Wake-word activation |
@@ -57,6 +60,7 @@
 - **ASR provider changes** → `src/recordian/providers/INDEX.md`
 - **Text refinement** → `src/recordian/providers/` + `postprocess_pipeline.py`
 - **Hotkey configuration** → `hotkey_dictate.py` + `recordian-hotkey-dictate --help`
+- **Continuous Alt dictation** → `continuous_dictation.py` + `docs/CONTINUOUS-DICTATION.zh-CN.md`
 - **Local streaming ASR server** → `server/confucius_streaming_server.py` + `server/README-confucius.md`
 - **Wake word** → `voice_wake.py`
 - **Config schema** → `runtime_config.py` + `pyproject.toml`
@@ -84,7 +88,7 @@ limits in `server/README-confucius.md`; design/acceptance in `docs/STREAMING-IME
 - **Text refine**: `cloud_llm_refiner.py` (HTTP LLM) or `llamacpp_text_refiner.py` (local)
 - **Wake word**: `voice_wake.py` — separate from hotkey mode
 - **Tray**: `tray_app.py` — system tray GUI; `tray_settings.py` for settings UI
-- **No reset**: Conversation/transcript is never truncated. Memory stays continuous.
+- **Continuous capture**: Audio is assigned to bounded ASR sessions; committed input remains in the application. Correction context and in-memory history have explicit bounds.
 
 ## Common Tasks
 

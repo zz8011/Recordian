@@ -385,3 +385,168 @@ def test_noop_keyup_does_not_poison_next_async_stop(monkeypatch: pytest.MonkeyPa
         assert session.calls["noop_stop"] == 1
     finally:
         session.close()
+
+
+# ---------------------------------------------------------------------------
+# Continuous partial failure stays visible (controller on_error)
+# ---------------------------------------------------------------------------
+
+import argparse  # noqa: E402
+import io  # noqa: E402
+
+from recordian.hotkey_dictate import build_ptt_hotkey_handlers  # noqa: E402
+from recordian.linux_dictate import RecordProcessHandle  # noqa: E402
+from recordian.realtime_asr import _RealtimeASRWorkerHandle  # noqa: E402
+
+
+class _CtlFakeCommitter:
+    backend_name = "stdout"
+    target_window_id = None
+
+    def commit(self, text: str):  # noqa: ANN001, ANN202
+        return types.SimpleNamespace(backend="stdout", committed=True, detail="printed")
+
+
+class _CtlConfuciusProvider:
+    provider_name = "confucius-asr"
+
+    def transcribe_file(self, audio_path, hotwords):  # noqa: ANN001, ANN201, ANN202
+        raise AssertionError("pipeline is faked; transcribe_file must not run")
+
+
+def _continuous_controller(monkeypatch: pytest.MonkeyPatch, worker: _RealtimeASRWorkerHandle):  # noqa: ANN202
+    """build_ptt_hotkey_handlers with every side effect faked; returns the
+    collected events and the pipeline contexts."""
+    events: list[dict[str, object]] = []
+    contexts: list[object] = []
+    pipeline_done = threading.Event()
+
+    def _fake_start_record_process(**kwargs: object) -> RecordProcessHandle:
+        kwargs["output_path"].write_bytes(b"")  # type: ignore[union-attr]
+        return RecordProcessHandle(
+            process=types.SimpleNamespace(poll=lambda: 0),
+            monitor_stream=io.BytesIO(b""),
+        )
+
+    monkeypatch.setattr("recordian.recording_controller.ensure_ffmpeg_available", lambda: "/usr/bin/ffmpeg")
+    monkeypatch.setattr(
+        "recordian.recording_controller.choose_record_backend", lambda requested, ffmpeg_bin: "ffmpeg-pulse"
+    )
+    monkeypatch.setattr(
+        "recordian.recording_controller.resolve_committer", lambda backend: _CtlFakeCommitter()
+    )
+    monkeypatch.setattr(
+        "recordian.recording_controller.create_provider", lambda args: _CtlConfuciusProvider()
+    )
+    monkeypatch.setattr("recordian.recording_controller.get_focused_window_id", lambda: None)
+    monkeypatch.setattr("recordian.recording_controller.start_record_process", _fake_start_record_process)
+    monkeypatch.setattr("recordian.recording_controller.stop_record_process", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "recordian.recording_controller.start_wake_session_monitor", lambda context: types.SimpleNamespace()
+    )
+    monkeypatch.setattr(
+        "recordian.recording_controller._start_realtime_asr_worker", lambda **kwargs: worker
+    )
+
+    def _fake_pipeline(context) -> None:  # noqa: ANN001
+        contexts.append(context)
+        pipeline_done.set()
+
+    monkeypatch.setattr("recordian.recording_controller.run_postprocess_pipeline", _fake_pipeline)
+
+    args = argparse.Namespace(
+        cooldown_ms=0,
+        record_backend="ffmpeg-pulse",
+        commit_backend="stdout",
+        enable_auto_lexicon=False,
+        debug_diagnostics=False,
+        enable_text_refine=False,
+        warmup=False,
+        record_format="wav",
+        input_device="default",
+        channels=1,
+        sample_rate=16000,
+        wake_use_semantic_gate=False,
+        wake_owner_verify=False,
+        hotword=[],
+        auto_hard_enter=False,
+        enable_streaming_refine=False,
+        enable_streaming_commit=True,
+    )
+    start, stop, _exit, _stop_event = build_ptt_hotkey_handlers(
+        args=args,
+        on_result=events.append,
+        on_error=events.append,
+        on_busy=events.append,
+        on_state=events.append,
+    )
+    return types.SimpleNamespace(
+        start=start, stop=stop, events=events, contexts=contexts, pipeline_done=pipeline_done
+    )
+
+
+def _finished_worker(*, segments: int, outcome: str) -> _RealtimeASRWorkerHandle:
+    thread = threading.Thread(target=lambda: None, daemon=True)
+    thread.start()
+    worker = _RealtimeASRWorkerHandle(thread=thread, continuous=True)
+    worker.segments_committed = segments
+    worker.outcome = outcome
+    worker.final_text = "第一段。第二段。"
+    worker.commit_info = {
+        "backend": "fcitx",
+        "committed": segments > 0,
+        "detail": "continuous_prefix_kept;ime_stale" if segments else "realtime_cancelled",
+        "outcome": "committed" if segments else outcome,
+        "segments_committed": segments,
+    }
+    return worker
+
+
+def test_committed_prefix_failure_emits_visible_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    worker = _finished_worker(segments=2, outcome="uncertain")
+    h = _continuous_controller(monkeypatch, worker)
+
+    assert h.start() is True
+    assert h.stop() is True
+    assert h.pipeline_done.wait(timeout=1.0) is True
+
+    errors = [e for e in h.events if e.get("event") == "error"]
+    assert any("continuous_partial_failure" in str(e.get("error", "")) for e in errors), (
+        "a failed continuous turn with a committed prefix must surface a visible "
+        "error, not masquerade as success"
+    )
+    # The pipeline still got the preserved-prefix commit_info (no fallback).
+    assert h.contexts[0].prefetched_commit_info["committed"] is True
+    assert h.contexts[0].prefetched_commit_info["segments_committed"] == 2
+
+
+def test_clean_continuous_commit_emits_no_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    worker = _finished_worker(segments=2, outcome="committed")
+    worker.commit_info["detail"] = "continuous_final"
+    h = _continuous_controller(monkeypatch, worker)
+
+    assert h.start() is True
+    assert h.stop() is True
+    assert h.pipeline_done.wait(timeout=1.0) is True
+
+    errors = [e for e in h.events if e.get("event") == "error"]
+    assert errors == [], "a fully committed continuous turn is a normal result"
+
+
+def test_no_segments_failure_needs_no_partial_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    worker = _finished_worker(segments=0, outcome="cancelled")
+    worker.commit_info = {
+        "backend": "fcitx",
+        "committed": False,
+        "detail": "realtime_cancelled",
+        "outcome": "cancelled",
+        "segments_committed": 0,
+    }
+    h = _continuous_controller(monkeypatch, worker)
+
+    assert h.start() is True
+    assert h.stop() is True
+    assert h.pipeline_done.wait(timeout=1.0) is True
+
+    errors = [e for e in h.events if e.get("event") == "error"]
+    assert not any("continuous_partial_failure" in str(e.get("error", "")) for e in errors)

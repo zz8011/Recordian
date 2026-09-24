@@ -48,7 +48,9 @@ _RECOMMENDED_LOCAL_FAST_PTT: dict[str, Any] = {
     "enable_text_refine": False,
     "enable_voice_wake": False,
     "enable_remote_paste": False,
-    "enable_semif_correction": False,
+    # Contextual correction is intentionally absent: applying the recommended
+    # profile must not change a user's provider, SemIf endpoint, Jev budget,
+    # enabled flag, or aliases. Fresh installs stay off via the generic default.
     "trigger_mode": "ptt",
     "hotkey": "<ctrl_r>",
     "toggle_hotkey": "<alt_r>",
@@ -78,6 +80,11 @@ PROVIDER_CHOICES: tuple[tuple[str, str], ...] = (
     ("confucius-asr", "流式 Confucius"),
     ("qwen-asr", "本机 Qwen"),
     ("http-cloud", "网络识别服务"),
+)
+
+CORRECTION_PROVIDER_CHOICES: tuple[tuple[str, str], ...] = (
+    ("jev", "官方Jev（沿用本机登录）"),
+    ("semif", "内网SemIf"),
 )
 
 RECORD_BACKEND_CHOICES: tuple[tuple[str, str], ...] = (

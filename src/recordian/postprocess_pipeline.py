@@ -829,7 +829,8 @@ def _apply_final_semif(
     (``prefetched_semif_applied``); this covers the remaining real entry
     points: the full-audio fallback after a preview-only worker failure and
     plain oneshot dictation. Deterministic snapshot first, then at most one
-    short end-of-sentence budget — never blocks longer than ``semif_timeout_s``.
+    provider budget from ``corrector_from_args`` (SemIf stays within 0.35 s;
+    official Jev uses its own budget). Preview text does not wait here.
     """
     if not text.strip():
         return text
@@ -848,12 +849,7 @@ def _apply_final_semif(
             continue
         seen.add(t)
         merged.append(t)
-    corrector = _streaming_correction.StreamingHotwordCorrector(
-        merged,
-        endpoint=str(getattr(args, "semif_endpoint", "") or ""),
-        timeout_s=float(getattr(args, "semif_timeout_s", 0.12) or 0.12),
-        enabled=True,
-    )
+    corrector = _streaming_correction.corrector_from_args(args, merged)
     try:
         return corrector.finish(text)
     except Exception as exc:  # noqa: BLE001

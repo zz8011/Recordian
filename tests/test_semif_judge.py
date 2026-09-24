@@ -197,3 +197,55 @@ def test_request_exception_keeps_original() -> None:
         session=_Session(),
     )
     assert client.choose("今天十七度", _OPTIONS) is None
+
+
+class _MultiSession:
+    def __init__(self, answers: object) -> None:
+        self.answers = answers
+        self.payloads: list[dict[str, object]] = []
+
+    def post(self, url: str, json: dict | None = None, timeout: float | None = None) -> object:
+        self.payloads.append({"url": url, "json": json, "timeout": timeout})
+
+        class _Response:
+            def __init__(self, body: object) -> None:
+                self._body = body
+
+            def raise_for_status(self) -> None:
+                return None
+
+            def json(self) -> object:
+                return self._body
+
+        if isinstance(self.answers, Exception):
+            raise self.answers
+        return _Response({"answers": self.answers})
+
+
+def test_request_choices_gates_each_question_independently() -> None:
+    criteria = {"tool": "工具", "person": "人", "unclear": "不清楚"}
+    questions = {
+        "role1": {"type": "choice", "instructions": "i1", "criteria": criteria},
+        "role2": {"type": "choice", "instructions": "i2", "criteria": criteria},
+        "role3": {"type": "choice", "instructions": "i3", "criteria": criteria},
+    }
+    answers = {
+        "role1": {"choice": "tool", "probabilities": {"tool": 0.9, "person": 0.05, "unclear": 0.05}},
+        # Weak top score: abstains even though tool leads.
+        "role2": {"choice": "tool", "probabilities": {"tool": 0.6, "person": 0.3, "unclear": 0.1}},
+        # role3 missing from answers: abstains.
+    }
+    session = _MultiSession(answers)
+    results = semif_judge.request_choices(session, "http://localhost:1/v1/systemone", 0.3, "state", questions)
+    assert results == {"role1": "tool", "role2": None, "role3": None}
+    assert len(session.payloads) == 1
+    assert set(session.payloads[0]["json"]["questions"]) == {"role1", "role2", "role3"}
+
+
+def test_request_choices_failure_returns_empty() -> None:
+    session = _MultiSession(OSError("down"))
+    questions = {"role1": {"type": "choice", "instructions": "i", "criteria": {"a": "a", "b": "b"}}}
+    assert semif_judge.request_choices(session, "http://localhost:1", 0.3, "s", questions) == {}
+    assert semif_judge.request_choices(None, "http://localhost:1", 0.3, "s", questions) == {}
+    assert semif_judge.request_choices(session, "", 0.3, "s", questions) == {}
+    assert semif_judge.request_choices(session, "http://localhost:1", 0.0, "s", questions) == {}
