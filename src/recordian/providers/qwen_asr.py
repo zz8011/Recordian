@@ -54,14 +54,18 @@ class QwenASRProvider(ASRProvider):
 
     @property
     def capabilities(self) -> ASRProviderCapabilities:
+        # The transformers backend re-transcribes the accumulated audio for
+        # every partial — that is a preview, not true incremental streaming,
+        # so supports_realtime stays False. Real streaming goes through the
+        # HTTP vLLM server (http-cloud realtime) or confucius-asr.
         return ASRProviderCapabilities(
             supports_hotwords=True,
             supports_context=True,
             supports_language_hint=True,
-            supports_realtime=True,
+            supports_realtime=False,
         )
 
-    def start_realtime_session(self, *, hotwords: list[str]) -> "_QwenRealtimeSession":
+    def start_realtime_session(self, *, hotwords: list[str]) -> _QwenRealtimeSession:
         self._lazy_load()
         return _QwenRealtimeSession(self, hotwords)
 

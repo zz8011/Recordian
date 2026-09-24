@@ -228,7 +228,7 @@ def add_dictate_args(parser: argparse.ArgumentParser) -> None:
 
     parser.add_argument(
         "--asr-provider",
-        choices=["qwen-asr", "http-cloud"],
+        choices=["qwen-asr", "http-cloud", "confucius-asr"],
         default="qwen-asr",
         help="ASR provider backend",
     )
@@ -253,7 +253,10 @@ def add_dictate_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--qwen-language",
         default="Chinese",
-        help="Language hint for Qwen3-ASR (e.g. Chinese, English, auto). 'auto' enables automatic detection.",
+        help=(
+            "Language hint for Qwen3-ASR (e.g. Chinese, English, auto); also passed to "
+            "confucius-asr as the stream language header. 'auto' enables automatic detection."
+        ),
     )
     parser.add_argument(
         "--qwen-max-new-tokens",
@@ -279,7 +282,12 @@ def add_dictate_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--asr-api-key",
         default="",
-        help="API key for http-cloud ASR provider (sent as Bearer token)",
+        help=(
+            "API key for the ASR provider: http-cloud sends it as Bearer token, "
+            "confucius-asr reuses it as the protocol secret_key. Empty means no credential "
+            "is sent — whether that is accepted depends on the server; the packaged local "
+            "Confucius service requires a token."
+        ),
     )
     parser.add_argument(
         "--asr-timeout-s",
@@ -290,7 +298,10 @@ def add_dictate_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--asr-realtime-endpoint",
         default="",
-        help="Optional realtime ASR base URL for http-cloud provider (example: http://192.168.5.111:40002)",
+        help=(
+            "Realtime ASR endpoint. http-cloud: HTTP base URL (example: http://192.168.5.111:40002); "
+            "confucius-asr: WebSocket URL (packaged local service: ws://127.0.0.1:8321/asr_stream_api_v1)"
+        ),
     )
     add_remote_paste_args(parser)
 
@@ -468,6 +479,23 @@ def create_provider(args: argparse.Namespace) -> ASRProvider:
             max_new_tokens=int(getattr(args, "qwen_max_new_tokens", 8192)),
         )
 
+    if asr_provider == "confucius-asr":
+        # Confucius4-R2T2 streaming ASR over WebSocket. Endpoint comes from
+        # asr_realtime_endpoint; asr_api_key is reused as the protocol secret_key.
+        from .providers.confucius_asr import ConfuciusASRProvider
+
+        realtime_endpoint = str(getattr(args, "asr_realtime_endpoint", "")).strip()
+        api_key = str(getattr(args, "asr_api_key", "")).strip() or None
+        timeout_s = float(getattr(args, "asr_timeout_s", 30) or 30)
+        language = str(getattr(args, "qwen_language", "")).strip()
+        return ConfuciusASRProvider(
+            endpoint=realtime_endpoint,
+            api_key=api_key,
+            timeout_s=timeout_s,
+            language=language,
+            context=asr_context,
+        )
+
     # Default to Qwen ASR provider
     # --qwen-model takes priority; fall back to --model; last resort: default
     qwen_model_override = getattr(args, "qwen_model", "")
@@ -489,9 +517,11 @@ def create_provider(args: argparse.Namespace) -> ASRProvider:
         max_new_tokens=getattr(args, "qwen_max_new_tokens", 1024),
         context=asr_context,
     )
-    import threading
+    lazy_load = getattr(provider, "_lazy_load", None)
+    if callable(lazy_load):
+        import threading
 
-    threading.Thread(target=provider._lazy_load, name="qwen-asr-load", daemon=True).start()
+        threading.Thread(target=lazy_load, name="qwen-asr-load", daemon=True).start()
     return provider
 
 

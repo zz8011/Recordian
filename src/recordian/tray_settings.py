@@ -457,7 +457,7 @@ def open_settings_gtk(
             label="ASR Provider",
             value=current.get("asr_provider", "qwen-asr"),
             kind="combo",
-            options=("qwen-asr", "http-cloud"),
+            options=("qwen-asr", "http-cloud", "confucius-asr"),
         )
         row = _add_field(
             sec_asr,
@@ -471,7 +471,7 @@ def open_settings_gtk(
             sec_asr,
             row,
             key="qwen_language",
-            label="Qwen 语言",
+            label="ASR 语言（Qwen/Confucius）",
             value=current.get("qwen_language", "Chinese"),
             kind="combo",
             options=("Chinese", "English", "auto"),
@@ -489,17 +489,17 @@ def open_settings_gtk(
             sec_asr,
             row,
             key="asr_realtime_endpoint",
-            label="HTTP ASR Realtime",
+            label="ASR Realtime Endpoint",
             value=current.get("asr_realtime_endpoint", ""),
-            hint="仅 asr_provider=http-cloud 时生效。配置后说话时浮窗会实时出字。示例：http://192.168.5.111:40002",
+            hint="http-cloud: HTTP base（如 http://192.168.5.111:40002）；confucius-asr: WebSocket（打包本地服务 ws://127.0.0.1:8321/asr_stream_api_v1）",
         )
         row = _add_field(
             sec_asr,
             row,
             key="asr_api_key",
-            label="HTTP ASR API Key",
+            label="ASR API Key",
             value=current.get("asr_api_key", ""),
-            hint="仅 asr_provider=http-cloud 时生效（留空表示不带鉴权头）",
+            hint="http-cloud 作 Bearer token；confucius-asr 复用为协议 secret_key。留空=不发送凭证，是否接受取决于服务端；打包的本地 Confucius 服务要求 token。",
             secret=True,
         )
         row = _add_field(sec_asr, row, key="asr_timeout_s", label="HTTP ASR Timeout (s)", value=current.get("asr_timeout_s", 30.0))
@@ -512,6 +512,32 @@ def open_settings_gtk(
             hint="留空或填写: default/formal/meeting/technical/simple",
         )
         row = _add_field(sec_asr, row, key="asr_context", label="ASR Context 自定义", value=current.get("asr_context", ""))
+        row = _add_field(
+            sec_asr,
+            row,
+            key="enable_semif_correction",
+            label="启用 SemIf 热词候选纠错",
+            value=current.get("enable_semif_correction", False),
+            kind="bool",
+            default_bool=False,
+            hint="默认关闭。开启后仅在确定性热词匹配有歧义时询问 SemIf，失败/超时保留原文。",
+        )
+        row = _add_field(
+            sec_asr,
+            row,
+            key="semif_endpoint",
+            label="SemIf Endpoint",
+            value=current.get("semif_endpoint", ""),
+            hint="SemIf 服务 URL；留空则即使启用也不会发起请求",
+        )
+        row = _add_field(
+            sec_asr,
+            row,
+            key="semif_timeout_s",
+            label="SemIf Timeout (s)",
+            value=current.get("semif_timeout_s", 0.12),
+            hint="默认 0.12s，必须为正且不超过 0.35s",
+        )
         _add_field(
             sec_asr,
             row,
@@ -1554,6 +1580,9 @@ def open_settings_gtk(
                     "asr_realtime_endpoint": str(_get_value("asr_realtime_endpoint")).strip(),
                     "asr_api_key": str(_get_value("asr_api_key")).strip(),
                     "asr_timeout_s": _parse_float_field("asr_timeout_s", float(current.get("asr_timeout_s", 30.0))),
+                    "enable_semif_correction": bool(_get_value("enable_semif_correction")),
+                    "semif_endpoint": str(_get_value("semif_endpoint")).strip(),
+                    "semif_timeout_s": _parse_float_field("semif_timeout_s", float(current.get("semif_timeout_s", 0.12))),
                     "device": str(_get_value("device")).strip() or str(current.get("device", "cuda")),
                     "enable_text_refine": bool(_get_value("enable_text_refine")),
                     "refine_provider": str(_get_value("refine_provider")).strip(),

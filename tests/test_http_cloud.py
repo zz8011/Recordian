@@ -39,6 +39,7 @@ class _FakeRequestsSession:
     def __init__(self) -> None:
         self.calls: list[tuple[str, str, object]] = []
         self._texts = iter(["你", "你好"])
+        self.closed_calls = 0
 
     def post(self, url: str, **kwargs):
         self.calls.append(("post", url, kwargs))
@@ -53,6 +54,9 @@ class _FakeRequestsSession:
     def delete(self, url: str, **kwargs):
         self.calls.append(("delete", url, kwargs))
         return _FakeResponse({"ok": True})
+
+    def close(self) -> None:
+        self.closed_calls += 1
 
 
 def test_http_cloud_provider_transcribe(tmp_path: Path) -> None:
@@ -183,7 +187,7 @@ def test_http_cloud_provider_realtime_session_roundtrip() -> None:
     assert result.metadata["realtime"] is True
 
 
-def test_http_cloud_realtime_finish_error_keeps_last_partial() -> None:
+def test_http_cloud_realtime_finish_error_fails_explicitly() -> None:
     import requests
 
     provider = HttpCloudProvider(
@@ -217,11 +221,12 @@ def test_http_cloud_realtime_finish_error_keeps_last_partial() -> None:
     ):
         session = provider.start_realtime_session(hotwords=[])
         session.push_audio(b"\x00\x00\x00\x00")
-        result = session.finish()
+        with pytest.raises(RuntimeError, match="finish failed"):
+            session.finish()
 
-    assert result.text == "你好"
-    assert result.detected_language == "zh"
-    assert result.metadata.get("finish_failed") is True
+    # A failed finish must not return the last partial as a fake success,
+    # and the HTTP session is closed either way.
+    assert fake_session.closed_calls >= 1
 
 
 def test_http_cloud_provider_resolves_realtime_model_name_case_insensitively() -> None:

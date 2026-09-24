@@ -195,7 +195,9 @@ class AutoLexicon:
                     accept_count INTEGER NOT NULL DEFAULT 0,
                     last_seen INTEGER NOT NULL DEFAULT 0,
                     last_accept INTEGER NOT NULL DEFAULT 0,
-                    blocked INTEGER NOT NULL DEFAULT 0
+                    blocked INTEGER NOT NULL DEFAULT 0,
+                    last_source TEXT NOT NULL DEFAULT '',
+                    confirm_count INTEGER NOT NULL DEFAULT 0
                 )
                 """
             )
@@ -205,6 +207,28 @@ class AutoLexicon:
                 ON lexicon_terms(blocked, accept_count DESC, last_accept DESC)
                 """
             )
+            self._migrate_locked()
+
+    def _migrate_locked(self) -> None:
+        """Add source columns. Existing rows stay; nothing is deleted."""
+        columns = {row[1] for row in self._conn.execute("PRAGMA table_info(lexicon_terms)")}
+        if "last_source" not in columns:
+            self._conn.execute("ALTER TABLE lexicon_terms ADD COLUMN last_source TEXT NOT NULL DEFAULT ''")
+        if "confirm_count" not in columns:
+            self._conn.execute(
+                "ALTER TABLE lexicon_terms ADD COLUMN confirm_count INTEGER NOT NULL DEFAULT 0"
+            )
+        self._conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS lexicon_term_sources (
+                term TEXT NOT NULL,
+                source TEXT NOT NULL,
+                count INTEGER NOT NULL DEFAULT 0,
+                last_seen INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (term, source)
+            )
+            """
+        )
 
     def compose_hotwords(self, base_hotwords: list[str]) -> list[str]:
         merged: list[str] = []
@@ -258,33 +282,150 @@ class AutoLexicon:
             auto_added += 1
         return merged
 
-    def observe_accepted(self, text: str) -> int:
+    def observe_accepted(self, text: str, source: str | None = None) -> int:
+        """Record learnable terms.
+
+        ``source=None`` is the legacy caller used by today's postprocess.
+        It still increments ``accept_count`` so that historical injection
+        keeps working. The stored source is ``legacy``, not
+        ``user_confirmed``.
+
+        ``source='user_confirmed'`` is the only confirmation. It increments
+        ``accept_count`` and ``confirm_count``.
+
+        ``source='asr'``, ``'refined'``, and ``'corrected'`` increment
+        ``seen_count`` only. They do not become confirmed hotwords. Any other
+        explicit source is recorded the same way.
+        """
         terms = extract_terms(text)
         if not terms:
             return 0
+
+        if source is None:
+            source_name = "legacy"
+            confirmed = False
+            legacy_accept = True
+        elif source == "user_confirmed":
+            source_name = "user_confirmed"
+            confirmed = True
+            legacy_accept = False
+        else:
+            source_name = str(source)
+            confirmed = False
+            legacy_accept = False
 
         now_ts = int(time.time())
         with self._lock:
             with self._conn:
                 for term in terms:
-                    self._conn.execute(
-                        """
-                        INSERT INTO lexicon_terms (
-                            term, seen_count, accept_count, last_seen, last_accept, blocked
-                        ) VALUES (?, 1, 1, ?, ?, 0)
-                        ON CONFLICT(term) DO UPDATE SET
-                            seen_count = seen_count + 1,
-                            accept_count = accept_count + 1,
-                            last_seen = excluded.last_seen,
-                            last_accept = excluded.last_accept
-                        """,
-                        (term, now_ts, now_ts),
+                    self._observe_term_locked(
+                        term,
+                        now_ts,
+                        source_name=source_name,
+                        confirmed=confirmed,
+                        legacy_accept=legacy_accept,
                     )
             self._updates_since_prune += len(terms)
             if self._updates_since_prune >= 128:
                 self._prune_to_limit_locked()
                 self._updates_since_prune = 0
         return len(terms)
+
+    def _observe_term_locked(
+        self,
+        term: str,
+        now_ts: int,
+        *,
+        source_name: str,
+        confirmed: bool,
+        legacy_accept: bool,
+    ) -> None:
+        if confirmed:
+            self._conn.execute(
+                """
+                INSERT INTO lexicon_terms (
+                    term, seen_count, accept_count, last_seen, last_accept, blocked,
+                    last_source, confirm_count
+                ) VALUES (?, 1, 1, ?, ?, 0, ?, 1)
+                ON CONFLICT(term) DO UPDATE SET
+                    seen_count = seen_count + 1,
+                    accept_count = accept_count + 1,
+                    confirm_count = confirm_count + 1,
+                    last_seen = excluded.last_seen,
+                    last_accept = excluded.last_accept,
+                    last_source = excluded.last_source
+                """,
+                (term, now_ts, now_ts, source_name),
+            )
+        elif legacy_accept:
+            self._conn.execute(
+                """
+                INSERT INTO lexicon_terms (
+                    term, seen_count, accept_count, last_seen, last_accept, blocked,
+                    last_source, confirm_count
+                ) VALUES (?, 1, 1, ?, ?, 0, 'legacy', 0)
+                ON CONFLICT(term) DO UPDATE SET
+                    seen_count = seen_count + 1,
+                    accept_count = accept_count + 1,
+                    last_seen = excluded.last_seen,
+                    last_accept = excluded.last_accept,
+                    last_source = 'legacy'
+                """,
+                (term, now_ts, now_ts),
+            )
+        else:
+            self._conn.execute(
+                """
+                INSERT INTO lexicon_terms (
+                    term, seen_count, accept_count, last_seen, last_accept, blocked,
+                    last_source, confirm_count
+                ) VALUES (?, 1, 0, ?, 0, 0, ?, 0)
+                ON CONFLICT(term) DO UPDATE SET
+                    seen_count = seen_count + 1,
+                    last_seen = excluded.last_seen,
+                    last_source = excluded.last_source
+                """,
+                (term, now_ts, source_name),
+            )
+        self._conn.execute(
+            """
+            INSERT INTO lexicon_term_sources (term, source, count, last_seen)
+            VALUES (?, ?, 1, ?)
+            ON CONFLICT(term, source) DO UPDATE SET
+                count = count + 1,
+                last_seen = excluded.last_seen
+            """,
+            (term, source_name, now_ts),
+        )
+
+    def term_info(self, term: str) -> dict[str, object] | None:
+        """Return stored counts for an exact term, including source rows."""
+        with self._lock:
+            row = self._conn.execute(
+                """
+                SELECT term, seen_count, accept_count, confirm_count, last_source, blocked
+                FROM lexicon_terms
+                WHERE term = ?
+                """,
+                (term,),
+            ).fetchone()
+            if row is None:
+                return None
+            sources = dict(
+                self._conn.execute(
+                    "SELECT source, count FROM lexicon_term_sources WHERE term = ?",
+                    (term,),
+                )
+            )
+        return {
+            "term": row[0],
+            "seen_count": row[1],
+            "accept_count": row[2],
+            "confirm_count": row[3],
+            "last_source": row[4],
+            "blocked": row[5],
+            "sources": sources,
+        }
 
     def _prune_to_limit_locked(self) -> None:
         with self._conn:
@@ -299,6 +440,12 @@ class AutoLexicon:
                 )
                 """,
                 (self.max_terms,),
+            )
+            self._conn.execute(
+                """
+                DELETE FROM lexicon_term_sources
+                WHERE term NOT IN (SELECT term FROM lexicon_terms)
+                """
             )
 
     def prune_invalid(self) -> int:
@@ -316,6 +463,10 @@ class AutoLexicon:
                     return 0
                 self._conn.executemany(
                     "DELETE FROM lexicon_terms WHERE term = ?",
+                    [(term,) for term in invalid],
+                )
+                self._conn.executemany(
+                    "DELETE FROM lexicon_term_sources WHERE term = ?",
                     [(term,) for term in invalid],
                 )
             return len(invalid)

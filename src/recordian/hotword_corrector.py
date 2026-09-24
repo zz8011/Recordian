@@ -7,10 +7,10 @@ Runs after ASR and before LLM refine. Two strategies:
   pass for near-miss spellings (``SPARK`` → ``SPARC``). Edit-distance only
   applies to hotwords whose compact form is at least 6 chars, so short common
   English words (``code`` vs ``codex``) are never rewritten.
-- CJK hotwords: pinyin homophone matching — a same-length window whose pinyin
-  sequence is identical to the hotword's is rewritten to the canonical
-  characters (``张征`` → ``张拯``). Requires ``pypinyin`` (wake extra); when it
-  is not installed the CJK pass is silently skipped.
+- CJK hotwords are not rewritten from toneless pinyin. ``时期`` must not
+  replace ``十七`` or ``湿气``. Same-pinyin windows are only reported as
+  ambiguous spans for a later bounded judge. Explicit ``错词→正词`` still
+  applies immediately, outside protected numbers, URLs, code, and negation.
 
 Every replacement is returned so callers can log/inspect what changed.
 """
@@ -31,6 +31,38 @@ _ASCII_EDIT_MIN_LEN = 6
 # CJK homophone matching is bounded to sane hotword lengths.
 _CJK_MIN_LEN = 2
 _CJK_MAX_LEN = 8
+_URL_RE = re.compile(r"(?:https?://|www\.)\S+", re.IGNORECASE)
+_EMAIL_RE = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
+_FENCE_RE = re.compile(r"```.*?```", re.DOTALL)
+_BACKTICK_RE = re.compile(r"`[^`\n]+`")
+_CODE_RE = re.compile(
+    r"[A-Za-z_][A-Za-z0-9_]*\([^)\n]*\)|\b[A-Za-z]+_[A-Za-z0-9_]+\b"
+)
+_LATIN_NUM_RE = re.compile(r"\d+(?:[.,]\d+)*")
+_CJK_NUM_RE = re.compile(r"[零〇一二两三四五六七八九十百千万亿]{2,}")
+_NEGATION_RE = re.compile(
+    r"(?:不要|不是|没有|不可以|不会|不能|并未|并不|别|不|没)\s*"
+    r"([A-Za-z][A-Za-z0-9]*(?:[ ._-][A-Za-z0-9]+)*|[一-鿿]{1,8})"
+)
+
+
+def _overlaps(start: int, end: int, spans: list[tuple[int, int]]) -> bool:
+    return any(start < stop and begin < end for begin, stop in spans)
+
+
+def _protected_spans(text: str) -> list[tuple[int, int]]:
+    """Ranges that deterministic replacement and pinyin candidates must not touch."""
+    spans: list[tuple[int, int]] = []
+    for pattern in (_FENCE_RE, _BACKTICK_RE, _URL_RE, _EMAIL_RE, _CODE_RE, _LATIN_NUM_RE, _CJK_NUM_RE):
+        spans.extend((match.start(), match.end()) for match in pattern.finditer(text))
+    spans.extend((match.start(1), match.end(1)) for match in _NEGATION_RE.finditer(text))
+    return spans
+
+
+def _ascii_bounded(text: str, start: int, end: int) -> bool:
+    before_ok = start == 0 or not text[start - 1].isalnum()
+    after_ok = end == len(text) or not text[end].isalnum()
+    return before_ok and after_ok
 
 
 def _hotword_variant_key(token: str) -> str:
@@ -141,7 +173,10 @@ def _correct_ascii(
 
     targets = [(_hotword_variant_key(term), term) for term in ascii_terms]
     replacements: list[tuple[int, int, str]] = []
+    protected = _protected_spans(text)
     for match in _ASCII_RUN_RE.finditer(text):
+        if _overlaps(match.start(), match.end(), protected):
+            continue
         candidate = match.group(0)
         candidate_key = _hotword_variant_key(candidate)
         if not candidate_key:
@@ -165,52 +200,64 @@ def _correct_ascii(
     return text
 
 
-def _correct_cjk(
+def ambiguous_pinyin_span(
     text: str,
-    cjk_terms: list[str],
+    hotwords: list[str],
     *,
-    changes: list[tuple[str, str]],
-) -> str:
-    if not cjk_terms:
-        return text
+    frequencies: dict[str, int] | None = None,
+) -> dict[str, object] | None:
+    """Return one ambiguous CJK span, or None.
 
-    # Map pinyin sequence -> canonical term (first hotword wins on collisions).
-    target_by_pinyin: dict[tuple[str, ...], str] = {}
-    for term in cjk_terms:
+    Toneless pinyin only ranks candidates. It never selects a replacement.
+    Frequency is a sort key, not evidence that a candidate is correct.
+    The leftmost unprotected window wins; longer hotwords win at that offset.
+    """
+    freq = frequencies or {}
+    order: dict[str, int] = {}
+    by_pinyin: dict[tuple[str, ...], list[str]] = {}
+    for raw in hotwords:
+        term = str(raw).strip()
+        if term in order or not _CJK_CHAR_RE.match(term):
+            continue
+        if not _CJK_MIN_LEN <= len(term) <= _CJK_MAX_LEN:
+            continue
         pinyin = _pinyin_sequence(term)
-        if pinyin and len(pinyin) == len(term):
-            target_by_pinyin.setdefault(pinyin, term)
-    if not target_by_pinyin:
-        return text
+        if not pinyin or len(pinyin) != len(term):
+            continue
+        order[term] = len(order)
+        by_pinyin.setdefault(pinyin, []).append(term)
+    if not by_pinyin:
+        return None
 
-    lengths = sorted({len(term) for term in target_by_pinyin.values()}, reverse=True)
-
-    def _rewrite_run(run: str) -> str:
-        result = run
-        for length in lengths:
-            if len(result) < length:
-                continue
-            offset = 0
-            while offset + length <= len(result):
-                window = result[offset : offset + length]
-                window_pinyin = _pinyin_sequence(window)
-                term = target_by_pinyin.get(window_pinyin) if window_pinyin else None
-                if term is not None and len(term) == length and window != term:
-                    result = result[:offset] + term + result[offset + length :]
-                    changes.append((window, term))
-                    offset += length
-                else:
-                    offset += 1
-        return result
-
-    parts: list[str] = []
-    last = 0
+    protected = _protected_spans(text)
+    lengths = sorted({len(term) for term in order}, reverse=True)
     for match in _CJK_RUN_RE.finditer(text):
-        parts.append(text[last : match.start()])
-        parts.append(_rewrite_run(match.group(0)))
-        last = match.end()
-    parts.append(text[last:])
-    return "".join(parts)
+        run = match.group(0)
+        origin = match.start()
+        for offset in range(len(run)):
+            for length in lengths:
+                if offset + length > len(run):
+                    continue
+                start = origin + offset
+                end = start + length
+                if _overlaps(start, end, protected):
+                    continue
+                window = text[start:end]
+                window_pinyin = _pinyin_sequence(window)
+                pooled = by_pinyin.get(window_pinyin) if window_pinyin else None
+                if not pooled:
+                    continue
+                candidates = [term for term in pooled if term != window]
+                if not candidates:
+                    continue
+                candidates.sort(key=lambda term: (-int(freq.get(term, 0)), order[term]))
+                return {
+                    "start": start,
+                    "end": end,
+                    "surface": window,
+                    "candidates": candidates[:7],
+                }
+    return None
 
 
 _REPLACEMENT_RE = re.compile(r"^\s*(.+?)\s*(?:->|→|=>|＝>)\s*(.+?)\s*$")
@@ -304,7 +351,11 @@ def apply_lexicon_replacements(
     text: str,
     replacements: list[tuple[str, str]],
 ) -> tuple[str, list[tuple[str, str]]]:
-    """Apply explicit ``src → dst`` substitutions, longest source first."""
+    """Apply explicit ``src → dst`` substitutions, longest source first.
+
+    This raw helper does not know about protected spans. ``correct_hotwords``
+    is the entry that skips numbers, URLs, code, and negation.
+    """
     if not text or not replacements:
         return text, []
 
@@ -323,6 +374,37 @@ def apply_lexicon_replacements(
         if count:
             updated = next_text
             changes.append((src, dst))
+    return updated, changes
+
+
+def _replace_outside_protected(
+    text: str,
+    replacements: list[tuple[str, str]],
+) -> tuple[str, list[tuple[str, str]]]:
+    """Explicit replacements that skip protected spans. Longest source first."""
+    if not text or not replacements:
+        return text, []
+    changes: list[tuple[str, str]] = []
+    updated = text
+    ordered = sorted(replacements, key=lambda pair: len(pair[0]), reverse=True)
+    for src, dst in ordered:
+        if not src or src == dst:
+            continue
+        search_from = 0
+        while True:
+            index = updated.find(src, search_from)
+            if index < 0:
+                break
+            end = index + len(src)
+            blocked = _overlaps(index, end, _protected_spans(updated))
+            if src.isascii() and not _ascii_bounded(updated, index, end):
+                blocked = True
+            if blocked:
+                search_from = index + 1
+                continue
+            updated = updated[:index] + dst + updated[end:]
+            changes.append((src, dst))
+            search_from = index + len(dst)
     return updated, changes
 
 
@@ -386,7 +468,10 @@ def correct_hotwords(
 
     Returns ``(corrected_text, changes)`` where *changes* is a list of
     ``(original, replacement)`` pairs in the order they were applied.
-    Explicit replacements run first and win over heuristic matching.
+    Explicit replacements run first. ASCII case, spacing, and limited
+    edit-distance still apply. Toneless CJK pinyin never rewrites text;
+    use :func:`ambiguous_pinyin_span` when a later judge needs candidates.
+    Numbers, URLs, code, and the token after a negation are left unchanged.
     """
     if not text.strip():
         return text, []
@@ -394,13 +479,12 @@ def correct_hotwords(
     changes: list[tuple[str, str]] = []
     corrected = text
     if replacements:
-        corrected, replacement_changes = apply_lexicon_replacements(corrected, replacements)
+        corrected, replacement_changes = _replace_outside_protected(corrected, replacements)
         changes.extend(replacement_changes)
 
     if not hotwords:
         return corrected, changes
 
-    ascii_terms, cjk_terms = _canonical_hotwords(hotwords)
+    ascii_terms, _cjk_terms = _canonical_hotwords(hotwords)
     corrected = _correct_ascii(corrected, ascii_terms, max_ascii_edits=max_ascii_edits, changes=changes)
-    corrected = _correct_cjk(corrected, cjk_terms, changes=changes)
     return corrected, changes

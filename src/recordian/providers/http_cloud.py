@@ -253,6 +253,9 @@ class _HttpCloudRealtimeSession:
         self._started_at = 0.0
         self._last_text = ""
         self._last_language: str | None = None
+        self._finished = False
+        self._cancelled = False
+        self._final_result: ASRResult | None = None
 
     def _headers(self, *, content_type: str) -> dict[str, str]:
         headers = {"Content-Type": content_type}
@@ -306,6 +309,11 @@ class _HttpCloudRealtimeSession:
     def finish(self) -> ASRResult:
         if not self._session_id:
             raise RuntimeError("realtime_asr_session_not_started")
+        if self._finished:
+            if self._final_result is not None:
+                return self._final_result
+            raise RuntimeError("realtime_asr_finish_failed")
+        self._finished = True
         try:
             response = self._session.post(
                 f"{self._base_url}/api/finish",
@@ -314,18 +322,19 @@ class _HttpCloudRealtimeSession:
             )
             response.raise_for_status()
             body = response.json()
-        except Exception:
-            body = {
-                "text": self._last_text,
-                "language": self._last_language,
-                "realtime": True,
-                "finish_failed": True,
-            }
+        except Exception as exc:
+            # Never pretend a failed finish succeeded: the last partial is a
+            # preview, not a confirmed transcript.
+            raise RuntimeError(
+                f"realtime ASR finish failed: {type(exc).__name__}: {exc}"
+            ) from exc
+        finally:
+            self._close_http_session()
         text = _coerce_asr_text(body.get("text", "")) or self._last_text
         detected_language = body.get("detected_language", body.get("language")) or self._last_language
         segments = coerce_asr_segments(body.get("segments"))
         timestamps = coerce_asr_timestamps(body.get("timestamps"))
-        return ASRResult(
+        result = ASRResult(
             text=text,
             english_ratio=_estimate_english_ratio(text),
             model_name=str(body.get("model", self._model_name)),
@@ -336,21 +345,32 @@ class _HttpCloudRealtimeSession:
                 "detected_language": detected_language,
                 "latency_seconds": body.get("latency_seconds"),
                 "realtime": True,
-                "finish_failed": bool(body.get("finish_failed")),
             },
         )
+        self._final_result = result
+        return result
+
+    def _close_http_session(self) -> None:
+        try:
+            self._session.close()
+        except Exception:  # noqa: BLE001
+            pass
 
     def cancel(self) -> None:
-        if not self._session_id:
+        if self._cancelled:
             return
-        try:
-            self._session.delete(
-                f"{self._base_url}/api/session",
-                params={"session_id": self._session_id},
-                timeout=min(10.0, self._timeout_s),
-            )
-        except Exception:
-            pass
+        self._cancelled = True
+        self._finished = True
+        if self._session_id:
+            try:
+                self._session.delete(
+                    f"{self._base_url}/api/session",
+                    params={"session_id": self._session_id},
+                    timeout=min(10.0, self._timeout_s),
+                )
+            except Exception:
+                pass
+        self._close_http_session()
 
     @property
     def elapsed_ms(self) -> float:

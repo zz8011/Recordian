@@ -137,17 +137,31 @@ def test_clipboard_timeout_negative_value_uses_default(monkeypatch):
     assert committer.clipboard_timeout_ms == 0
 
 
-def test_resolve_streaming_committer_prefers_xdotool_for_clipboard_backend(monkeypatch):
-    from recordian.linux_commit import XdotoolClipboardCommitter, XDoToolCommitter, resolve_streaming_committer
+def test_resolve_streaming_committer_never_converts_clipboard_to_key_stream(monkeypatch):
+    """Clipboard backends must stay themselves for streaming.
+
+    Converting xdotool-clipboard into per-keystroke xdotool typing would
+    inject a dangerous synthetic key stream (typing + backspaces). The safe
+    contract is preview-only streaming with one final commit.
+    """
+    from recordian.linux_commit import (
+        XdotoolClipboardCommitter,
+        XDoToolCommitter,
+        resolve_streaming_committer,
+    )
 
     monkeypatch.setattr("recordian.linux_commit.which", lambda x: "/usr/bin/" + x)
 
     committer = XdotoolClipboardCommitter(target_window_id=42)
     streaming_committer = resolve_streaming_committer(committer)
 
-    assert isinstance(streaming_committer, XDoToolCommitter)
-    assert streaming_committer.target_window_id == 42
-    assert streaming_committer.streaming is True
+    assert streaming_committer is committer
+    assert not isinstance(streaming_committer, XDoToolCommitter)
+    # Counter-proof: no streaming keystroke committer is ever produced from
+    # a clipboard backend.
+    for window_id in (42, 7):
+        committer = XdotoolClipboardCommitter(target_window_id=window_id)
+        assert not isinstance(resolve_streaming_committer(committer), XDoToolCommitter)
 
 
 def test_resolve_streaming_committer_keeps_clipboard_for_electron(monkeypatch):
@@ -724,3 +738,290 @@ def test_streaming_committer_keeps_fcitx_channel(monkeypatch):
     assert isinstance(streaming, FcitxCommitter)
     assert streaming.streaming is True
     assert streaming.target_window_id == 9
+
+
+# ---------------------------------------------------------------------------
+# busctl reply parsing + composition session edge cases (round 2)
+# ---------------------------------------------------------------------------
+
+def test_parse_busctl_string_real_formats():
+    """Decode actual `busctl call` stdout shapes (typed + JSON + unicode)."""
+    from recordian.linux_commit import _parse_busctl_string
+
+    # Plain typed reply as printed by busctl 255:
+    assert _parse_busctl_string('s "ok"\n') == "ok"
+    assert _parse_busctl_string('s "committed gtk3 gedit"') == "committed gtk3 gedit"
+    assert _parse_busctl_string(
+        's "0123abcd preedit=1 frontend=gtk3 program=gtk-demo"'
+    ) == "0123abcd preedit=1 frontend=gtk3 program=gtk3-demo".replace(
+        "gtk3-demo", "gtk-demo"
+    )
+    # JSON mode (busctl --json=short):
+    assert _parse_busctl_string(
+        '{"type":"s","data":"committed wayland WeChat"}'
+    ) == "committed wayland WeChat"
+    # C-style escapes inside the quoted value:
+    assert _parse_busctl_string(r's "said \"hi\""') == 'said "hi"'
+    assert _parse_busctl_string(r's "a\nb"') == "a\nb"
+    assert _parse_busctl_string('s "\\u4f60\\u597d"') == "你好"
+    # Full unicode stays intact when busctl prints it raw:
+    assert _parse_busctl_string('s "🎙️录音 📝草稿"') == "🎙️录音 📝草稿"
+    # Legacy stub shapes (no signature letter) keep working:
+    assert _parse_busctl_string('"committed gtk3 gedit"') == "committed gtk3 gedit"
+    assert _parse_busctl_string("committed wayland WeChat") == "committed wayland WeChat"
+    assert _parse_busctl_string("") == ""
+    # A value that merely starts with 1-3 letters is not mangled:
+    assert _parse_busctl_string("ok") == "ok"
+    assert _parse_busctl_string("tok1 preedit=1 frontend=x") == "tok1 preedit=1 frontend=x"
+
+
+def _method_of(cmd) -> str:
+    """Return the DBus method name from a busctl call argv list."""
+    iface = "org.fcitx.Fcitx.Recordian1"
+    return cmd[cmd.index(iface) + 1]
+
+
+def _busctl_run_factory(replies: list[str], calls: list):
+    from types import SimpleNamespace
+
+    def _run(cmd, **kwargs):
+        calls.append(cmd)
+        raw = replies.pop(0) if replies else 's "ok"'
+        # Mirror a real subprocess result: parsing happens in the caller,
+        # so hand out the raw busctl stdout line.
+        return SimpleNamespace(returncode=0, stdout=raw, stderr="")
+
+    return _run
+
+
+def test_begin_composition_parses_busctl_typed_descriptor(monkeypatch):
+    """BeginSession token must survive the real busctl 's "..."' wrapper."""
+    from recordian.linux_commit import FcitxCommitter
+
+    calls: list = []
+    replies = ['s "9f0e1d2c3b4a5f6e preedit=1 frontend=gtk3 program=gtk3-demo-app"']
+    monkeypatch.setattr(
+        "recordian.linux_commit.which",
+        lambda name: "/usr/bin/" + name if name == "busctl" else None,
+    )
+    monkeypatch.setattr(
+        "recordian.linux_commit.subprocess.run", _busctl_run_factory(replies, calls)
+    )
+
+    session = FcitxCommitter().begin_composition("")
+    assert session.token == "9f0e1d2c3b4a5f6e"
+    assert session.preedit_capable is True
+    assert session.active
+
+
+def test_session_commit_busctl_reply_marks_committed(monkeypatch):
+    """session.commit succeeds when busctl replies 's "committed ..."'."""
+    from recordian.linux_commit import FcitxCommitter
+
+    calls: list = []
+    replies = [
+        's "9f0e preedit=1 frontend=gtk3 program=p"',   # BeginSession
+        's "updated"',                                  # UpdatePreedit
+        's "committed gtk3 p"',                         # CommitSession
+    ]
+    monkeypatch.setattr(
+        "recordian.linux_commit.which",
+        lambda name: "/usr/bin/" + name if name == "busctl" else None,
+    )
+    monkeypatch.setattr(
+        "recordian.linux_commit.subprocess.run", _busctl_run_factory(replies, calls)
+    )
+
+    session = FcitxCommitter().begin_composition("")
+    assert session.update_preedit("你好").committed
+    result = session.commit("你好世界")
+    assert result.committed is True
+    assert result.detail == "committed gtk3 p"
+
+
+def test_session_commit_empty_text_cleared_concludes_session(monkeypatch):
+    from recordian.linux_commit import FcitxCommitter
+
+    calls: list = []
+    replies = [
+        's "9f0e preedit=1 frontend=gtk3 program=p"',
+        's "cleared"',
+    ]
+    monkeypatch.setattr(
+        "recordian.linux_commit.which",
+        lambda name: "/usr/bin/" + name if name == "busctl" else None,
+    )
+    monkeypatch.setattr(
+        "recordian.linux_commit.subprocess.run", _busctl_run_factory(replies, calls)
+    )
+
+    session = FcitxCommitter().begin_composition("")
+    result = session.commit("")
+    assert result.committed is True
+    assert result.detail == "cleared"
+    assert not session.active
+
+
+def test_session_commit_transport_failure_cancels_preedit(monkeypatch):
+    """Non-stale commit failure must not leave our preedit behind."""
+    from recordian.linux_commit import FcitxCommitter
+
+    calls: list = []
+    replies = ['s "9f0e preedit=1 frontend=gtk3 program=p"']
+
+    from types import SimpleNamespace
+
+    def _run(cmd, **kwargs):
+        calls.append(cmd)
+        if _method_of(cmd) == "CommitSession":
+            return SimpleNamespace(
+                returncode=1,
+                stdout="",
+                stderr=(
+                    "Failed to call method: unexpected transport error "
+                    "(connection reset by peer)"
+                ),
+            )
+        raw = replies.pop(0) if replies else 's "ok"'
+        return SimpleNamespace(returncode=0, stdout=raw, stderr="")
+
+    monkeypatch.setattr(
+        "recordian.linux_commit.which",
+        lambda name: "/usr/bin/" + name if name == "busctl" else None,
+    )
+    monkeypatch.setattr("recordian.linux_commit.subprocess.run", _run)
+
+    session = FcitxCommitter().begin_composition("")
+    result = session.commit("最终")
+    assert result.committed is False
+    assert "commit_failed" in result.detail
+    assert "preedit_cancelled" in result.detail
+    methods = [_method_of(c) for c in calls]
+    assert methods.count("CancelSession") == 1
+    # Session is closed: no second commit attempt is possible.
+    assert not session.active
+
+
+def test_begin_composition_surfaces_existing_preedit_error(monkeypatch):
+    """Addon refusal (user preedit active) must raise, not fake a session."""
+    from recordian.exceptions import CommitError
+    from recordian.linux_commit import FcitxCommitter
+
+    def _run(cmd, **kwargs):
+        class Fail:
+            returncode = 1
+            stdout = ""
+            stderr = (
+                "Failed to call method: Reply contains error: "
+                "org.fcitx.Fcitx.Recordian.Error.ExistingPreedit: "
+                "input context already has a non-empty preedit"
+            )
+        return Fail()
+
+    monkeypatch.setattr(
+        "recordian.linux_commit.which",
+        lambda name: "/usr/bin/" + name if name == "busctl" else None,
+    )
+    monkeypatch.setattr("recordian.linux_commit.subprocess.run", _run)
+
+    try:
+        FcitxCommitter().begin_composition("")
+        raised = False
+    except CommitError as exc:
+        raised = "ExistingPreedit" in str(exc)
+    assert raised
+
+
+def test_session_update_reply_loss_cancels_server_session(monkeypatch):
+    """P1 fix: UpdatePreedit applied but its reply was lost (busctl timeout).
+
+    The write may be showing in the focused field, so closing the session
+    must send ONE best-effort CancelSession for the original token — the
+    session is never reopened and the commit is never retried through any
+    path."""
+    from types import SimpleNamespace
+
+    from recordian.linux_commit import FcitxCommitter
+
+    calls: list = []
+    replies = ['s "9f0e preedit=1 frontend=gtk3 program=p"', 's "updated"']
+
+    def _run(cmd, **kwargs):
+        calls.append(cmd)
+        method = _method_of(cmd)
+        if method == "UpdatePreedit":
+            # The addon applies the write FIRST (argv carries the text); only
+            # the reply dies once the scripted replies run out.
+            if not replies:
+                raise TimeoutError("busctl timed out")
+            return SimpleNamespace(returncode=0, stdout=replies.pop(0), stderr="")
+        raw = replies.pop(0) if replies else 's "cancelled"'
+        return SimpleNamespace(returncode=0, stdout=raw, stderr="")
+
+    monkeypatch.setattr(
+        "recordian.linux_commit.which",
+        lambda name: "/usr/bin/" + name if name == "busctl" else None,
+    )
+    monkeypatch.setattr("recordian.linux_commit.subprocess.run", _run)
+
+    session = FcitxCommitter().begin_composition("")
+    assert session.update_preedit("草稿").committed
+    lost = session.update_preedit("今天天气不错")
+    assert lost.committed is False
+    assert lost.outcome == "stale"
+    assert not session.active
+    methods = [_method_of(c) for c in calls]
+    assert methods == ["BeginSession", "UpdatePreedit", "UpdatePreedit", "CancelSession"]
+    # CancelSession went out for the ORIGINAL token; the server dropped the
+    # session (and its preedit) — no residue until the 120s TTL.
+    assert methods.count("CancelSession") == 1
+    assert calls[-1][calls[-1].index("s") + 1] == session.token
+    # Fail-closed forever after: cancel is a local no-op, commit refused.
+    assert session.cancel().detail == "cancel_noop:closed"
+    assert session.commit("最终").outcome == "stale"
+    assert "CommitSession" not in methods
+
+
+def test_session_update_failure_keeps_uncertain_diagnostics_when_cleanup_fails(monkeypatch):
+    """When even the best-effort CancelSession fails, the diagnostics must
+    keep the uncertainty (preedit_may_linger) instead of promising rollback
+    — not every toolkit honors the cancel."""
+    from types import SimpleNamespace
+
+    from recordian.linux_commit import FcitxCommitter
+
+    calls: list = []
+    replies = ['s "9f0e preedit=1 frontend=gtk3 program=p"']
+
+    def _run(cmd, **kwargs):
+        calls.append(cmd)
+        method = _method_of(cmd)
+        if method == "UpdatePreedit":
+            return SimpleNamespace(
+                returncode=1, stdout="", stderr="Call failed: unknown session"
+            )
+        if method == "CancelSession":
+            return SimpleNamespace(
+                returncode=1, stdout="", stderr="Call failed: connection closed"
+            )
+        raw = replies.pop(0) if replies else 's "ok"'
+        return SimpleNamespace(returncode=0, stdout=raw, stderr="")
+
+    monkeypatch.setattr(
+        "recordian.linux_commit.which",
+        lambda name: "/usr/bin/" + name if name == "busctl" else None,
+    )
+    monkeypatch.setattr("recordian.linux_commit.subprocess.run", _run)
+
+    session = FcitxCommitter().begin_composition("")
+    result = session.update_preedit("草稿")
+    assert result.outcome == "stale"
+    assert not result.committed
+    # busctl strips the error name -> fail-closed reason, and the failed
+    # cleanup is reported as uncertain residue, never a rollback promise.
+    assert "preedit_stale:session_invalidated" in result.detail
+    assert "preedit_may_linger" in result.detail
+    assert "preedit_cancelled" not in result.detail
+    assert not session.active
+    methods = [_method_of(c) for c in calls]
+    assert methods == ["BeginSession", "UpdatePreedit", "CancelSession"]

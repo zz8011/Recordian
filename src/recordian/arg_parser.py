@@ -12,8 +12,11 @@ from typing import Any
 from recordian.config import ConfigManager
 from recordian.refine_capture import DEFAULT_REFINE_CAPTURE_PATH
 from recordian.runtime_config import (
+    DEFAULT_SEMIF_TIMEOUT_S,
+    MAX_SEMIF_TIMEOUT_S,
     apply_namespace_runtime_normalization,
     normalize_runtime_config,
+    normalize_semif_timeout_s,
 )
 
 from .audio_feedback import default_sound_off_path, default_sound_on_path
@@ -400,6 +403,23 @@ def build_parser() -> argparse.ArgumentParser:
         default=1,
         help="Max ASCII edit distance for hotword correction (0 disables the fuzzy pass; only applies to words >= 6 chars)",
     )
+    parser.add_argument(
+        "--enable-semif-correction",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Ask the SemIf service to pick among ambiguous hotword candidates (default off)",
+    )
+    parser.add_argument(
+        "--semif-endpoint",
+        default="",
+        help="SemIf service URL (empty disables SemIf even when correction is enabled)",
+    )
+    parser.add_argument(
+        "--semif-timeout-s",
+        type=float,
+        default=DEFAULT_SEMIF_TIMEOUT_S,
+        help=f"SemIf request timeout in seconds (positive, capped at {MAX_SEMIF_TIMEOUT_S})",
+    )
     add_dictate_args(parser)
     return parser
 
@@ -537,6 +557,9 @@ def _parse_args_with_config(parser: argparse.ArgumentParser) -> argparse.Namespa
         args.hotword_correction_edits = max(0, int(getattr(args, "hotword_correction_edits", 1)))
     except Exception:
         args.hotword_correction_edits = 1
+    args.enable_semif_correction = _coerce_bool(getattr(args, "enable_semif_correction", False), default=False)
+    args.semif_endpoint = str(getattr(args, "semif_endpoint", "") or "").strip()
+    args.semif_timeout_s = normalize_semif_timeout_s(getattr(args, "semif_timeout_s", DEFAULT_SEMIF_TIMEOUT_S))
     args.config_path = str(Path(args.config_path).expanduser())
     return args
 
@@ -666,6 +689,9 @@ def _save_runtime_config(args: argparse.Namespace) -> None:
         "auto_lexicon_max_auto_hotwords": getattr(args, "auto_lexicon_max_auto_hotwords", 15),
         "enable_hotword_correction": getattr(args, "enable_hotword_correction", True),
         "hotword_correction_edits": getattr(args, "hotword_correction_edits", 1),
+        "enable_semif_correction": getattr(args, "enable_semif_correction", False),
+        "semif_endpoint": getattr(args, "semif_endpoint", ""),
+        "semif_timeout_s": normalize_semif_timeout_s(getattr(args, "semif_timeout_s", DEFAULT_SEMIF_TIMEOUT_S)),
     }
     path = Path(args.config_path)
     ConfigManager.save(path, payload)

@@ -129,6 +129,9 @@ recordian-tray
 - 故障排查：[`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md)
 - Preset 说明：[`presets/README.md`](presets/README.md)
 - 本地 vLLM/OpenAI 兼容 ASR 配置示例：[`examples/hotkey.http-cloud.local-vllm.json`](examples/hotkey.http-cloud.local-vllm.json)
+- 本机 Confucius4-R2T2 流式 ASR：服务与实测限制见 [`server/README-confucius.md`](server/README-confucius.md)，配置示例 [`examples/hotkey.confucius-asr.local.json`](examples/hotkey.confucius-asr.local.json)（PTT：`Ctrl_R` 按住录音、松开结束；服务端单会话音频上限默认 30 秒，超限显式报错而非截断）
+- 流式输入法方案设计与验收：[`docs/STREAMING-IME-PLAN.zh-CN.md`](docs/STREAMING-IME-PLAN.zh-CN.md)；实测验证记录：[`docs/STREAMING-IME-VALIDATION.zh-CN.md`](docs/STREAMING-IME-VALIDATION.zh-CN.md)
+- Fcitx 输入法插件（预编辑/提交）：构建与安装见 [`fcitx/recordian-commit/README.md`](fcitx/recordian-commit/README.md) 与 `fcitx/recordian-commit/build.sh`；改动后需按该文档重载 Fcitx 生效
 
 常见配置项包括：
 
@@ -146,8 +149,11 @@ recordian-tray
 # 启动托盘
 recordian-tray
 
-# 直接运行热键守护进程
-recordian-hotkey-dictate
+# 直接运行热键守护进程（JSON 配置用 --config-path；recordian cli 是 --wav 单次识别入口）
+recordian-hotkey-dictate --config-path /path/to/hotkey.json
+
+# 本机 Confucius4-R2T2 流式 ASR 服务（完整参数见 server/README-confucius.md）
+python server/confucius_streaming_server.py --model-dir /path/to/Confucius4-R2T2 --r2t2-source /path/to/checkout
 
 # 检查语音唤醒配置与模型状态
 recordian-wake-diagnose

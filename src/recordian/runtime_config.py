@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import math
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -12,6 +13,35 @@ DEFAULT_WAKE_NAME = ["小二"]
 DEFAULT_OWNER_PROFILE = "~/.config/recordian/owner_voice_profile.json"
 DEFAULT_AUTO_LEXICON_DB = "~/.config/recordian/auto_lexicon.db"
 DEFAULT_REFINE_CAPTURE_PATH = "~/.local/share/recordian/refine-samples.jsonl"
+
+# SemIf 候选纠错配置合同（实现逻辑在 hotword_corrector/semif 链路）：
+# 默认关闭，端点留空，超时是有界正值。
+DEFAULT_SEMIF_TIMEOUT_S = 0.12
+MAX_SEMIF_TIMEOUT_S = 0.35
+ASR_PROVIDER_CHOICES = ("qwen-asr", "http-cloud", "confucius-asr")
+
+
+def normalize_asr_provider(value: object, *, fallback: str = "qwen-asr") -> str:
+    return _normalize_choice(
+        value,
+        fallback=fallback,
+        allowed=set(ASR_PROVIDER_CHOICES),
+    )
+
+
+def normalize_semif_timeout_s(value: object, *, fallback: float = DEFAULT_SEMIF_TIMEOUT_S) -> float:
+    # Central contract: a finite, positive, bounded timeout. Non-numbers,
+    # non-finite values (NaN/±Inf) and non-positive numbers all fall back;
+    # oversized positive finite values clamp to the max.
+    if not math.isfinite(fallback) or fallback <= 0.0:
+        fallback = DEFAULT_SEMIF_TIMEOUT_S
+    try:
+        timeout = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return fallback
+    if not math.isfinite(timeout) or timeout <= 0.0:
+        return fallback
+    return min(timeout, MAX_SEMIF_TIMEOUT_S)
 
 _PROJECT_ROOT = Path(__file__).parent.parent.parent
 _ASSETS_DIR = Path(__file__).parent.parent.parent / "assets"
@@ -123,7 +153,11 @@ def normalize_runtime_config(
     )
     normalized["notify_backend"] = normalize_notify_backend(normalized.get("notify_backend", "auto"))
     normalized["enable_streaming_commit"] = bool(normalized.get("enable_streaming_commit", False))
+    normalized["asr_provider"] = normalize_asr_provider(normalized.get("asr_provider", "qwen-asr"))
     normalized["asr_realtime_endpoint"] = str(normalized.get("asr_realtime_endpoint") or "").strip()
+    normalized["enable_semif_correction"] = bool(normalized.get("enable_semif_correction", False))
+    normalized["semif_endpoint"] = str(normalized.get("semif_endpoint") or "").strip()
+    normalized["semif_timeout_s"] = normalize_semif_timeout_s(normalized.get("semif_timeout_s", DEFAULT_SEMIF_TIMEOUT_S))
     normalized["wake_prefix"] = _normalize_string_list(
         normalized.get("wake_prefix", DEFAULT_WAKE_PREFIX),
         fallback=DEFAULT_WAKE_PREFIX,

@@ -60,6 +60,67 @@ def test_normalize_runtime_config_defaults_streaming_off() -> None:
     assert defaults["asr_realtime_endpoint"] == ""
 
 
+def test_normalize_runtime_config_semif_contract() -> None:
+    defaults = normalize_runtime_config({}, include_sound_defaults=False)
+    assert defaults["enable_semif_correction"] is False
+    assert defaults["semif_endpoint"] == ""
+    assert defaults["semif_timeout_s"] == 0.12
+
+    enabled = normalize_runtime_config(
+        {
+            "enable_semif_correction": True,
+            "semif_endpoint": "  http://192.168.5.111:42032/v1/systemone  ",
+            "semif_timeout_s": 0.2,
+        },
+        include_sound_defaults=False,
+    )
+    assert enabled["enable_semif_correction"] is True
+    assert enabled["semif_endpoint"] == "http://192.168.5.111:42032/v1/systemone"
+    assert enabled["semif_timeout_s"] == 0.2
+
+
+def test_normalize_semif_timeout_bounds() -> None:
+    from recordian.runtime_config import normalize_semif_timeout_s
+
+    assert normalize_semif_timeout_s(0.5) == 0.35  # capped
+    assert normalize_semif_timeout_s(0.35) == 0.35  # exact max passes through
+    assert normalize_semif_timeout_s(0.0) == 0.12  # non-positive -> default
+    assert normalize_semif_timeout_s(-1.0) == 0.12
+    assert normalize_semif_timeout_s("not-a-number") == 0.12
+    assert normalize_semif_timeout_s(None) == 0.12
+    assert normalize_semif_timeout_s("0.2") == 0.2
+
+
+def test_normalize_semif_timeout_rejects_non_finite() -> None:
+    import math
+
+    from recordian.runtime_config import normalize_semif_timeout_s
+
+    # NaN slipped through before: NaN <= 0 is False and min(NaN, 0.35) is NaN,
+    # violating the finite-positive bounded contract.
+    for nasty in (float("nan"), float("inf"), float("-inf"), "nan", "inf", "-inf", math.nan, math.inf):
+        result = normalize_semif_timeout_s(nasty)
+        assert result == 0.12, f"{nasty!r} -> {result!r}"
+        assert math.isfinite(result) and result > 0.0
+
+
+def test_normalize_semif_timeout_malformed_fallback_uses_default() -> None:
+    from recordian.runtime_config import DEFAULT_SEMIF_TIMEOUT_S, normalize_semif_timeout_s
+
+    # A malformed explicit fallback must not leak NaN/non-positive either.
+    assert normalize_semif_timeout_s(0.2, fallback=float("nan")) == 0.2
+    assert normalize_semif_timeout_s("bad", fallback=float("nan")) == DEFAULT_SEMIF_TIMEOUT_S
+    assert normalize_semif_timeout_s("bad", fallback=-1.0) == DEFAULT_SEMIF_TIMEOUT_S
+
+
+def test_normalize_asr_provider_choices() -> None:
+    normalized = normalize_runtime_config({"asr_provider": "confucius-asr"}, include_sound_defaults=False)
+    assert normalized["asr_provider"] == "confucius-asr"
+
+    fallback = normalize_runtime_config({"asr_provider": "gpt-cloud"}, include_sound_defaults=False)
+    assert fallback["asr_provider"] == "qwen-asr"
+
+
 def test_normalize_runtime_config_fills_sound_defaults_from_legacy_beep() -> None:
     normalized = normalize_runtime_config(
         {"wake_beep_path": "/tmp/legacy.mp3"},

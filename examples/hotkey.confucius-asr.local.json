@@ -1,0 +1,20 @@
+{
+  "asr_provider": "confucius-asr",
+  "asr_realtime_endpoint": "ws://127.0.0.1:8321/asr_stream_api_v1",
+  "asr_api_key": "",
+  "qwen_language": "auto",
+  "commit_backend": "auto",
+  "notify_backend": "auto",
+  "enable_streaming_commit": true,
+  "enable_semif_correction": false,
+  "semif_endpoint": "",
+  "semif_timeout_s": 0.12,
+  "enable_text_refine": false,
+  "enable_remote_paste": false,
+  "enable_voice_wake": false,
+  "trigger_mode": "ptt",
+  "hotkey": "<ctrl_r>",
+  "toggle_hotkey": "<alt_r>",
+  "stop_hotkey": "<ctrl_r>",
+  "auto_hard_enter": false
+}

@@ -50,13 +50,17 @@ def test_no_changes_when_text_already_canonical() -> None:
     assert corrected == "用 Codex 和 Claude 开发 Recordian"
 
 
-def test_cjk_homophone_correction() -> None:
+def test_cjk_homophone_is_not_forced() -> None:
     pytest.importorskip("pypinyin")
-    corrected, changes = correct_hotwords("张征和张艳东讨论这个问题", ["张拯", "张彦东"])
-    assert "张拯" in corrected
-    assert "张彦东" in corrected
-    assert ("张征", "张拯") in changes
-    assert ("张艳东", "张彦东") in changes
+    text = "张征和张艳东讨论这个问题"
+    corrected, changes = correct_hotwords(text, ["张拯", "张彦东"])
+    assert corrected == text
+    assert changes == []
+
+    period = "今天十七度，屋里湿气很重"
+    corrected, changes = correct_hotwords(period, ["时期", "时期", "时期"])
+    assert corrected == period
+    assert changes == []
 
 
 def test_cjk_correct_term_is_not_rewritten() -> None:
@@ -113,6 +117,35 @@ def test_ascii_replacement_does_not_rewrite_inside_longer_word() -> None:
     corrected, changes = apply_lexicon_replacements("category catalog", [("cat", "dog")])
     assert corrected == "category catalog"
     assert changes == []
+
+
+def test_protected_spans_skip_number_url_code_and_negation() -> None:
+    corrected, changes = correct_hotwords(
+        "气温十七度，见 https://example.com/CodeX 和 `CodeX`，不是CodeX，用 CodeX",
+        ["Codex"],
+        replacements=[("十七", "时期"), ("CodeX", "Codex")],
+    )
+    assert "十七" in corrected
+    assert "https://example.com/CodeX" in corrected
+    assert "`CodeX`" in corrected
+    assert "不是CodeX" in corrected
+    assert "用 Codex" in corrected
+    assert ("十七", "时期") not in changes
+
+
+def test_pinyin_candidates_are_ranked_not_applied() -> None:
+    pytest.importorskip("pypinyin")
+    from recordian.hotword_corrector import ambiguous_pinyin_span
+
+    text = "看见石器"
+    assert correct_hotwords(text, ["湿气", "时期", "时期"])[0] == text
+    span = ambiguous_pinyin_span(text, ["湿气", "时期", "时期"], frequencies={"湿气": 1, "时期": 2})
+    assert span is not None
+    assert span["surface"] == "石器"
+    assert span["candidates"] == ["时期", "湿气"]
+    skipped = ambiguous_pinyin_span("今天十七度还有石器", ["时期"])
+    assert skipped is not None
+    assert skipped["surface"] == "石器"
 
 
 def test_lexicon_from_args_merges_context_and_cli_hotwords() -> None:

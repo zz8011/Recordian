@@ -8,7 +8,8 @@
 
 | File | Purpose | Status |
 |------|---------|--------|
-| `qwen_asr.py` | **Primary provider** — Qwen ASR (http_cloud HTTP) | Active |
+| `qwen_asr.py` | **Primary provider** — Qwen ASR (local transformers; preview-only partials, not true streaming) | Active |
+| `confucius_asr.py` | Confucius4-R2T2 streaming ASR over WebSocket (`confucius-asr`) | Active — true incremental |
 | `streaming_base.py` | Base class for real-time streaming ASR | Base class |
 | `asr_context.py` | Context manager for ASR session state | Utility |
 
@@ -48,24 +49,36 @@
 
 ## Provider Selection Logic
 
+Actual selection happens in `linux_dictate.py::create_provider(args)` from the
+`--asr-provider` CLI flag / `asr_provider` JSON config key (there is no
+`config.yaml`; hotkey config is JSON loaded via `recordian-hotkey-dictate
+--config-path`):
+
 ```
-engine.py picks provider based on config.yaml:
-  asr.provider: "qwen"       → qwen_asr.py
-  asr.provider: "http"       → http_cloud.py (generic)
-  refine.provider: "cloud"    → cloud_llm_refiner.py
-  refine.provider: "llamacpp" → llamacpp_text_refiner.py
+asr_provider: "qwen-asr" (default) → qwen_asr.py
+asr_provider: "http-cloud"         → http_cloud.py
+asr_provider: "confucius-asr"      → confucius_asr.py (WebSocket streaming;
+                                     endpoint from asr_realtime_endpoint,
+                                     auth token from asr_api_key)
 ```
+
+The matching local server for `confucius-asr` is
+`server/confucius_streaming_server.py` — setup in `server/README-confucius.md`.
+Refine backend is selected by `--refine-provider {local,cloud,llamacpp}`
+(`cloud_llm_refiner.py` / `qwen_text_refiner.py` / `llamacpp_text_refiner.py`).
 
 ## Key Interfaces
 
 ```python
-# ASR Provider interface (base.py)
+# ASR Provider interface (base.py) — synchronous, no async API
 class ASRProvider(ABC):
-    async def recognize(self, audio_path: str, ...) -> ASRResult
+    def transcribe_file(self, wav_path: Path, *, hotwords: list[str]) -> ASRResult
+    # realtime-capable providers (confucius_asr.py) additionally expose
+    # start_realtime_session(*, hotwords) -> session with push_audio/push_pcm16/finish
 
-# Text Refiner interface (base.py)
+# Text Refiner interface (base_text_refiner.py)
 class TextRefiner(ABC):
-    async def refine(self, text: str, ...) -> str
+    def refine(self, text: str) -> str
 ```
 
 ## Notes

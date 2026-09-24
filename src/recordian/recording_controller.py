@@ -19,6 +19,7 @@ from typing import Any, cast
 from .audio_feedback import play_sound
 from .auto_lexicon import AutoLexicon
 from .linux_commit import (
+    _fcitx_committer_from,
     get_focused_window_id,
     paste_to_enter_delay_seconds,
     resolve_committer,
@@ -122,6 +123,20 @@ def _commit_text(committer: Any, text: str, *, auto_hard_enter: bool = False) ->
         return {"backend": result.backend, "committed": result.committed, "detail": detail}
     except Exception as exc:  # noqa: BLE001
         return {"backend": committer.backend_name, "committed": False, "detail": str(exc)}
+
+
+def _composition_capable_committer(committer: Any) -> bool:
+    """True when the commit chain contains an fcitx composition committer.
+
+    Used by the PTT deadline path: for a composition-capable backend a
+    BeginSession call may still be in flight (busctl timeout is longer than
+    a short join) when the worker join times out, so the controller can
+    NEVER classify that worker as "no composition" — the only safe
+    classification is uncertain (fallback suppressed). Legacy backends
+    (xdotool-clipboard, wtype, …) have no composition API and keep the
+    full-audio fallback.
+    """
+    return _fcitx_committer_from(committer) is not None
 
 
 def build_ptt_hotkey_handlers(
@@ -475,6 +490,7 @@ def build_ptt_hotkey_handlers(
                 resolve_hotwords=_resolve_hotwords,
                 normalize_final_text=_normalize_final_text,
                 on_state=on_state,
+                refine_enabled=refiner is not None,
             )
             if realtime_worker is not None:
                 _set_state("realtime_asr_worker", realtime_worker)
@@ -555,39 +571,117 @@ def build_ptt_hotkey_handlers(
                 realtime_detected_language = ""
                 realtime_transcribe_latency_ms = 0.0
                 realtime_commit_info: dict[str, object] | None = None
+                realtime_outcome = ""
+                realtime_composition_session: object | None = None
+                realtime_semif_applied = False
+                realtime_composition_started = False
                 if isinstance(realtime_asr_worker, _RealtimeASRWorkerHandle):
                     asr_timeout_s = float(getattr(args, "asr_timeout_s", 30.0))
+                    realtime_composition_started = bool(
+                        getattr(realtime_asr_worker, "composition_started", False)
+                    )
                     realtime_asr_worker.thread.join(timeout=asr_timeout_s)
                     if realtime_asr_worker.thread.is_alive():
+                        # Signal the worker first so a late finish can no
+                        # longer write preedit or commit the partial text.
+                        cancel_event = getattr(realtime_asr_worker, "cancel_event", None)
+                        if cancel_event is not None:
+                            cancel_event.set()
                         cancel_session = realtime_asr_worker.cancel_session
                         if cancel_session is not None:
                             try:
                                 cancel_session()
                             except Exception:
                                 pass
-                        on_state(
-                            {
-                                "event": "log",
-                                "message": (
-                                    "realtime_asr_timeout_fallback:"
-                                    f" timeout_s={asr_timeout_s:.1f}"
-                                    " using_full_audio_transcription"
-                                ),
-                            }
+                        # The pre-join snapshot of composition_started is
+                        # NOT trustworthy here: a Begin pending during the
+                        # join may have completed since, and one may still be
+                        # in flight right now. composition_started is
+                        # irreversible (False→True only), so re-read it after
+                        # the cancel; a refusal (worker.composition_refused)
+                        # is equally terminal — its commit_info already says
+                        # "suppressed". For a composition-capable backend
+                        # even a False reading cannot prove "no session":
+                        # the only safe classification is uncertain.
+                        composition_now = bool(
+                            getattr(realtime_asr_worker, "composition_started", False)
                         )
-                    elif realtime_asr_worker.error:
-                        on_state({"event": "log", "message": f"realtime_asr_failed: {realtime_asr_worker.error}"})
-                        realtime_final_text = realtime_asr_worker.final_text
-                        realtime_detected_language = realtime_asr_worker.detected_language
-                        realtime_transcribe_latency_ms = realtime_asr_worker.transcribe_latency_ms
-                        if isinstance(realtime_asr_worker.commit_info, dict):
-                            realtime_commit_info = realtime_asr_worker.commit_info
+                        refused_now = bool(
+                            getattr(realtime_asr_worker, "composition_refused", False)
+                        )
+                        begin_may_be_pending = (
+                            bool(resolve_remote_paste_routing(args).commit_local)
+                            and _composition_capable_committer(committer)
+                        )
+                        if composition_now or refused_now or begin_may_be_pending:
+                            # Deadline hit while a composition session held a
+                            # preedit on the focused context, was refused, or
+                            # a Begin may still be pending: the outcome is
+                            # uncertain (the toolkit may have kept/committed
+                            # the preedit, the worker may still be writing or
+                            # binding). Falling back to a full-sentence
+                            # commit could duplicate text or hit the wrong
+                            # window, so the pipeline must suppress it.
+                            detail = "realtime_asr_timeout_suppressed"
+                            if refused_now:
+                                detail = "realtime_asr_timeout_refused_suppressed"
+                            elif not composition_now:
+                                detail = "realtime_asr_timeout_suppressed:begin_may_be_pending"
+                            realtime_outcome = "uncertain"
+                            realtime_commit_info = {
+                                "backend": "fcitx",
+                                "committed": False,
+                                "detail": detail,
+                                "outcome": "uncertain",
+                            }
+                            on_state(
+                                {
+                                    "event": "log",
+                                    "message": (
+                                        "realtime_asr_timeout_suppressed:"
+                                        f" timeout_s={asr_timeout_s:.1f}"
+                                        f" composition_started={composition_now}"
+                                        f" refused={refused_now}"
+                                        " composition session outcome uncertain —"
+                                        " 不回退整句提交，避免重复/错窗口"
+                                    ),
+                                }
+                            )
+                        else:
+                            on_state(
+                                {
+                                    "event": "log",
+                                    "message": (
+                                        "realtime_asr_timeout_fallback:"
+                                        f" timeout_s={asr_timeout_s:.1f}"
+                                        " using_full_audio_transcription"
+                                    ),
+                                }
+                            )
                     else:
                         realtime_final_text = realtime_asr_worker.final_text
                         realtime_detected_language = realtime_asr_worker.detected_language
                         realtime_transcribe_latency_ms = realtime_asr_worker.transcribe_latency_ms
                         if isinstance(realtime_asr_worker.commit_info, dict):
                             realtime_commit_info = realtime_asr_worker.commit_info
+                        realtime_outcome = str(
+                            getattr(realtime_asr_worker, "outcome", "") or ""
+                        )
+                        realtime_composition_session = getattr(
+                            realtime_asr_worker, "composition_session", None
+                        )
+                        realtime_semif_applied = bool(
+                            getattr(realtime_asr_worker, "semif_applied", False)
+                        )
+                        if realtime_asr_worker.error:
+                            on_state({"event": "log", "message": f"realtime_asr_failed: {realtime_asr_worker.error}"})
+                            # worker.final_text is empty on failure: a partial
+                            # hypothesis is never treated as the final
+                            # transcript. When a composition session was
+                            # bound, commit_info carries an uncertain/stale
+                            # outcome and the pipeline suppresses the
+                            # fallback; preview-only failures fall back to
+                            # the full-audio transcription below.
                 run_postprocess_pipeline(
                     PostprocessPipelineContext(
                         args=args,
@@ -609,11 +703,25 @@ def build_ptt_hotkey_handlers(
                         prefetched_detected_language=realtime_detected_language,
                         prefetched_transcribe_latency_ms=realtime_transcribe_latency_ms,
                         prefetched_commit_info=realtime_commit_info,
+                        prefetched_outcome=realtime_outcome,
+                        prefetched_composition_started=realtime_composition_started,
+                        composition_session=realtime_composition_session,
+                        prefetched_semif_applied=realtime_semif_applied,
                         on_state=on_state,
                         on_result=on_result,
                         on_error=on_error,
                     )
                 )
+                leftover_session = getattr(realtime_asr_worker, "composition_session", None)
+                cancel_leftover = getattr(leftover_session, "cancel", None)
+                if callable(cancel_leftover):
+                    # Defensive: the pipeline commits or cancels the carried
+                    # session; if anything slipped through, clear our own
+                    # preedit now (no-op once the session is closed).
+                    try:
+                        cancel_leftover()
+                    except Exception:  # noqa: BLE001
+                        pass
             finally:
                 _temp_dir.cleanup()
                 _set_state("processing_thread", None)

@@ -89,9 +89,11 @@ def test_run_postprocess_pipeline_runs_asr_refine_commit_and_lexicon(tmp_path: P
     class _AutoLexicon:
         def __init__(self) -> None:
             self.learned: list[str] = []
+            self.sources: list[str | None] = []
 
-        def observe_accepted(self, text: str) -> list[str]:
+        def observe_accepted(self, text: str, source: str | None = None) -> list[str]:
             self.learned.append(text)
+            self.sources.append(source)
             return ["Docker"]
 
     auto_lexicon = _AutoLexicon()
@@ -139,6 +141,9 @@ def test_run_postprocess_pipeline_runs_asr_refine_commit_and_lexicon(tmp_path: P
     assert payload["commit"]["committed"] is True
     assert payload["commit"]["detail"] == "committed:整理后的 Docker"
     assert auto_lexicon.learned == ["整理后的 Docker"]
+    # Provenance contract: the refiner changed the text, so the observation
+    # is labeled "refined" — never a source-less legacy accept.
+    assert auto_lexicon.sources == ["refined"]
     assert context.committer.target_window_id == 77
     assert any(event.get("event") == "log" and "ASR 原始输出" in str(event.get("message")) for event in state_events)
     assert any(
@@ -628,7 +633,9 @@ def test_run_postprocess_pipeline_streams_asr_commit_when_enabled(tmp_path: Path
     run_postprocess_pipeline(context)
 
     assert not error_events
-    assert committer.calls == ["你", "好"]
+    # New safe contract: legacy (non-composition) backends get preview-only
+    # streaming and exactly ONE final commit — no per-keystroke typing.
+    assert committer.calls == ["你好"]
     assert result_events[0]["result"]["text"] == "你好"
     assert any(event.get("event") == "stream_partial" for event in state_events)
 
@@ -845,7 +852,10 @@ def test_run_postprocess_pipeline_streams_asr_commit_uses_streaming_committer_ov
 
     assert not error_events
     assert original_committer.calls == []
-    assert fast_committer.calls == ["你", "好"]
+    # Override committer is used, but the legacy key-stream is gone: a
+    # single final commit instead of per-chunk synthetic typing.
+    assert original_committer.calls == []
+    assert fast_committer.calls == ["你好"]
     assert result_events[0]["result"]["text"] == "你好"
 
 
@@ -915,12 +925,16 @@ def test_run_postprocess_pipeline_streams_refine_commit_when_enabled(tmp_path: P
     run_postprocess_pipeline(context)
 
     assert not error_events
-    assert committer.calls == ["整理", "完成"]
+    # Refine streaming previews via state events; the commit happens
+    # exactly once with the full refined text.
+    assert committer.calls == ["整理完成"]
     assert result_events[0]["result"]["text"] == "整理完成"
     assert any(event.get("event") == "refine_stream_chunk" for event in state_events)
 
 
-def test_run_postprocess_pipeline_streams_refine_commit_even_when_postprocess_rule_enabled(tmp_path: Path, monkeypatch) -> None:
+def test_run_postprocess_pipeline_streams_refine_commit_applies_postprocess_rule(tmp_path: Path, monkeypatch) -> None:
+    """P2-2 fix: streaming refine finalizes through the preset's deterministic
+    @postprocess cleanup (zh-stutter-lite), not just the non-streaming path."""
     audio_path, state_events, result_events, error_events = _base_context(tmp_path)
 
     class _Provider:
@@ -929,6 +943,7 @@ def test_run_postprocess_pipeline_streams_refine_commit_even_when_postprocess_ru
 
     class _Refiner:
         prompt_template = "请整理文本：{text}"
+        last_refine_skipped = True  # stale flag from a previous utterance
 
         def refine_stream(self, text: str):
             yield "我"
@@ -987,9 +1002,14 @@ def test_run_postprocess_pipeline_streams_refine_commit_even_when_postprocess_ru
     run_postprocess_pipeline(context)
 
     assert not error_events
-    assert committer.calls == ["我", "我", "想"]
-    assert result_events[0]["result"]["text"] == "我我想"
+    # The refine stream stuttered ("我我" → "我"); the @postprocess rule now
+    # applies at streaming finalization too, and the commit sees the
+    # cleaned text exactly once.
+    assert committer.calls == ["我想"]
+    assert result_events[0]["result"]["text"] == "我想"
     assert any(event.get("event") == "refine_stream_chunk" for event in state_events)
+    # The diagnostic marker is set consistently for the streaming path too.
+    assert context.refiner.last_refine_skipped is False
 
 
 def test_run_postprocess_pipeline_records_remote_paste_result(tmp_path: Path, monkeypatch) -> None:

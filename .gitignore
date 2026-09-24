@@ -59,3 +59,8 @@ htmlcov/
 *.db
 
 # Beads runtime ignore rules are maintained in .beads/.gitignore
+
+# Local Confucius ASR server secrets (legacy default locations; the server now
+# defaults to the per-user config dir). Never commit tokens or private configs.
+confucius_server_token.txt
+recordian-confucius.local.json

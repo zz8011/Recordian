@@ -191,8 +191,10 @@ def test_start_realtime_asr_worker_commits_append_only_partial_text() -> None:
     assert worker.final_text == "你好啊"
     assert worker.detected_language == "zh"
     assert worker.transcribe_latency_ms == 321.0
-    assert worker.commit_info is not None
-    assert committer.calls == ["你", "好", "啊"]
+    # The fake committer has no composition API: the worker is preview-only
+    # and defers the single final commit to the postprocess pipeline.
+    assert worker.commit_info is None
+    assert committer.calls == []
     assert [event.get("text") for event in events if event.get("event") == "realtime_asr_partial"] == ["你", "你好"]
 
 
@@ -279,7 +281,10 @@ def test_realtime_asr_worker_uses_streaming_committer_override(monkeypatch) -> N
     worker.thread.join(timeout=1.0)
 
     assert original_committer.calls == []
-    assert fast_committer.calls == ["你", "好"]
+    # No composition API on the override either → preview-only worker, the
+    # pipeline performs one final commit (no synthetic keystroke stream).
+    assert fast_committer.calls == []
+    assert worker.final_text == "你好"
 
 
 def test_start_realtime_asr_worker_retypes_tail_when_partial_revises() -> None:
@@ -348,15 +353,12 @@ def test_start_realtime_asr_worker_retypes_tail_when_partial_revises() -> None:
     worker.thread.join(timeout=1.0)
 
     assert worker.final_text == "你好，主人，我是露露。"
-    assert committer.calls == [
-        "你好。",
-        "<bs:1>",
-        "，主人。",
-        "<bs:1>",
-        "，我是。",
-        "<bs:1>",
-        "露露。",
-    ]
+    # Counter-proof for the safe streaming contract: when a partial revises,
+    # the legacy path never retypes and NEVER sends backspaces; the revised
+    # hypothesis only updates the preview, and the final text is committed
+    # once by the postprocess pipeline.
+    assert committer.calls == []
+    assert not any("<bs:" in call for call in committer.calls)
 
 
 def test_start_realtime_asr_worker_skips_realtime_local_commit_for_clipboard_backend(monkeypatch) -> None:
@@ -2089,3 +2091,92 @@ def test_parse_args_with_config_loads_refine_timeout_and_long_text_threshold(tmp
 
     assert args.refine_timeout == 90
     assert args.refine_max_len_llm == 600
+
+
+def test_ptt_stop_recording_timeout_with_composition_started_suppresses_fallback(monkeypatch) -> None:
+    """r4 race contract: the controller deadline fires while a composition
+    session holds a preedit. The cancel makes the worker thread finish
+    almost immediately (its finally clears composition_active), but the
+    controller must decide from the composition_started snapshot taken
+    BEFORE the cancel — outcome "uncertain", fallback suppressed."""
+    events: list[dict[str, object]] = []
+    captured_contexts: list[object] = []
+    postprocess_done = threading.Event()
+    cancel_event = threading.Event()
+
+    class _FakeProvider:
+        provider_name = "http-cloud"
+
+        def transcribe_file(self, audio_path: Path, hotwords: list[str]) -> SimpleNamespace:  # noqa: ANN001
+            return SimpleNamespace(text="不该发生的全文兜底")
+
+    class _FakeCommitter:
+        backend_name = "xdotool"
+        target_window_id = None
+
+        def commit(self, text: str) -> SimpleNamespace:
+            raise AssertionError("suppressed path must never commit")
+
+    class _FakeProcess:
+        def poll(self) -> int:
+            return 0
+
+    def _fake_start_record_process(**kwargs) -> RecordProcessHandle:  # noqa: ANN003
+        output_path = kwargs["output_path"]
+        output_path.write_bytes(b"")
+        return RecordProcessHandle(process=_FakeProcess(), monitor_stream=io.BytesIO(b""))
+
+    def _fake_start_realtime_asr_worker(**kwargs):  # noqa: ANN003
+        # A composition session was bound (preedit visible), then the worker
+        # blocks. The controller cancel lets the thread finish immediately —
+        # exactly the finally-clears-composition_active race.
+        thread = threading.Thread(target=lambda: cancel_event.wait(timeout=2.0), daemon=True)
+        thread.start()
+        return _RealtimeASRWorkerHandle(
+            thread=thread,
+            cancel_session=cancel_event.set,
+            composition_started=True,
+            composition_active=True,
+        )
+
+    def _fake_run_postprocess_pipeline(context) -> None:  # noqa: ANN001
+        captured_contexts.append(context)
+        postprocess_done.set()
+
+    monkeypatch.setattr("recordian.recording_controller.ensure_ffmpeg_available", lambda: "/usr/bin/ffmpeg")
+    monkeypatch.setattr("recordian.recording_controller.choose_record_backend", lambda requested, ffmpeg_bin: "ffmpeg-pulse")
+    monkeypatch.setattr("recordian.recording_controller.resolve_committer", lambda backend: _FakeCommitter())
+    monkeypatch.setattr("recordian.recording_controller.create_provider", lambda args: _FakeProvider())
+    monkeypatch.setattr("recordian.recording_controller.get_focused_window_id", lambda: None)
+    monkeypatch.setattr("recordian.recording_controller.start_record_process", _fake_start_record_process)
+    monkeypatch.setattr("recordian.recording_controller.stop_record_process", lambda *args, **kwargs: None)
+    monkeypatch.setattr("recordian.recording_controller._start_realtime_asr_worker", _fake_start_realtime_asr_worker)
+    monkeypatch.setattr("recordian.recording_controller.run_postprocess_pipeline", _fake_run_postprocess_pipeline)
+
+    start_recording, stop_recording, _, _ = build_ptt_hotkey_handlers(
+        args=_fake_ptt_args(asr_timeout_s=0.01),
+        on_result=events.append,
+        on_error=events.append,
+        on_busy=events.append,
+        on_state=events.append,
+    )
+
+    assert start_recording() is True
+    assert stop_recording() is True
+    assert postprocess_done.wait(timeout=2.0) is True
+    assert cancel_event.is_set() is True
+    assert captured_contexts
+    context = captured_contexts[0]
+    # Terminal uncertain state: even though the worker thread ended (its
+    # finally cleared composition_active), the pre-cancel snapshot of
+    # composition_started keeps the fallback suppressed.
+    assert context.prefetched_composition_started is True
+    assert context.prefetched_commit_info is not None
+    assert context.prefetched_commit_info["outcome"] == "uncertain"
+    assert context.prefetched_commit_info["detail"] == "realtime_asr_timeout_suppressed"
+    assert context.prefetched_outcome == "uncertain"
+    assert any(
+        "realtime_asr_timeout_suppressed" in str(event.get("message", ""))
+        for event in events
+        if event.get("event") == "log"
+    )

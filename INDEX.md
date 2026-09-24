@@ -12,6 +12,7 @@
 | `src/recordian/providers/` | ASR providers & text refiners | **Start here for ASR changes** |
 | `src/recordian/providers/asr/` | ASR backend implementations | qwen, streaming, etc. |
 | `src/recordian/providers/refine/` | Text refinement LLMs | cloud LLM refine pipeline |
+| `server/` | Local ASR server processes | `confucius_streaming_server.py` (WebSocket v1, loopback), `qwen_streaming_server.py` (HTTP) |
 | `tests/` | Unit & integration tests | |
 | `docs/` | Architecture & research docs | |
 | `models/` | ASR model files (gitignored) | Do not commit large files |
@@ -23,10 +24,14 @@
 
 | File | Purpose |
 |------|---------|
-| `cli.py` | CLI entrypoint (`recordian` command) |
-| `config.py` | Config loader (YAML schema) |
+| `cli.py` | CLI entrypoint (`recordian` command) — single-shot `--wav` recognition, no `--config-path` |
+| `hotkey_dictate.py` | Hotkey daemon (`recordian-hotkey-dictate`); loads JSON config via `--config-path` |
+| `runtime_config.py` | JSON runtime-config normalization (e.g. `~/.config/recordian/hotkey.json`) |
+| `config.py` | Versioned app-config dataclasses + validator (not the hotkey config loader) |
 | `engine.py` | Core dictation engine |
 | `providers/qwen_asr.py` | Primary ASR provider |
+| `providers/confucius_asr.py` | Confucius4-R2T2 streaming provider (WebSocket client, v1 protocol) |
+| `server/confucius_streaming_server.py` | Local single-user Confucius streaming server (see `server/README-confucius.md`) |
 | `hotword_corrector.py` | Deterministic hotword correction (常用词/asr_context + `错词→正词` + ASCII/拼音), runs ASR → refine 之间 |
 | `auto_lexicon.py` | Auto-learned hotword lexicon (fragment-filtered, separate auto quota) |
 | `hotkey_dictate.py` | Hotkey-based dictation |
@@ -49,10 +54,11 @@
 
 - **ASR provider changes** → `src/recordian/providers/INDEX.md`
 - **Text refinement** → `src/recordian/providers/` + `postprocess_pipeline.py`
-- **Hotkey configuration** → `hotkey_dictate.py` + `hotkey_dictate --help`
+- **Hotkey configuration** → `hotkey_dictate.py` + `recordian-hotkey-dictate --help`
+- **Local streaming ASR server** → `server/confucius_streaming_server.py` + `server/README-confucius.md`
 - **Wake word** → `voice_wake.py`
-- **Config schema** → `config.py` + `pyproject.toml`
-- **Running the daemon** → `cli.py --help`
+- **Config schema** → `runtime_config.py` + `pyproject.toml`
+- **Running the daemon** → `recordian-hotkey-dictate --help`
 - **Testing** → `pytest tests/ -v`
 
 ## Architecture (one-liner)
@@ -65,7 +71,10 @@ Audio capture (hotkey / wake word)
   → clipboard paste after key release
 ```
 
-Streaming type-on-screen is gated off (`enable_streaming_commit=false`, empty `asr_realtime_endpoint`). Do not enable it until a true streaming ASR exists.
+Streaming type-on-screen stays off by default (`enable_streaming_commit=false`). A true
+incremental ASR path now exists: `asr_provider=confucius-asr` (providers/confucius_asr.py)
+against the local server `server/confucius_streaming_server.py` — setup and the measured
+limits in `server/README-confucius.md`; design/acceptance in `docs/STREAMING-IME-PLAN.zh-CN.md`.
 
 ## Key Design Decisions
 
