@@ -47,30 +47,20 @@ pytestmark = pytest.mark.skipif(
 
 
 def _start_xvfb() -> tuple[subprocess.Popen, str]:
-    """Start Xvfb on a kernel-allocated free display; return (proc, DISPLAY)."""
-    read_fd, write_fd = os.pipe()
+    """Use a high display so Xvfb cannot replace Hyprland's Xwayland socket."""
+    # Xvfb -displayfd can select :0 even while Hyprland owns its socket
+    # (the lock contains the compositor PID). Never probe desktop displays.
+    number = next(
+        n for n in range(100 + os.getpid() % 5000, 10000)
+        if not os.path.lexists(f"/tmp/.X11-unix/X{n}")
+        and not os.path.lexists(f"/tmp/.X{n}-lock")
+    )
+    display = f":{number}"
     proc = subprocess.Popen(
-        ["Xvfb", "-displayfd", str(write_fd), "-screen", "0", "1280x800x24", "-nolisten", "tcp"],
+        ["Xvfb", display, "-screen", "0", "1280x800x24", "-nolisten", "tcp"],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
-        pass_fds=(write_fd,),
     )
-    os.close(write_fd)
-    try:
-        data = b""
-        deadline = time.monotonic() + 15
-        while b"\n" not in data:
-            if time.monotonic() > deadline:
-                raise RuntimeError("Xvfb did not report a display number")
-            if proc.poll() is not None:
-                raise RuntimeError(f"Xvfb exited early rc={proc.returncode}")
-            chunk = os.read(read_fd, 32)
-            if not chunk:
-                raise RuntimeError("Xvfb closed displayfd without a display number")
-            data += chunk
-        display = f":{int(data.splitlines()[0].strip())}"
-    finally:
-        os.close(read_fd)
     # Wait until the server actually answers.
     env = {**os.environ, "DISPLAY": display}
     deadline = time.monotonic() + 15
@@ -136,6 +126,9 @@ def test_native_fcitx_session_contract():
     tmp = tempfile.mkdtemp(prefix="recordian-native-")
     for sub in ("config", "data", "cache", "home"):
         os.makedirs(os.path.join(tmp, sub), exist_ok=True)
+    portal_config = Path(tmp) / "config" / "xdg-desktop-portal"
+    portal_config.mkdir()
+    (portal_config / "portals.conf").write_text("[preferred]\ndefault=none\n")
     runtime = os.path.join(tmp, "run")
     os.makedirs(runtime, exist_ok=True)
     os.chmod(runtime, 0o700)
@@ -150,17 +143,23 @@ def test_native_fcitx_session_contract():
             "XDG_DATA_HOME": os.path.join(tmp, "data"),
             "XDG_CACHE_HOME": os.path.join(tmp, "cache"),
             "XDG_RUNTIME_DIR": runtime,
+            "XDG_CURRENT_DESKTOP": "RecordianTest",
+            "XDG_SESSION_DESKTOP": "RecordianTest",
+            "XDG_SESSION_TYPE": "x11",
             "RECORDIAN_NATIVE_TMP": tmp,
             "RECORDIAN_NATIVE_BUILD": str(build),
             "RECORDIAN_CANDIDATE_SRC": str(REPO / "src"),
             "RECORDIAN_NATIVE_PY": gtk_py,
             "PYTHONPATH": str(REPO / "src"),
             "GTK_IM_MODULE": "fcitx",
+            "GDK_BACKEND": "x11",
             "QT_IM_MODULE": "fcitx",
             "XMODIFIERS": "@im=fcitx",
         }
         # Private bus inside this Xvfb. Do not keep the host session bus or Wayland.
-        env.pop("WAYLAND_DISPLAY", None)
+        for key in ("WAYLAND_DISPLAY", "WAYLAND_SOCKET", "HYPRLAND_INSTANCE_SIGNATURE",
+                    "SWAYSOCK", "SESSION_MANAGER"):
+            env.pop(key, None)
         env.pop("DBUS_SESSION_BUS_ADDRESS", None)
         focus = os.environ.get("RECORDIAN_NATIVE_FOCUS", "")
         run = subprocess.run(

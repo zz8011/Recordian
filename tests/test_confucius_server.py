@@ -799,3 +799,52 @@ def test_serve_reports_real_bound_port(srv, tmp_path):
         assert not os.path.exists(ready), "ready file must be removed on exit"
 
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize('backend', ['llama-native', 'llama-hybrid'])
+def test_official_gguf_constructor_preserves_streaming_options(srv, monkeypatch, backend):
+    from types import SimpleNamespace
+    calls = []
+    monkeypatch.setattr(srv, '_configure_gguf_logging', lambda: None)
+    class Base:
+        def finish_streaming_transcribe(self, *args):
+            return None
+    sentinel = object()
+    def construct(**kwargs):
+        calls.append(kwargs)
+        return sentinel
+    monkeypatch.setitem(sys.modules, 'r2t2', SimpleNamespace(R2T2ASRModel=Base))
+    constructors = {'LlamaNative' if backend == 'llama-native' else 'LlamaHybrid': construct}
+    monkeypatch.setitem(sys.modules, 'r2t2_llama', SimpleNamespace(R2T2LlamaASRModel=SimpleNamespace(**constructors)))
+    args = srv.build_parser().parse_args(['--backend',backend,'--gguf-dir','/gguf','--model-dir','/processor'])
+    assert srv.load_model(args) is sentinel
+    assert calls == [{'processor_path': '/processor', 'gguf_dir': '/gguf', 'model_gguf_name': 'Confucius4-R2T2-Q4_K_M.gguf', 'mmproj_gguf_name': 'mmproj-Confucius4-R2T2-Q8_0.gguf', 'n_ctx': 4096, 'n_batch': 1024, 'n_threads': 8, 'use_gpu': True, 'n_gpu_layers': -1, 'max_new_tokens': 4}]
+
+
+def test_native_debug_prompts_are_not_logged(srv, monkeypatch, capsys):
+    import atexit
+    import ctypes
+    from types import SimpleNamespace
+    callbacks = []
+    cleanup = []
+    monkeypatch.setattr(atexit, 'register', cleanup.append)
+    class Setter:
+        def __call__(self, callback, data):
+            callbacks.append(callback)
+    monkeypatch.setattr(ctypes, 'CDLL', lambda path: SimpleNamespace(llama_log_set=Setter(), mtmd_log_set=Setter()))
+    srv._configure_gguf_logging()
+    for callback in callbacks:
+        callback(1, b'private prompt', None)
+        callback(2, b'private transcript', None)
+        callback(5, b'private continuation', None)
+        callback(4, b'GPU error\n', None)
+    captured = capsys.readouterr()
+    assert captured.out == ''
+    assert captured.err == 'GPU error\n' * 2
+    # Before Python clears module globals, neither native library may retain
+    # a pointer to a Python closure. This also retains live setter handles.
+    assert len(cleanup) == 1
+    srv._native_log_callback = None
+    cleanup[0]()
+    assert len(callbacks) == 4
+    assert not callbacks[-1] and not callbacks[-2]

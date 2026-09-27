@@ -433,6 +433,16 @@ def test_real_corrector_hotword_applies_at_boundary(monkeypatch: pytest.MonkeyPa
     assert worker.outcome == "committed"
 
 
+def test_corrected_live_preedit_is_published_once_per_change() -> None:
+    provider = _FakeProvider(["他叫露西。"], partials=["他叫露西"])
+    h = _Harness(reader=_Reader(_speech(0.8)), provider=provider, hotwords=["露西→Lucy"])
+    h.run()
+    previews = [e["text"] for e in h.events if e.get("event") == "realtime_asr_partial"]
+    assert previews[0] == "他叫Lucy"
+    assert previews.count("他叫Lucy") == 1
+    assert "他叫Lucy" in h.session.preedits
+
+
 def test_display_normalisation_does_not_rewrite_held_tail(monkeypatch: pytest.MonkeyPatch) -> None:
     """Partials are normalised for display only; the held tail must stay raw
     for the next segment's combined snapshot."""
@@ -744,6 +754,22 @@ def test_stale_preedit_stops_without_any_commit() -> None:
     assert session.segments == []
     assert session.commits == []
     assert h.fatals == ["ime_stale"]
+
+
+@pytest.mark.parametrize("outcome", ["stale", "uncertain"])
+def test_interrupted_first_partial_remains_copyable_without_commit(outcome: str) -> None:
+    session = _FakeCompositionSession()
+    session.preedit_result = _Result(False, outcome=outcome, detail="interrupted")
+    provider = _FakeProvider(["不应等到最终识别"], partials=["已经说到一半"])
+    worker = _Harness(
+        reader=_Reader(_speech(1.0)), provider=provider, session=session,
+    ).run()
+    assert worker.final_text == "已经说到一半"
+    assert worker.commit_info["committed"] is False
+    assert worker.outcome == outcome
+    assert session.segments == []
+    assert session.commits == []
+    assert provider.sessions[0].finished == 0
 
 
 def test_uncertain_segment_reply_is_terminal_no_retry(monkeypatch: pytest.MonkeyPatch) -> None:

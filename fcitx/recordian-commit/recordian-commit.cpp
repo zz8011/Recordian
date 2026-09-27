@@ -51,7 +51,8 @@
  *       is invalidated instead of touching an unknown context.
  *
  *   CommitSession(s token, s text) -> s
- *       Clear the preedit and commit the final text exactly once. The
+ *       Commit the final text in the active composition, then clear the
+ *       preedit. The final text is submitted exactly once. The
  *       session is invalidated first and a second CommitSession with the
  *       same token fails with StaleSession. Fails instead of committing
  *       when the bound context lost focus or was destroyed — Recordian
@@ -286,7 +287,144 @@ struct StreamingSession {
     // Last preedit text this session wrote into the context ("" once
     // cleared). Used to only ever remove preedit that is still ours.
     std::string lastPreedit;
+    // Wayland/editor updates are asynchronous. Keep only text actually sent
+    // by this session, so delayed composition echoes can be identified exactly.
+    std::vector<std::string> preeditHistory;
+    std::vector<std::string> initialEchoCandidates;
 };
+
+void rememberPreedit(StreamingSession &session, const std::string &text) {
+    if (!text.empty() && (session.preeditHistory.empty() ||
+                         session.preeditHistory.back() != text)) {
+        session.preeditHistory.push_back(text);
+        if (session.preeditHistory.size() > 32) {
+            session.preeditHistory.erase(session.preeditHistory.begin());
+        }
+    }
+}
+
+bool removeOwnPreedit(const SurroundSnap &observed, const std::string &text,
+                      SurroundSnap *base) {
+    const auto chars = fcitx::utf8::lengthValidated(text);
+    if (!observed.valid || text.empty() ||
+        chars == fcitx::utf8::INVALID_LENGTH ||
+        observed.cursor != observed.anchor || chars > observed.cursor) {
+        return false;
+    }
+    const auto begin = utf8ByteOffset(observed.text, observed.cursor - chars);
+    const auto end = utf8ByteOffset(observed.text, observed.cursor);
+    if (begin == std::string::npos || end == std::string::npos ||
+        observed.text.substr(begin, end - begin) != text) {
+        return false;
+    }
+    *base = {true, observed.text.substr(0, begin) + observed.text.substr(end),
+             static_cast<unsigned>(observed.cursor - chars),
+             static_cast<unsigned>(observed.cursor - chars)};
+    return true;
+}
+
+bool emptyEditorLayout(const SurroundSnap &snap) {
+    // Chromium emits zero, one or two layout newlines for an empty paragraph
+    // as its placeholder and composition node appear/disappear. Never apply
+    // this equivalence to actual text, selections, or a moved caret.
+    return snap.valid && snap.cursor == 0 && snap.anchor == 0 &&
+           snap.text.size() <= 2 &&
+           snap.text.find_first_not_of('\n') == std::string::npos;
+}
+
+bool ownPreeditEcho(const StreamingSession &session, const SurroundSnap &base,
+                    const SurroundSnap &observed) {
+    if (session.frontend != "wayland_v2") {
+        return false;
+    }
+    for (const auto &text : session.preeditHistory) {
+        SurroundSnap predicted;
+        if (predictCommittedSurround(base, text, &predicted) &&
+            sameSnap(predicted, observed)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+SurroundSnap commitBaseline(const StreamingSession &session,
+                            const SurroundSnap &observed) {
+    if (session.ack.hasAccepted &&
+        ownPreeditEcho(session, session.ack.accepted, observed)) {
+        return session.ack.accepted;
+    }
+    return observed;
+}
+
+void initializeSurroundingBaseline(StreamingSession &session,
+                                   const SurroundSnap &snapshot) {
+    // Wayland's virtual IC can still hold the previous editor/utterance's
+    // cached surrounding text when dictation begins. Bind focus immediately,
+    // but establish its text baseline from the first fresh protocol event.
+    // Key, reset and focus guards are already active while waiting.
+    if (session.frontend != "wayland_v2" && snapshot.valid) {
+        session.ack.accepted = snapshot;
+        session.ack.hasAccepted = true;
+    }
+}
+
+// A Wayland client may not supply its initial surrounding text until the
+// first preedit. Unknown -> known initializes the baseline, while later
+// text, caret, selection, or validity changes invalidate it. Commit echoes
+// have a separate provenance check and must never enter this path.
+bool acceptPreeditSurrounding(StreamingSession &session,
+                             const SurroundSnap &observed) {
+    auto &ack = session.ack;
+    if (ack.poisoned || ack.armed) {
+        return false;
+    }
+    if (ack.hasAccepted) {
+        if (sameSnap(observed, ack.accepted) ||
+            ownPreeditEcho(session, ack.accepted, observed)) {
+            return true;
+        }
+        if (session.frontend == "wayland_v2" &&
+            !session.lastPreedit.empty()) {
+            if (emptyEditorLayout(ack.accepted) && emptyEditorLayout(observed)) {
+                ack.accepted = observed;
+                return true;
+            }
+            // The first fresh snapshot can already contain our first partial.
+            // Require a second snapshot explained exactly by removing or
+            // replacing that own partial. An arbitrary suffix never suffices.
+            for (const auto &text : session.initialEchoCandidates) {
+                SurroundSnap base;
+                if (removeOwnPreedit(ack.accepted, text, &base) &&
+                    (sameSnap(base, observed) ||
+                     ownPreeditEcho(session, base, observed))) {
+                    ack.accepted = base;
+                    session.initialEchoCandidates.clear();
+                    return true;
+                }
+            }
+            if (emptyEditorLayout(ack.accepted)) {
+                for (const auto &text : session.preeditHistory) {
+                    SurroundSnap base;
+                    if (removeOwnPreedit(observed, text, &base) &&
+                        emptyEditorLayout(base)) {
+                        ack.accepted = base;
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
+    }
+    if (session.nextSegment != 1 || session.frontend != "wayland_v2") {
+        return false;
+    }
+    if (observed.valid) {
+        ack.accepted = observed;
+        ack.hasAccepted = true;
+        session.initialEchoCandidates = session.preeditHistory;
+    }
+    return true;
+}
 
 bool isSensitive(const fcitx::InputContext *ic) {
     const auto flags = ic->capabilityFlags();
@@ -417,6 +555,7 @@ public:
         session.preeditCapable =
             ic->capabilityFlags().test(fcitx::CapabilityFlag::Preedit);
         session.lastActive = std::chrono::steady_clock::now();
+        initializeSurroundingBaseline(session, readSurround(ic));
         const std::string token = session.token;
         const bool preeditCapable = session.preeditCapable;
         const std::string frontend = session.frontend;
@@ -426,13 +565,14 @@ public:
             sessions_[token] =
                 std::make_shared<StreamingSession>(std::move(session));
         }
-        if (preeditCapable) {
+        if (preeditCapable && !initialPreedit.empty()) {
             // Replaces any preedit a superseded Recordian session left.
-            setClientPreedit(ic, initialPreedit);
             auto entry = findSession(token);
             if (entry != nullptr) {
                 entry->lastPreedit = initialPreedit;
+                rememberPreedit(*entry, initialPreedit);
             }
+            setClientPreedit(ic, initialPreedit);
         }
         return token + " preedit=" + (preeditCapable ? "1" : "0") +
                " frontend=" + frontend + " program=" + program + " segments=1";
@@ -510,15 +650,15 @@ public:
                 ack.sequence = sequence;
                 ack.uuid = entry->uuid;
                 ack.requested = text;
-                ack.before = readSurround(ic);
+                ack.before = commitBaseline(*entry, readSurround(ic));
                 ack.afterKnown = predictCommittedSurround(ack.before, text, &ack.after);
                 ack.hasAccepted = entry->ack.hasAccepted;
                 ack.accepted = entry->ack.accepted;
                 entry->ack = std::move(ack);
             }
         }
-        clearOwnedPreedit(ic, entry);
         if (text.empty()) {
+            clearOwnedPreedit(ic, entry);
             return "segment " + std::to_string(sequence) + " cleared";
         }
         {
@@ -529,8 +669,12 @@ public:
                 explicit Depth(int &value) : value(value) { value += 1; }
                 ~Depth() { value -= 1; }
             } guard(selfCommitDepth_);
+            // Commit while the composition is still active. Clearing first
+            // emits compositionend with empty data (cancel), which can make
+            // rich-text editors discard the following separate insertText.
             ic->commitString(text);
         }
+        clearOwnedPreedit(ic, entry);
         {
             std::lock_guard<std::mutex> guard(mutex_);
             auto it = sessions_.find(token);
@@ -581,8 +725,9 @@ public:
             throw fcitx::dbus::MethodCallError(
                 kErrorStale, "preedit was replaced by another source (org.fcitx.Fcitx.Recordian.Error.StaleSession)");
         }
-        setClientPreedit(ic, text);
+        rememberPreedit(*entry, text);
         entry->lastPreedit = text;
+        setClientPreedit(ic, text);
         entry->lastActive = std::chrono::steady_clock::now();
         return "updated";
     }
@@ -630,11 +775,14 @@ public:
             entry->finished = true;
             sessions_.erase(token);
         }
-        clearOwnedPreedit(ic, entry);
         if (text.empty()) {
+            clearOwnedPreedit(ic, entry);
             return "cleared";
         }
+        // Match ordinary IME confirmation: replace the active composition
+        // with the final text before clearing the input panel.
         ic->commitString(text);
+        clearOwnedPreedit(ic, entry);
         return std::string("committed ") + std::string(ic->frontendName()) +
                " " + ic->program();
     }
@@ -751,6 +899,9 @@ private:
                     break;
                 }
                 if (drop) {
+                    FCITX_WARN() << "Recordian session invalidated event="
+                                 << static_cast<int>(event.type())
+                                 << " program=" << session.program;
                     session.finished = true;
                     dropped.push_back(it->second);
                     it = sessions_.erase(it);
@@ -813,16 +964,19 @@ private:
                 return false;
             }
             if (session.ack.afterKnown &&
-                sameSnap(observed, session.ack.after)) {
+                (sameSnap(observed, session.ack.after) ||
+                 ownPreeditEcho(session, session.ack.after, observed))) {
                 session.ack.hasAccepted = true;
-                session.ack.accepted = observed;
+                session.ack.accepted = session.ack.after;
+                session.initialEchoCandidates.clear();
                 clearPendingAck(&session.ack);
                 return true;
             }
             // Client repeated the previous snapshot and has not applied
             // this insert yet. Keep waiting; do not treat it as an edit.
             if (session.ack.hasAccepted &&
-                sameSnap(observed, session.ack.accepted)) {
+                (sameSnap(observed, session.ack.accepted) ||
+                 ownPreeditEcho(session, session.ack.accepted, observed))) {
                 return true;
             }
             // First insert into a context that has never reported
@@ -857,7 +1011,20 @@ private:
                          << " obsBytes=" << observed.text.size();
             return false;
         }
-        return session.ack.hasAccepted && sameSnap(observed, session.ack.accepted);
+        const bool accepted = acceptPreeditSurrounding(session, observed);
+        if (!accepted) {
+            FCITX_WARN() << "Recordian surrounding mismatch baselineValid="
+                         << session.ack.accepted.valid
+                         << " baselineBytes=" << session.ack.accepted.text.size()
+                         << " baselineCursor=" << session.ack.accepted.cursor
+                         << " baselineAnchor=" << session.ack.accepted.anchor
+                         << " obsValid=" << observed.valid
+                         << " obsBytes=" << observed.text.size()
+                         << " obsCursor=" << observed.cursor
+                         << " obsAnchor=" << observed.anchor
+                         << " preeditBytes=" << session.lastPreedit.size();
+        }
+        return accepted;
     }
 
     std::shared_ptr<StreamingSession> findSession(const std::string &token) {

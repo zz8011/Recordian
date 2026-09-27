@@ -2180,3 +2180,11 @@ def test_ptt_stop_recording_timeout_with_composition_started_suppresses_fallback
         for event in events
         if event.get("event") == "log"
     )
+
+
+@pytest.fixture(autouse=True)
+def _isolate_unit_tests_from_live_audio(monkeypatch):
+    # Controller tests fake capture handles. Do not fall back from an empty
+    # fake monitor to a real sounddevice stream (or leave native daemon
+    # threads importing PortAudio during interpreter shutdown).
+    monkeypatch.setattr("recordian.recording_controller.start_wake_session_monitor", lambda context: None)

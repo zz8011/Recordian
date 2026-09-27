@@ -271,8 +271,10 @@ def test_same_snapshot_submit_is_idempotent_and_keeps_ready_text() -> None:
         text = "桌上有石器"
         assert corrector.submit(text) == text
         assert corrector.submit(text) == text
-        assert len(session.calls) == 1
+        # submit schedules a background request; wait for its result before
+        # counting calls, otherwise this races the worker on Python 3.14.
         assert corrector.finish(text) == "桌上有时期"
+        assert len(session.calls) == 1
         assert corrector.submit(text) == text
         assert len(session.calls) == 1
         assert corrector.poll(text) == "桌上有时期"

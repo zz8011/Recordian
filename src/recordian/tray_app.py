@@ -850,14 +850,20 @@ class TrayApp:
     def _start_tray(self) -> None:
         try:
             import gi
-            gi.require_version('AppIndicator3', '0.1')
+            try:
+                gi.require_version('AyatanaAppIndicator3', '0.1')
+                from gi.repository import AyatanaAppIndicator3 as AppIndicator3
+            except (ImportError, ValueError):
+                gi.require_version('AppIndicator3', '0.1')
+                from gi.repository import AppIndicator3
             gi.require_version('Gtk', '3.0')
-            from gi.repository import AppIndicator3, Gtk
+            from gi.repository import Gtk
+            self._indicator_module = AppIndicator3
             self._start_appindicator(AppIndicator3, Gtk)
         except (ImportError, ValueError) as e:
             raise RuntimeError(
                 f"AppIndicator3 not available: {e}\n"
-                "Please install: sudo apt install gir1.2-appindicator3-0.1"
+                "Install the GTK3 AppIndicator or Ayatana AppIndicator bindings."
             ) from e
 
     def _start_appindicator(self, AppIndicator3, Gtk) -> None:
@@ -928,10 +934,7 @@ class TrayApp:
 
                 if hasattr(self, 'indicator') and self.indicator is not None:
                     try:
-                        import gi
-                        gi.require_version('AppIndicator3', '0.1')
-                        from gi.repository import AppIndicator3
-                        self.indicator.set_status(AppIndicator3.IndicatorStatus.PASSIVE)
+                        self.indicator.set_status(self._indicator_module.IndicatorStatus.PASSIVE)
                     except Exception:
                         pass
                     if hasattr(self, '_gtk'):

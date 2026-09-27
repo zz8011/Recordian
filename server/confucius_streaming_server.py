@@ -48,6 +48,7 @@ CLOSE_BUSY = 4429  # single-user service already has an active session
 
 # Populated by run_server() while serving; None in unit tests.
 active_model = None  # type: ignore[assignment]
+_native_log_callback = None
 
 
 class HeaderError(ValueError):
@@ -219,6 +220,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--gpu-memory-utilization", type=_gpu_util, default=0.80)
     parser.add_argument("--max-model-len", type=_positive_int, default=4096)
+    parser.add_argument("--backend", choices=["vllm", "llama-native", "llama-hybrid"], default="vllm")
+    parser.add_argument("--gguf-dir", default="", help="Official GGUF decoder and mmproj directory")
+    parser.add_argument("--gguf-model", default="Confucius4-R2T2-Q4_K_M.gguf")
+    parser.add_argument("--gguf-mmproj", default="mmproj-Confucius4-R2T2-Q8_0.gguf")
     parser.add_argument(
         "--token-file",
         default=os.environ.get("CONFUCIUS_TOKEN_FILE", ""),
@@ -636,8 +641,44 @@ def _warmup(model, warmup_wav: str) -> None:
         _run(wav, language)
 
 
+def _configure_gguf_logging() -> None:
+    """The native mtmd debug logger includes prompts; retain warnings/errors only."""
+    import atexit
+    import ctypes
+    import sys
+
+    global _native_log_callback  # callback must outlive the native libraries
+    callback_type = ctypes.CFUNCTYPE(None, ctypes.c_int, ctypes.c_char_p, ctypes.c_void_p)
+
+    def log(level, message, _):
+        # ggml WARN=3, ERROR=4; CONT=5 may continue an omitted debug prompt.
+        if level in (3, 4) and message:
+            sys.stderr.write(message.decode("utf-8", errors="replace"))
+
+    _native_log_callback = callback_type(log)
+    setters = []
+    for library, symbol in (("libllama.so.0", "llama_log_set"), ("libmtmd.so.0", "mtmd_log_set")):
+        setter = getattr(ctypes.CDLL(library), symbol)
+        setter.argtypes = [callback_type, ctypes.c_void_p]
+        setter.restype = None
+        setter(_native_log_callback, None)
+        setters.append(setter)
+
+    # Module globals are cleared before the model's C++ destructor runs.
+    # Keeping the callback in a global alone does not make it safe then:
+    # llama_context destruction logs back into an already-finalizing Python.
+    # atexit runs before module clearing. Capture every dependency so both
+    # libraries restore their native logger while Python is still alive.
+    def restore_native_loggers(bindings=tuple(setters), keepalive=_native_log_callback,
+                               null_callback=callback_type()):
+        for binding in bindings:
+            binding(null_callback, None)
+
+    atexit.register(restore_native_loggers)
+
+
 def load_model(args):
-    """Lazy heavy imports; returns the vLLM-backed R2T2 model."""
+    """Load either official inference route behind the same streaming contract."""
     if args.r2t2_source:
         import sys
 
@@ -645,6 +686,26 @@ def load_model(args):
     from r2t2 import R2T2ASRModel
 
     _suppress_upstream_transcript_prints(R2T2ASRModel)
+    if getattr(args, "backend", "vllm") in {"llama-native", "llama-hybrid"}:
+        if not args.gguf_dir:
+            raise ValueError("--gguf-dir is required for a llama backend")
+        from r2t2_llama import R2T2LlamaASRModel
+
+        _configure_gguf_logging()
+        constructor = (R2T2LlamaASRModel.LlamaHybrid if args.backend == "llama-hybrid"
+                       else R2T2LlamaASRModel.LlamaNative)
+        return constructor(
+            processor_path=args.model_dir,
+            gguf_dir=args.gguf_dir,
+            model_gguf_name=args.gguf_model,
+            mmproj_gguf_name=args.gguf_mmproj,
+            n_ctx=args.max_model_len,
+            n_batch=min(1024, args.max_model_len),
+            n_threads=8,
+            use_gpu=True,
+            n_gpu_layers=-1,
+            max_new_tokens=4,
+        )
     return R2T2ASRModel.LLM(
         model=args.model_dir,
         gpu_memory_utilization=args.gpu_memory_utilization,

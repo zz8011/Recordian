@@ -259,6 +259,7 @@ def run_continuous_dictation(
             _fail("realtime_cancelled", outcome="cancelled")
             return False
         shown = text[-guard.CONTINUOUS_PREEDIT_CHARS :]
+        changed = shown != last_display
         worker.partial_text = shown
         last_display = shown
         if not shown and not refresh:
@@ -266,6 +267,8 @@ def run_continuous_dictation(
         result = session.update_preedit(shown)
         if bool(getattr(result, "committed", False)):
             ime_idle_samples = 0
+            if changed:
+                on_state({"event": "realtime_asr_partial", "text": shown})
             return True
         outcome = str(getattr(result, "outcome", "") or "")
         if outcome == "stale" or "preedit_stale" in str(getattr(result, "detail", "")):
@@ -605,6 +608,15 @@ def run_continuous_dictation(
                 text = fh.read(_HISTORY_CHARS + 1)
         except OSError:
             text = ""
+        # A short interrupted turn has no committed spool entries yet. Keep
+        # its latest hypothesis for the result/copy UI; stale/uncertain commit
+        # metadata still forbids writing it into a possibly different field.
+        if (
+            failed
+            and worker.outcome in {"stale", "uncertain"}
+            and not int(getattr(worker, "segments_committed", 0) or 0)
+        ):
+            text = last_display
         worker.final_text = text[:_HISTORY_CHARS]
         try:
             spool.close()

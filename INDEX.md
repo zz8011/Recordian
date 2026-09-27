@@ -46,6 +46,8 @@
 | `waveform_renderer.py` | Recording overlay window + state machine (pyglet) |
 | `orb_shader.py` | Liquid-glass voice orb GLSL shader (voiceWave preset, ported from LerSent001/orb, MIT) |
 | `backend_manager.py` | Backend lifecycle management |
+| `output_mute.py` | Desktop recording output mute and crash recovery; enabled by RECORDIAN_MUTE_OUTPUT |
+| `desktop_control.py` | Compositor control socket, recording toggle and status stream |
 | `pyproject.toml` | Python package config (uv/pip) |
 
 ## Canonical Presets

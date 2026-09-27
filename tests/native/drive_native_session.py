@@ -1727,7 +1727,7 @@ def main() -> int:
                         if "Geometry:" in line:
                             nums = re.findall(r"\d+", line)
                             gw, gh = int(nums[0]), int(nums[1])
-                    xdotool("mousemove", str(gx + gw // 2), str(gy + gh // 2))
+                    xdotool("mousemove", str(gx + gw // 2), str(gy + min(gh // 2, 60)))
                     xdotool("click", "1")  # focus the editor pane
                     time.sleep(1.0)
                     before = _read_editor_buffer()

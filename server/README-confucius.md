@@ -1,13 +1,57 @@
 # Confucius4-R2T2 本机流式 ASR 服务（单用户 loopback）
 
 `server/confucius_streaming_server.py` 把 Confucius4-R2T2 的官方流式推理
-（`r2t2.R2T2ASRModel`，vLLM 后端）包装成 Recordian `confucius-asr` provider
+（`r2t2.R2T2ASRModel` 的 vLLM 后端，或 `r2t2_llama.R2T2LlamaASRModel.LlamaNative` 的 GGUF 后端）包装成 Recordian `confucius-asr` provider
 使用的 v1 WebSocket 协议服务。面向**单用户本机**场景：默认只绑
 127.0.0.1、单并发、带本地 token 认证、音频不落盘。
 
 上游固定版本：代码 `Confucius4-R2T2 @ c4611929bc3592b38dab34e96a8c9940d6da3755`
 （Apache-2.0）；模型权重另受 NetEase Model License 约束（见上游仓库
 `MODEL_LICENSE`），两者许可证不同，分发时须分别标明。
+
+## 本机当前后端：官方 GGUF Q4 CUDA（2026-09-27）
+
+正式服务已选择 `--backend llama-native`，源码来自官方 commit
+`26d55a54ce5670cff9947a167d8ed95d569fd4d9`，导出于
+`runtime/Confucius4-R2T2-gguf`。原 vLLM 仍为程序参数默认值，便于兼容原启动方式。
+当前 launcher 位于 `~/.local/bin/recordian-confucius-asr-start.sh`，启动参数为：
+
+```bash
+--backend llama-native \
+--gguf-dir /home/zz8011/Projects/recordian/models/Confucius4-R2T2-GGUF \
+--model-dir /home/zz8011/Projects/recordian/models/Confucius4-R2T2 \
+--r2t2-source /home/zz8011/Projects/recordian/runtime/Confucius4-R2T2-gguf \
+--max-model-len 4096 --host 127.0.0.1 --port 8321
+```
+
+`--gguf-model` 默认为 `Confucius4-R2T2-Q4_K_M.gguf`；`--gguf-mmproj`
+默认为 `mmproj-Confucius4-R2T2-Q8_0.gguf`。`--model-dir` 仍用于 processor/tokenizer。
+运行时设置 `GGML_BACKEND_PATH` 及 `LD_LIBRARY_PATH` 指向
+`runtime/gguf-cuda-q4`，并追加 ASR 环境中的 NVIDIA CUDA runtime/cublas 库目录。
+原生扩展为本机 Python 3.11 编译；CPU 库使用兼容本机的 AVX2 构建。
+这里仍复用现有 Python/torch/vLLM 安装中的接口依赖，但没有创建 vLLM 推理引擎。
+音频编码和文本解码由 llama.cpp CUDA 完成。不要把磁盘依赖体积与推理显存混为一谈。
+
+服务屏蔽上游原生 INFO/DEBUG 提示词日志，保留警告和错误；单并发、认证、
+160 ms 分块及客户端分段纠词协议均保持一致。
+测试结果、常驻和回退说明见 [系统语音说明](../docs/SYSTEM-VOICE-INPUT.zh-CN.md)。
+
+## Q4 退出修复与 hybrid 对照入口（2026-09-27）
+
+原日志过滤器使用 ctypes Python 回调，模型析构发生在 `Py_FinalizeEx`
+清理模块阶段，导致原生日志调用已经失效的 Python 环境。现在在 `atexit`
+阶段将 llama 和 mtmd 的回调都恢复为原生日志函数，并通过闭包持有 setter、
+回调和空指针对象，确保清理早于模块销毁。正常识别期间仍过滤提示词日志。
+
+`--backend llama-hybrid` 可选择官方 `LlamaHybrid`，其余 GGUF 文件参数与
+native 一致。需要上游 `llama_hybrid_backend.py` 和原始 HF 音频编码器权重；
+它仍使用 Q4 解码器，只将音频编码改为 PyTorch。端口、认证和流式客户端
+协议不变。该入口用于对照，当前本机正式启动器仍选择 `llama-native`。
+
+隔离 Codex 输入测试使用 `.scratch/gguf-q4/run-isolated-ime.py`：在启动
+私有 D-Bus 之前设置独立桌面标识与私有 `portals.conf`（default=none），
+防止临时会话误激活 Hyprland 桌面门户。此设置只影响测试子进程；不改
+系统真实桌面的门户配置。
 
 ## 与上游官方 ws_server.py 的差异（明确声明，不冒充）
 
@@ -76,10 +120,10 @@ token 是本地私有值，不要提交进 git（仓库 `.gitignore` 已对历�
 单会话音频预算默认 30 秒（`--max-session-seconds`）：流式每 chunk 重喂累计
 音频，成本随时长增长，超限服务端显式报错并以非 1000 关闭，**不是**无限长流；
 Recordian 的 Confucius 听写客户端会在约 25 秒通过正常停止/EOS 路径收尾，
-并通知用户重新按键开始下一段。该限制覆盖按住说话、单击录音和超长固定时长
-录音；尚不支持无缝续录。预算按音频采样数计算，与模型推理耗时不同。
+在支持 Fcitx 分段提交的输入路径中自动开始下一段，继续同一次录音；不支持分段的
+兼容路径仍有短会话时长保护。预算按音频采样数计算，与模型推理耗时不同。
 
-## 8GB GPU 实测参数依据（RTX 4070 Laptop, 2026-09-24）
+## 原 vLLM 的 8GB GPU 实测参数依据（历史，2026-09-24）
 
 本机桌面启动配置为 `gpu_memory_utilization=0.60` + `max_model_len=4096` +
 `max_num_seqs=1` + `limit_mm_per_prompt={"audio":1}` + eager。上游默认

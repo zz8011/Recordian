@@ -49,6 +49,11 @@ sudo cmake --install /tmp/recordian-commit-build
 Fcitx5 在进程启动时加载插件。替换 `.so` 后，先结束当前输入，再在已有
 图形会话里重启 Fcitx5（也可退出并重新登录）：
 
+Omarchy 本机由 `omarchy-fcitx5.service` 管理输入法，应使用
+`systemctl --user restart omarchy-fcitx5.service`。不要在服务仍运行时
+另起 `fcitx5 -r` 或调用自重启：自重启进程可能脱离服务，导致服务持续
+尝试启动第二个实例。以下 D-Bus 重启方法仅用于没有该服务管理的安装。
+
 ```sh
 gdbus call --session --dest org.fcitx.Fcitx5 --object-path /controller \
   --method org.fcitx.Fcitx.Controller1.Restart
@@ -77,13 +82,25 @@ gdbus call --session --dest org.fcitx.Fcitx5 --object-path /controller \
 
 ## DBus 协议（org.fcitx.Fcitx5 /recordian org.fcitx.Fcitx.Recordian1）
 
+Wayland 兼容补充：Wayland 虚拟输入上下文可能缓存上一轮输入框的周围文本，
+因此每轮使用绑定会话后收到的首次有效快照建立基线；其它前端仍在会话
+开始时保存已有有效快照。相同文字和选区的重复回传不使会话失效。
+Chromium 编辑器还可能将当前预编辑包含在周围文本中；插件只接受本会话
+实际发出过的最近 32 个预编辑在原插入位置的精确回报，正文两侧、Unicode
+光标和选区必须匹配。首次快照已包含预编辑时，需要下一次移除或替换该
+预编辑的精确回报才能规范化基线。分段提交用去除自身预编辑后的基线预测
+回执，避免把已有预览再算一次。空段落的零到两个布局换行只在原点空光标、
+本会话正在显示预编辑时兼容。其它文字、光标、选区和有效性变化仍然失效。
+这个初始化分支不用于分段提交回执，也不挽救已污染或已失效的会话。
+空的 `BeginSession` 不发送多余的空预编辑。
+
 | 方法 | 签名 | 说明 |
 |------|------|------|
 | `Ping` | `() → s` | 存活探测，返回 `ok` |
 | `BeginSession` | `(s) → s` | 把流式会话绑定到**当前焦点**且非 dummy、非密码的 IC；返回 `<token> preedit=<0/1> frontend=<f> program=<p> segments=1`。`segments=1` 表示本桥支持 `CommitSegment`；旧桥没有该标记 |
 | `UpdatePreedit` | `(ss) → s` | 只替换绑定 IC 的 client preedit，不提交、不抢焦点 |
 | `CommitSegment` | `(sus) → s` | 在**同一 token** 上提交一段。`sequence` 从 1 起，每次接受后恰好 +1。重复或跳号拒绝且不写入、不推进、不消费 token。成功返回 `segment <n> <frontend> <program>`（空文本为 `segment <n> cleared`）。失焦、按键、reset、敏感能力、TTL、外来 preedit 与 `CommitSession` 相同，命中则本段不写 |
-| `CommitSession` | `(ss) → s` | 清空 preedit 后把最终文本**提交一次**，token 随即失效。分段成功之后仍用开始时的同一个 token |
+| `CommitSession` | `(ss) → s` | 在预输入仍活跃时把最终文本**提交一次**，随后清空 preedit，token 随即失效。分段成功之后仍用开始时的同一个 token |
 | `CancelSession` | `(s) → s` | 清空 preedit、丢弃会话，不提交 |
 | `CommitText` | `(s) → s` | 旧非流式接口：严格要求当前有焦点 IC，无 `mostRecentInputContext` 回退 |
 
@@ -151,3 +168,16 @@ gdbus call --session --dest org.fcitx.Fcitx5 --object-path /controller \
 用修饰键停止时，若 toolkit 仍自行把预览预编辑提交进输入框（GTK 在
 失焦/点击时会这样做），需要另案处理。本改动不宣称该路径已经在桌面上
 复验通过，也不承诺所有应用都能回滚 preedit。
+
+## 富文本编辑器的确认顺序
+
+`CommitSession` 和非空 `CommitSegment` 必须先 `commitString(text)`，
+再清理本插件拥有的 preedit。先清空再提交会产生空数据的
+`compositionend`（取消输入），随后另发 `insertText`；普通 textarea
+能够保留文字，但 Electron 41.0.3 + Lexical 0.42.0 可复现预览消失且
+最终编辑器状态为空。先提交后清理与普通拼音确认的事件顺序一致，
+能让最终文本通过活跃的 composition 保留。
+
+空最终文本、空分段与取消仍只清理预输入；失焦、敏感输入、会话失效、
+分段序号与重复提交保护保持原有行为。验证应同时读取富文本编辑器
+内部状态和页面可见文字，不能只把 D-Bus 的成功回复当成应用保存成功。

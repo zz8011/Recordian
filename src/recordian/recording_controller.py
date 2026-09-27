@@ -34,6 +34,7 @@ from .linux_dictate import (
     start_record_process,
     stop_record_process,
 )
+from .output_mute import begin_output_mute
 from .postprocess_pipeline import (
     PostprocessPipelineContext,
     _apply_target_window,
@@ -174,7 +175,8 @@ def build_ptt_hotkey_handlers(
     cooldown_s = max(0.0, args.cooldown_ms / 1000.0)
     ffmpeg_bin = ensure_ffmpeg_available()
     recorder_backend = choose_record_backend(args.record_backend, ffmpeg_bin)
-    committer = resolve_committer(args.commit_backend)
+    base_committer = resolve_committer(args.commit_backend)
+    committer = base_committer
     provider = create_provider(args)
     auto_lexicon: AutoLexicon | None = None
     if bool(getattr(args, "enable_auto_lexicon", True)):
@@ -452,7 +454,15 @@ def build_ptt_hotkey_handlers(
                 return
         _stop_recording(expected_handle=record_handle, limit_s=limit_s)
 
+    def _restore_output(lease) -> None:
+        if lease is not None:
+            try:
+                lease.end()
+            except Exception as exc:
+                on_error({"event": "error", "error": f"音箱恢复失败，将在服务退出时重试：{exc}"})
+
     def _start_recording(trigger_source: str = "hotkey") -> bool:
+        nonlocal committer
         now = time.monotonic()
         last_trigger = float(cast(float, _get_state("last_trigger")))
         if now - last_trigger < cooldown_s:
@@ -480,13 +490,19 @@ def build_ptt_hotkey_handlers(
         temp_dir: TemporaryDirectory[str] | None = None
         record_handle: RecordProcessHandle | subprocess.Popen[Any] | None = None
         realtime_worker: _RealtimeASRWorkerHandle | None = None
+        output_mute = None
         try:
+            from .wayland_desktop import select_desktop_committer
+
+            committer = select_desktop_committer(base_committer)
+            _apply_target_window(committer, {"target_window_id": target_wid})
             _set_state("recording_state", RecordingState.RECORDING)
             temp_dir = TemporaryDirectory(prefix="recordian-ptt-")
             suffix = ".ogg" if args.record_format == "ogg" else ".wav"
             if recorder_backend == "arecord":
                 suffix = ".wav"
             audio_path = Path(temp_dir.name) / f"input{suffix}"
+            output_mute = begin_output_mute()
             record_handle = start_record_process(
                 args=args,
                 ffmpeg_bin=ffmpeg_bin,
@@ -497,6 +513,7 @@ def build_ptt_hotkey_handlers(
             )
             _update_state({
                 "process": record_handle,
+                "output_mute": output_mute,
                 "temp_dir": temp_dir,
                 "audio_path": audio_path,
                 "record_started_at": time.perf_counter(),
@@ -665,6 +682,7 @@ def build_ptt_hotkey_handlers(
                     abort_timer = state.get("duration_limit_timer")
                     state.update({
                         "process": None,
+                        "output_mute": None,
                         "temp_dir": None,
                         "audio_path": None,
                         "record_started_at": None,
@@ -716,6 +734,7 @@ def build_ptt_hotkey_handlers(
                         stop_record_process(record_handle, recorder_backend=recorder_backend)
                     except Exception:  # noqa: BLE001
                         pass
+                _restore_output(output_mute)
                 if abort_temp_dir is not None:
                     abort_temp_dir.cleanup()
                 lock.release()
@@ -752,6 +771,7 @@ def build_ptt_hotkey_handlers(
                 return False
 
             # Narrow dict[str, object] values to expected types after None-guard.
+            output_mute = state.get("output_mute")
             _process = cast(RecordProcessHandle | subprocess.Popen[Any], process)
             _started = cast(float, started)
             _audio_path = cast(Path, audio_path)
@@ -764,6 +784,7 @@ def build_ptt_hotkey_handlers(
                 "record_started_at": None,
                 "level_stop": None,
                 "recording_state": RecordingState.PROCESSING,
+                "output_mute": None,
                 "voice_session_active": False,
                 "voice_auto_stopping": False,
                 "voice_semantic_enabled": False,
@@ -805,7 +826,10 @@ def build_ptt_hotkey_handlers(
             level_stop.set()
 
         try:
-            stop_record_process(_process, recorder_backend=recorder_backend)
+            try:
+                stop_record_process(_process, recorder_backend=recorder_backend)
+            finally:
+                _restore_output(output_mute)
         except Exception as exc:  # noqa: BLE001
             _temp_dir.cleanup()
             _transition_to_idle()

@@ -244,6 +244,12 @@ void main() {
         @window.event
         def on_show() -> None:
             window.set_location(_pos_x, _pos_y)
+            # Mapping is asynchronous. Move through the compositor once it
+            # knows this window, using the current monitor rather than the
+            # XWayland screen selected when the tray originally started.
+            from recordian.wayland_desktop import place_overlay_on_active_monitor
+
+            pyglet.clock.schedule_once(lambda dt: place_overlay_on_active_monitor(), 0.12)
 
         @window.event
         def on_mouse_press(x: int, y: int, button: int, modifiers: int) -> None:
@@ -323,7 +329,8 @@ void main() {
                             self.level_boost = 0.0
                             self.amplitude = 0.0
                             self.base_mode = 1.0
-                        window.set_location(_pos_x, _pos_y)
+                        if state_changed:
+                            window.set_location(_pos_x, _pos_y)
                         window.set_visible(True)
                         _set_clickable(True)
                     elif self.state == "processing":

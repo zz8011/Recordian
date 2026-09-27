@@ -1009,3 +1009,42 @@ def test_no_segments_keeps_pipeline_refiner(monkeypatch) -> None:
     assert h.stop() is True
     assert h.pipeline_done.wait(timeout=1.0) is True
     assert h.contexts[0].refiner is not None
+
+
+def test_output_restored_on_stop_before_postprocess(monkeypatch):
+    order = []
+    lease = SimpleNamespace(end=lambda: order.append("restore"))
+    monkeypatch.setattr("recordian.recording_controller.begin_output_mute", lambda: order.append("mute") or lease)
+    ptt = _make_ptt(monkeypatch, _ConfuciusProvider())
+    monkeypatch.setattr("recordian.recording_controller.run_postprocess_pipeline", lambda ctx: order.append("pipeline"))
+    assert ptt.start()
+    assert order == ["mute"]
+    assert ptt.stop()
+    ptt.exit_daemon()
+    assert order == ["mute", "restore", "pipeline"]
+
+
+def test_output_restored_when_recorder_start_fails(monkeypatch):
+    order = []
+    monkeypatch.setattr("recordian.recording_controller.begin_output_mute", lambda: SimpleNamespace(end=lambda: order.append("restore")))
+    ptt = _make_ptt(monkeypatch, _ConfuciusProvider())
+    def fail(**kwargs):
+        raise RuntimeError("recorder unavailable")
+    monkeypatch.setattr("recordian.recording_controller.start_record_process", fail)
+    with pytest.raises(RuntimeError, match="recorder unavailable"):
+        ptt.start()
+    assert order == ["restore"]
+    assert not ptt.stop()
+
+
+def test_output_restored_when_recorder_stop_fails(monkeypatch):
+    order = []
+    monkeypatch.setattr("recordian.recording_controller.begin_output_mute", lambda: SimpleNamespace(end=lambda: order.append("restore")))
+    ptt = _make_ptt(monkeypatch, _ConfuciusProvider())
+    def fail(*args, **kwargs):
+        raise RuntimeError("recorder failed")
+    monkeypatch.setattr("recordian.recording_controller.stop_record_process", fail)
+    assert ptt.start()
+    assert not ptt.stop()
+    assert order == ["restore"]
+    assert not ptt.stop()

@@ -179,10 +179,17 @@ def _main_impl() -> None:
     os.ftruncate(lock_fd, 0)
     os.write(lock_fd, str(os.getpid()).encode("ascii"))
 
-    try:
-        from pynput import keyboard
-    except ModuleNotFoundError as exc:
-        raise RuntimeError("pynput not installed. Run: pip install -e '.[hotkey]'") from exc
+    external_hotkeys = os.environ.get("RECORDIAN_HOTKEY_BACKEND") == "external"
+    if not external_hotkeys:
+        try:
+            from pynput import keyboard
+        except ModuleNotFoundError as exc:
+            raise RuntimeError("pynput not installed. Run: pip install -e '.[hotkey]'") from exc
+
+    def event_key_names(key: object) -> set[str]:
+        if external_hotkeys:
+            return _expand_key_name(str(key))
+        return _key_to_names(key, keyboard)
 
     def _print_json(payload: dict[str, object]) -> None:
         print(json.dumps(payload, ensure_ascii=False), flush=True)
@@ -221,7 +228,15 @@ def _main_impl() -> None:
         if event == "stopped":
             notifier.notify(Notification(title="Recordian 已退出", body="热键守护进程已停止", urgency="low"))
 
+    desktop_status = {"value": "idle"}
+
     def _emit(payload: dict[str, object]) -> None:
+        event_status = {
+            "recording_started": "recording", "processing_started": "transcribing",
+            "ready": "idle", "result": "idle", "error": "idle", "stopped": "stopped",
+        }.get(str(payload.get("event", "")))
+        if event_status is not None:
+            desktop_status["value"] = event_status
         _print_json(payload)
         try:
             _notify(payload)
@@ -325,7 +340,7 @@ def _main_impl() -> None:
             stop_pressed = {"active": False}
 
             def _on_press(key: object):
-                key_names = _key_to_names(key, keyboard)
+                key_names = event_key_names(key)
                 if not key_names:
                     return True
                 pressed.update(key_names)
@@ -367,7 +382,7 @@ def _main_impl() -> None:
                 return True
 
             def _on_release(key: object):
-                key_names = _key_to_names(key, keyboard)
+                key_names = event_key_names(key)
                 if not key_names:
                     return True
                 pressed.difference_update(key_names)
@@ -388,7 +403,7 @@ def _main_impl() -> None:
             stop_trigger_pressed = {"active": False}
 
             def _on_press(key: object):
-                key_names = _key_to_names(key, keyboard)
+                key_names = event_key_names(key)
                 if not key_names:
                     return True
                 pressed.update(key_names)
@@ -418,7 +433,7 @@ def _main_impl() -> None:
                 return True
 
             def _on_release(key: object):
-                key_names = _key_to_names(key, keyboard)
+                key_names = event_key_names(key)
                 if not key_names:
                     return True
                 pressed.difference_update(key_names)
@@ -443,7 +458,7 @@ def _main_impl() -> None:
         pressed: set[str] = set()  # type: ignore[no-redef]
 
         def _on_press(key: object):
-            key_names = _key_to_names(key, keyboard)
+            key_names = event_key_names(key)
             if not key_names:
                 return True
             pressed.update(key_names)
@@ -456,7 +471,7 @@ def _main_impl() -> None:
             return True
 
         def _on_release(key: object):
-            key_names = _key_to_names(key, keyboard)
+            key_names = event_key_names(key)
             if not key_names:
                 return True
             pressed.difference_update(key_names)
@@ -479,10 +494,18 @@ def _main_impl() -> None:
         }
     )
 
-    with keyboard.Listener(on_press=_on_press, on_release=_on_release) as listener:
-        while not stop_event.is_set():
-            time.sleep(0.1)
-        listener.stop()
+    if external_hotkeys:
+        from recordian.desktop_control import ControlServer
+
+        with ControlServer(_on_press, _on_release, trigger_keys, toggle_keys, exit_daemon,
+                           get_status=lambda: desktop_status["value"]) as control:
+            while not stop_event.is_set():
+                control.poll()
+    else:
+        with keyboard.Listener(on_press=_on_press, on_release=_on_release) as listener:
+            while not stop_event.is_set():
+                time.sleep(0.1)
+            listener.stop()
 
     if voice_wake_service is not None:
         voice_wake_service.stop()

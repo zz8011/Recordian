@@ -810,8 +810,9 @@ def test_settings_window_screenshot_uses_sanitized_config(tmp_path: Path) -> Non
     daily = _capture_window(window, gtk, Gdk)
     daily_path = target_dir / "settings-daily.png"
     daily.savev(str(daily_path), "png", [], [])
-    assert daily.get_width() <= 780
-    assert daily.get_height() <= 680
+    scale = window.get_scale_factor()
+    assert daily.get_width() <= 780 * scale
+    assert daily.get_height() <= 680 * scale
     assert daily_path.stat().st_size > 1000
 
     expander.set_expanded(True)
@@ -827,7 +828,7 @@ def test_settings_window_screenshot_uses_sanitized_config(tmp_path: Path) -> Non
     advanced = _capture_window(window, gtk, Gdk)
     advanced_path = target_dir / "settings-advanced.png"
     advanced.savev(str(advanced_path), "png", [], [])
-    assert advanced.get_width() < 1200
+    assert advanced.get_width() < 1200 * scale
     del advanced_y
     window.destroy()
     _pump(glib)
