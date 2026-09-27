@@ -328,6 +328,7 @@ def _main_impl() -> None:
                 on_wake=_on_wake,
                 on_event=_emit,
                 cache_dir=Path.home() / ".cache" / "recordian" / "wake",
+                can_listen=lambda: desktop_status["value"] == "idle" and not stop_event.is_set(),
             )
             voice_wake_service.start()
 

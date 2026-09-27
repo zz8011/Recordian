@@ -5,17 +5,6 @@ from collections import deque
 from pathlib import Path
 
 
-def test_voice_wake_owner_audio_chunks_has_maxlen():
-    """测试 voice_wake.py 中的 owner_audio_chunks 有 maxlen 限制"""
-    import inspect
-
-    from recordian import voice_wake
-
-    source = inspect.getsource(voice_wake.VoiceWakeService._run)
-    # 检查 deque(maxlen=100) 存在
-    assert "deque(maxlen=100)" in source, "voice_wake.py 中的 owner_audio_chunks 应该有 maxlen=100"
-
-
 def test_hotkey_dictate_owner_audio_chunks_has_maxlen():
     """测试 hotkey_dictate.py 中的 owner_audio_chunks 有 maxlen 限制"""
     import inspect

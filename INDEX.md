@@ -64,7 +64,7 @@
 - **Hotkey configuration** → `hotkey_dictate.py` + `recordian-hotkey-dictate --help`
 - **Continuous Alt dictation** → `continuous_dictation.py` + `docs/CONTINUOUS-DICTATION.zh-CN.md`
 - **Local streaming ASR server** → `server/confucius_streaming_server.py` + `server/README-confucius.md`
-- **Wake word** → `voice_wake.py`
+- **Wake word** → `voice_wake.py`; local setup and validation: `docs/VOICE-WAKE.zh-CN.md`
 - **Config schema** → `runtime_config.py` + `pyproject.toml`
 - **Running the daemon** → `recordian-hotkey-dictate --help`
 - **Testing** → `pytest tests/ -v`

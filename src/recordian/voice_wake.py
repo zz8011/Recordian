@@ -458,12 +458,14 @@ class VoiceWakeService:
         on_wake: Callable[[str], None],
         on_event: EventCallback,
         cache_dir: Path,
+        can_listen: Callable[[], bool] | None = None,
     ) -> None:
         self.model = model
         self.runtime = runtime
         self.on_wake = on_wake
         self.on_event = on_event
         self.cache_dir = cache_dir
+        self.can_listen = can_listen or (lambda: True)
 
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
@@ -573,6 +575,7 @@ class VoiceWakeService:
                 joiner=self.model.joiner,
                 keywords_file=str(keywords_file),
                 num_threads=self.model.num_threads,
+                sample_rate=self.model.sample_rate,
                 provider=self.model.provider,
             )
             stream = spotter.create_stream()
@@ -580,12 +583,14 @@ class VoiceWakeService:
             self._emit({"message": f"voice_wake_init_failed: {exc}"})
             return
 
-        samples_per_read = int(self.model.sample_rate * 0.1)
         pre_vad_enabled = bool(getattr(self.runtime, "pre_vad_enabled", True))
         pre_vad_aggressiveness = max(0, min(3, int(getattr(self.runtime, "pre_vad_aggressiveness", 3))))
         pre_vad_frame_ms = int(getattr(self.runtime, "pre_vad_frame_ms", 30))
         if pre_vad_frame_ms not in {10, 20, 30}:
             pre_vad_frame_ms = 30
+        # One read is one VAD frame. Previously a 100 ms block counted as one
+        # frame, delaying gate entry and throwing away ready decoder work.
+        samples_per_read = self.model.sample_rate * pre_vad_frame_ms // 1000
         pre_vad_enter_frames = max(1, int(getattr(self.runtime, "pre_vad_enter_frames", 4)))
         pre_vad_hangover_ms = max(0, int(getattr(self.runtime, "pre_vad_hangover_ms", 120)))
         pre_vad_hangover_s = pre_vad_hangover_ms / 1000.0
@@ -662,7 +667,7 @@ class VoiceWakeService:
         owner_audio_samples = 0
         owner_max_samples = max(samples_per_read, int(self.model.sample_rate * owner_window_s))
         if owner_verify_enabled:
-            owner_audio_chunks = deque(maxlen=100)
+            owner_audio_chunks = deque(maxlen=max(100, owner_max_samples // samples_per_read + 1))
 
         pre_vad = None
         if pre_vad_enabled:
@@ -707,7 +712,6 @@ class VoiceWakeService:
                 )
             }
         )
-        self._emit({"message": "voice_wake_ready"})
 
         stats_enabled = bool(getattr(self.runtime, "stats_enabled", False))
         stats_started_ts = time.monotonic()
@@ -744,11 +748,39 @@ class VoiceWakeService:
                 dtype="float32",
                 blocksize=samples_per_read,
             ) as mic:
+                self._emit({"message": "voice_wake_ready"})
+                listening = True
                 while not self._stop.is_set():
-                    audio, _ = mic.read(samples_per_read)
+                    audio, overflowed = mic.read(samples_per_read)
+                    if self._stop.is_set():
+                        break
                     samples = np.ascontiguousarray(audio.reshape(-1))
                     now = time.monotonic()
                     stats["frames_total"] += 1
+
+                    # Keep draining the microphone while dictation is busy, but
+                    # discard its audio so it cannot wake the next session.
+                    allowed = self.can_listen() and now - self._last_trigger >= max(0.0, self.runtime.cooldown_s)
+                    if not allowed or overflowed:
+                        if listening or overflowed:
+                            # reset_stream only clears the keyword search. A
+                            # fresh stream also drops queued features and the
+                            # encoder history from before the audio gap.
+                            stream = spotter.create_stream()
+                            pre_vad_pcm_buffer.clear()
+                            pre_roll_chunks.clear()
+                            pre_roll_total_samples = 0
+                            if owner_audio_chunks is not None:
+                                owner_audio_chunks.clear()
+                            owner_audio_samples = 0
+                            speech_run_frames = 0
+                            gate_hangover_deadline = 0.0
+                            kws_gate_open = not pre_vad_enabled
+                        listening = False
+                        if overflowed:
+                            self._emit({"message": "voice_wake_audio_overflow_reset"})
+                        continue
+                    listening = True
 
                     elapsed_s = now - decode_budget_last_refill_ts
                     if elapsed_s > 0:
@@ -796,7 +828,7 @@ class VoiceWakeService:
                             feed_current_chunk = False
                         elif kws_gate_open and not block_has_speech and now > gate_hangover_deadline:
                             kws_gate_open = False
-                            spotter.reset_stream(stream)
+                            stream = spotter.create_stream()
                             feed_current_chunk = False
 
                     if kws_gate_open:

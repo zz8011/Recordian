@@ -550,3 +550,35 @@ def test_no_segments_failure_needs_no_partial_error(monkeypatch: pytest.MonkeyPa
 
     errors = [e for e in h.events if e.get("event") == "error"]
     assert not any("continuous_partial_failure" in str(e.get("error", "")) for e in errors)
+
+
+def test_wake_listening_tracks_recording_and_processing(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Exercise the production can_listen wiring without starting an audio thread."""
+    checked = []
+
+    class FakeWake:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+        def start(self):
+            can_listen = self.kwargs['can_listen']
+            on_event = self.kwargs['on_event']
+            assert can_listen()
+            self.kwargs['on_wake']('嗨小二')
+            assert not can_listen()
+            on_event({'event': 'processing_started'})
+            assert not can_listen()
+            on_event({'event': 'result', 'result': {'text': ''}})
+            assert can_listen()
+            checked.append(True)
+
+        def stop(self):
+            assert not self.kwargs['can_listen']()  # daemon stop event wins over idle
+
+    monkeypatch.setattr('recordian.voice_wake.VoiceWakeService', FakeWake)
+    session = _drive(monkeypatch, tmp_path, ['--trigger-mode', 'ptt', '--enable-voice-wake'])
+    try:
+        assert checked == [True]
+        assert session.calls['accepted'] == 1
+    finally:
+        session.close()
