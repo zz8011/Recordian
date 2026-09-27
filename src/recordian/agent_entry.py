@@ -311,6 +311,8 @@ class AgentHub:
         with self.lock:
             return json.loads(json.dumps({'mode': self.mode, 'selected': self.selected, 'phase': self.phase,
                 'preview': self.preview, 'notice': self.notice, 'capturing': self.capture is not None,
+                'capture_mode': self.capture.mode if self.capture else None,
+                'trigger_routes': {'voice_wake': 'agent', 'hotkey': 'dictation', 'agent_panel': 'agent'},
                 'instances': [asdict(a) for a in self.instances.values()], 'sessions': self.sessions,
                 'tasks': self.tasks[-100:]}, ensure_ascii=False))
 
@@ -324,13 +326,17 @@ class AgentHub:
             self.preview = ''
             self.notice = '语音将交给 ' + self.instances[agent_id].name if mode == 'agent' else '语音将输入当前应用'
 
-    def begin_capture(self):
+    def begin_capture(self, trigger_source='panel'):
         with self.lock:
             if self.closed or self.capture is not None:
                 raise RuntimeError('语音入口正在处理上一段录音')
-            if self.mode == 'agent' and self.selected in self.cancels:
+            modes = {'voice_wake': 'agent', 'agent_panel': 'agent', 'hotkey': 'dictation', 'panel': self.mode}
+            if trigger_source not in modes:
+                raise ValueError('未知录音来源')
+            mode = modes[trigger_source]
+            if mode == 'agent' and self.selected in self.cancels:
                 raise RuntimeError('这个 Agent 正在执行任务，请等它完成或先停止任务')
-            self.capture = Capture(self.mode, self.selected)
+            self.capture = Capture(mode, self.selected)
             self.preview = ''
             return self.capture
 

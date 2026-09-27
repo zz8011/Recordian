@@ -202,3 +202,28 @@ def test_cancel_unblocks_full_stdin_and_terminates_group(tmp_path):
     thread.join(timeout=5)
     assert not thread.is_alive()
     assert len(failures)==1 and isinstance(failures[0], InterruptedError)
+
+
+@pytest.mark.parametrize('panel_mode', ['agent', 'dictation'])
+def test_wake_and_keyboard_route_independently_of_panel(hub, panel_mode):
+    hub.select(panel_mode, 'hermes')
+    for source, mode in [('voice_wake', 'agent'), ('hotkey', 'dictation'), ('agent_panel', 'agent')]:
+        capture = hub.begin_capture(source)
+        assert capture.mode == mode
+        with pytest.raises(ValueError):
+            hub.select(panel_mode, 'other')
+        hub.accept_transcript(capture, {'result': {'text': source, 'commit': {'outcome': 'committed'}}})
+        hub.end_capture(capture)
+        wait_done(hub)
+    assert [c[1] for c in FakeAdapter.calls] == ['voice_wake', 'agent_panel']
+
+
+def test_busy_agent_does_not_block_keyboard_dictation(hub):
+    hub.select('agent', 'hermes')
+    hub.cancels['hermes'] = threading.Event()
+    with pytest.raises(RuntimeError, match='正在执行'):
+        hub.begin_capture('voice_wake')
+    capture = hub.begin_capture('hotkey')
+    assert capture.mode == 'dictation'
+    hub.end_capture(capture)
+    hub.cancels.clear()

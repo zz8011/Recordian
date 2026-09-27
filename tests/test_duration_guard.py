@@ -1084,7 +1084,7 @@ def test_agent_capture_uses_memory_sink_and_dispatches_final_only(monkeypatch, t
         assert context.args.enable_remote_paste is False
         context.on_result({'event': 'result', 'result': {'text': '完整的任务', 'commit': {'outcome': 'committed'}}})
     monkeypatch.setattr('recordian.recording_controller.run_postprocess_pipeline', pipeline)
-    assert h.start()
+    assert h.start('voice_wake')
     with pytest.raises(ValueError):
         hub.select('dictation', 'hermes')
     assert h.stop()
@@ -1101,7 +1101,7 @@ def test_agent_begin_failure_releases_recording_lock(monkeypatch, tmp_path):
     class Hub:
         def __init__(self):
             self.count = 0
-        def begin_capture(self):
+        def begin_capture(self, trigger_source):
             self.count += 1
             raise RuntimeError('Agent busy')
         def end_capture(self, capture):
@@ -1112,3 +1112,31 @@ def test_agent_begin_failure_releases_recording_lock(monkeypatch, tmp_path):
         with pytest.raises(RuntimeError, match='Agent busy'):
             h.start()
     assert hub.count == 2
+
+
+def test_keyboard_capture_stays_dictation_even_when_panel_selects_agent(monkeypatch, tmp_path):
+    import json
+    import sys
+
+    from recordian.agent_entry import AgentHub
+
+    config = tmp_path/'agents.json'
+    config.write_text(json.dumps({'instances': [{'id': 'hermes', 'executable': sys.executable, 'workspace': str(tmp_path)}]}))
+    hub = AgentHub(config, tmp_path/'tasks.json')
+    hub.select('agent', 'hermes')
+    selected = []
+    def select(committer):
+        selected.append(committer)
+        return committer
+    monkeypatch.setattr('recordian.wayland_desktop.select_desktop_committer', select)
+    def pipeline(context):
+        assert context.committer.backend_name != 'agent-buffer'
+        context.on_result({'event': 'result', 'result': {'text': '普通输入', 'commit': {'outcome': 'committed'}}})
+    monkeypatch.setattr('recordian.recording_controller.run_postprocess_pipeline', pipeline)
+    h = _make_ptt(monkeypatch, _ConfuciusProvider(), args_overrides={'_agent_hub': hub})
+    assert h.start()
+    assert hub.capture.mode == 'dictation'
+    assert h.stop()
+    h.exit_daemon()
+    assert selected and not hub.tasks and hub.capture is None
+    hub.close()

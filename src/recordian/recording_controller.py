@@ -496,7 +496,7 @@ def build_ptt_hotkey_handlers(
         try:
             from .wayland_desktop import select_desktop_committer
 
-            agent_capture = agent_hub.begin_capture() if agent_hub is not None else None
+            agent_capture = agent_hub.begin_capture(trigger_source) if agent_hub is not None else None
             capture_args = agent_capture.arguments(args) if agent_capture is not None else args
             committer = (
                 agent_capture.sink if agent_capture is not None and agent_capture.mode == "agent"

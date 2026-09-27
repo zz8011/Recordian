@@ -33,9 +33,8 @@ class AgentPanel:
         self.path = path or address_path()
         self.token = secrets.token_urlsafe(32)
         if record is None:
-            from .desktop_control import send_action
             def record():
-                return send_action('toggle')
+                raise RuntimeError('录音入口尚未就绪，请稍后重试')
         self.record = record
         owner = self
 
@@ -98,9 +97,6 @@ class AgentPanel:
                     elif self.path == '/api/instance':
                         owner.hub.configure_instance(data)
                     elif self.path == '/api/record':
-                        with owner.hub.lock:
-                            if owner.hub.mode != 'agent':
-                                raise ValueError('请先切换到语音指令模式')
                         owner.record()
                     else:
                         self.respond(404, {'error': '不存在'})

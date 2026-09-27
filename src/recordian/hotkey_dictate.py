@@ -318,6 +318,17 @@ def _main_impl() -> None:
         def _request_stop_recording() -> None:
             threading.Thread(target=stop_recording, daemon=True, name="recordian-stop-recording").start()
 
+        if agent_panel is not None:
+            def _panel_record():
+                if desktop_status["value"] == "recording":
+                    _request_stop_recording()
+                elif desktop_status["value"] == "idle":
+                    if not start_recording("agent_panel"):
+                        raise RuntimeError("请稍后再开始录音")
+                else:
+                    raise RuntimeError("请等待当前录音处理完成")
+            agent_panel.record = _panel_record
+
         def _start_if_ready() -> bool:
             if session["awaiting_handoff"]:
                 return False
