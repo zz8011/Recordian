@@ -172,8 +172,8 @@ def _should_extend_last_speech_timestamp(
 
 
 def _effective_wake_auto_stop_silence_s(configured_silence_s: float) -> float:
-    """Wake sessions should not auto-stop more aggressively than the backend default."""
-    return max(1.5, max(0.0, float(configured_silence_s)))
+    """Honor the chosen pause, with a short floor against accidental zero pauses."""
+    return max(0.5, float(configured_silence_s))
 
 
 def _pcm16le_to_f32(data: bytes, *, channels: int = 1) -> list:
@@ -284,6 +284,7 @@ def start_wake_session_monitor(context: WakeSessionMonitorContext) -> threading.
             except Exception:
                 wake_speech_confirm_s = 0.18
             speech_evidence_s = 0.0
+            last_vad_speech_ts = None
             owner_filter_enabled = bool(context.get_state("voice_owner_filter_enabled"))
             owner_threshold = min(0.99, max(0.0, float(getattr(context.args, "wake_owner_threshold", 0.72))))
             owner_window_s = max(0.6, float(getattr(context.args, "wake_owner_window_s", 1.6)))
@@ -469,6 +470,7 @@ def start_wake_session_monitor(context: WakeSessionMonitorContext) -> threading.
                 nonlocal noise_floor, smoothed_level, vad, vad_init_attempted, vad_log_emitted
                 nonlocal speech_evidence_s, owner_audio_samples, owner_last_verify_ts, owner_last_active
                 nonlocal owner_pass_streak, owner_fail_streak, display_tracker
+                nonlocal last_vad_speech_ts
 
                 mono_frame = np.ascontiguousarray(np.asarray(mono_frame, dtype=np.float32).reshape(-1))
                 if mono_frame.size == 0:
@@ -628,6 +630,8 @@ def start_wake_session_monitor(context: WakeSessionMonitorContext) -> threading.
                     owner_gate_rejected = owner_filter_enabled and not owner_active
                     if owner_gate_rejected and not owner_seen:
                         speech_detected_raw = False
+                    if speech_detected_raw:
+                        last_vad_speech_ts = now_ts
 
                     block_duration_s = max(0.0, float(frames) / float(sample_rate)) if sample_rate > 0 else 0.0
                     speech_evidence_s, speech_detected = _update_speech_evidence(
@@ -639,7 +643,10 @@ def start_wake_session_monitor(context: WakeSessionMonitorContext) -> threading.
 
                     speech_started = bool(context.get_state("voice_speech_detected"))
                     soft_keepalive = False
-                    if speech_started and not speech_detected_raw and not owner_gate_rejected:
+                    # Briefly bridge VAD misses, but do not let persistent low
+                    # noise refresh the end-of-speech timer without limit.
+                    if (speech_started and not speech_detected_raw and not owner_gate_rejected
+                            and last_vad_speech_ts is not None and now_ts - last_vad_speech_ts <= 0.3):
                         soft_keepalive = _is_soft_keepalive_speech_frame(
                             level=level,
                             rms=rms,

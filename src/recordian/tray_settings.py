@@ -1286,6 +1286,7 @@ def open_settings_gtk(
             key="wake_auto_stop_silence_s",
             label="静音自动结束 (s)",
             value=current.get("wake_auto_stop_silence_s", 1.0),
+            hint="停说后等待多久结束录音。可设为 1 秒；最低 0.5 秒，太短可能截断思考停顿。",
         )
         row = _add_field(
             sec_wake_main,
