@@ -1048,3 +1048,67 @@ def test_output_restored_when_recorder_stop_fails(monkeypatch):
     assert not ptt.stop()
     assert order == ["restore"]
     assert not ptt.stop()
+
+
+def test_agent_capture_uses_memory_sink_and_dispatches_final_only(monkeypatch, tmp_path):
+    import json
+    import sys
+
+    from recordian.agent_entry import AgentHub
+    from recordian.postprocess_pipeline import _resolve_auto_hard_enter
+
+    calls = []
+    class Adapter:
+        def run(self, instance, text, session_id, cancel, on_event):
+            calls.append(text)
+            return {'text': 'done'}
+    config = tmp_path/'agents.json'
+    config.write_text(json.dumps({'instances': [{'id': 'hermes', 'executable': sys.executable, 'workspace': str(tmp_path)}]}))
+    hub = AgentHub(config, tmp_path/'tasks.json', adapters={'hermes': Adapter})
+    hub.select('agent', 'hermes')
+    workers = []
+    def worker_start(**kwargs):
+        workers.append(kwargs)
+        assert kwargs['committer'].backend_name == 'agent-buffer'
+        assert kwargs['args'].enable_remote_paste is False
+        assert _resolve_auto_hard_enter(kwargs['args']) is False
+        kwargs['committer'].begin_composition().update_preedit('还没说完')
+        assert calls == []
+    h = _make_ptt(monkeypatch, _ConfuciusProvider(), start_worker=worker_start,
+                  args_overrides={'_agent_hub': hub, 'auto_hard_enter': True, 'enable_remote_paste': True})
+    def no_desktop(committer):
+        raise AssertionError('Agent recording must not select a desktop committer')
+    monkeypatch.setattr('recordian.wayland_desktop.select_desktop_committer', no_desktop)
+    def pipeline(context):
+        assert context.committer.backend_name == 'agent-buffer'
+        assert context.args.enable_remote_paste is False
+        context.on_result({'event': 'result', 'result': {'text': '完整的任务', 'commit': {'outcome': 'committed'}}})
+    monkeypatch.setattr('recordian.recording_controller.run_postprocess_pipeline', pipeline)
+    assert h.start()
+    with pytest.raises(ValueError):
+        hub.select('dictation', 'hermes')
+    assert h.stop()
+    h.exit_daemon()
+    for thread in hub.threads.values():
+        thread.join(timeout=2)
+    assert calls == ['完整的任务']
+    assert hub.capture is None
+    assert workers
+    hub.close()
+
+
+def test_agent_begin_failure_releases_recording_lock(monkeypatch, tmp_path):
+    class Hub:
+        def __init__(self):
+            self.count = 0
+        def begin_capture(self):
+            self.count += 1
+            raise RuntimeError('Agent busy')
+        def end_capture(self, capture):
+            pass
+    hub = Hub()
+    h = _make_ptt(monkeypatch, _ConfuciusProvider(), args_overrides={'_agent_hub': hub})
+    for _ in range(2):
+        with pytest.raises(RuntimeError, match='Agent busy'):
+            h.start()
+    assert hub.count == 2

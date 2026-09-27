@@ -380,6 +380,8 @@ def _coerce_bool(value: object, default: bool = False) -> bool:
 
 
 def _resolve_auto_hard_enter(args: argparse.Namespace) -> bool:
+    if bool(getattr(args, "_agent_capture", False)):
+        return False
     default = bool(getattr(args, "auto_hard_enter", False))
     raw_path = str(getattr(args, "config_path", "")).strip()
     if not raw_path:

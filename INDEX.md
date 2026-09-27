@@ -2,7 +2,7 @@
 
 > Voice dictation for Linux. Audio → ASR → hotword correction → input-method commit, with optional text refinement.
 
-**Last updated:** 2026-09-24
+**Last updated:** 2026-09-27
 
 ## Module Map
 
@@ -47,6 +47,7 @@
 | `orb_shader.py` | Liquid-glass voice orb GLSL shader (voiceWave preset, ported from LerSent001/orb, MIT) |
 | `backend_manager.py` | Backend lifecycle management |
 | `output_mute.py` | Desktop recording output mute and crash recovery; enabled by RECORDIAN_MUTE_OUTPUT |
+| `agent_entry.py` / `agent_panel.py` / `agent_panel.html` | Agent voice routing, Hermes CLI sessions, and local task panel |
 | `desktop_control.py` | Compositor control socket, recording toggle and status stream |
 | `pyproject.toml` | Python package config (uv/pip) |
 
@@ -64,6 +65,7 @@
 - **Hotkey configuration** → `hotkey_dictate.py` + `recordian-hotkey-dictate --help`
 - **Continuous Alt dictation** → `continuous_dictation.py` + `docs/CONTINUOUS-DICTATION.zh-CN.md`
 - **Local streaming ASR server** → `server/confucius_streaming_server.py` + `server/README-confucius.md`
+- **Agent voice entry** → `agent_entry.py` + `docs/AGENT-VOICE.zh-CN.md` (Hermes implemented)
 - **Wake word** → `voice_wake.py`; local setup and validation: `docs/VOICE-WAKE.zh-CN.md`
 - **Config schema** → `runtime_config.py` + `pyproject.toml`
 - **Running the daemon** → `recordian-hotkey-dictate --help`
@@ -88,6 +90,7 @@ limits in `server/README-confucius.md`; design/acceptance in `docs/STREAMING-IME
 
 - **ASR**: qwen_asr is primary provider; `streaming_base.py` for real-time streaming
 - **Text refine**: `cloud_llm_refiner.py` (HTTP LLM) or `llamacpp_text_refiner.py` (local)
+- **Agent voice entry** → `agent_entry.py` + `docs/AGENT-VOICE.zh-CN.md` (Hermes implemented)
 - **Wake word**: `voice_wake.py` — separate from hotkey mode
 - **Tray**: `tray_app.py` — system tray GUI; `tray_settings.py` for settings UI
 - **Continuous capture**: Audio is assigned to bounded ASR sessions; committed input remains in the application. Correction context and in-memory history have explicit bounds.

@@ -177,6 +177,7 @@ def build_ptt_hotkey_handlers(
     recorder_backend = choose_record_backend(args.record_backend, ffmpeg_bin)
     base_committer = resolve_committer(args.commit_backend)
     committer = base_committer
+    agent_hub = getattr(args, "_agent_hub", None)
     provider = create_provider(args)
     auto_lexicon: AutoLexicon | None = None
     if bool(getattr(args, "enable_auto_lexicon", True)):
@@ -491,10 +492,16 @@ def build_ptt_hotkey_handlers(
         record_handle: RecordProcessHandle | subprocess.Popen[Any] | None = None
         realtime_worker: _RealtimeASRWorkerHandle | None = None
         output_mute = None
+        agent_capture = None
         try:
             from .wayland_desktop import select_desktop_committer
 
-            committer = select_desktop_committer(base_committer)
+            agent_capture = agent_hub.begin_capture() if agent_hub is not None else None
+            capture_args = agent_capture.arguments(args) if agent_capture is not None else args
+            committer = (
+                agent_capture.sink if agent_capture is not None and agent_capture.mode == "agent"
+                else select_desktop_committer(base_committer)
+            )
             _apply_target_window(committer, {"target_window_id": target_wid})
             _set_state("recording_state", RecordingState.RECORDING)
             temp_dir = TemporaryDirectory(prefix="recordian-ptt-")
@@ -535,6 +542,8 @@ def build_ptt_hotkey_handlers(
                 "voice_owner_seen": False,
                 "voice_owner_last_score": -1.0,
                 "realtime_asr_worker": None,
+                "agent_capture": agent_capture,
+                "capture_args": capture_args,
             })
             on_state({"event": "recording_started", "record_backend": recorder_backend, "audio_path": str(audio_path)})
 
@@ -544,7 +553,7 @@ def build_ptt_hotkey_handlers(
             # Security invariant lives in wake_session_monitor: owner_audio_chunks uses deque(maxlen=100).
             start_wake_session_monitor(
                 WakeSessionMonitorContext(
-                    args=args,
+                    args=capture_args,
                     record_handle=record_handle,
                     provider=provider,
                     stop_event=level_stop,
@@ -556,9 +565,9 @@ def build_ptt_hotkey_handlers(
                     on_state=on_state,
                 )
             )
-            routing = resolve_remote_paste_routing(args)
+            routing = resolve_remote_paste_routing(capture_args)
             # Reads the config file — keep file IO outside state_lock.
-            auto_hard_enter = _resolve_auto_hard_enter(args)
+            auto_hard_enter = _resolve_auto_hard_enter(capture_args)
 
             def _capture_fatal(reason: str) -> None:
                 # Bound to THIS start's exact record handle: a fatal from the
@@ -600,7 +609,7 @@ def build_ptt_hotkey_handlers(
             with state_lock:
                 if state.get("process") is record_handle:
                     realtime_worker = _start_realtime_asr_worker(
-                        args=args,
+                        args=capture_args,
                         provider=provider,
                         record_handle=record_handle,
                         committer=committer,
@@ -737,6 +746,12 @@ def build_ptt_hotkey_handlers(
                 _restore_output(output_mute)
                 if abort_temp_dir is not None:
                     abort_temp_dir.cleanup()
+                if agent_hub is not None:
+                    agent_hub.end_capture(agent_capture)
+                lock.release()
+            elif record_handle is None:
+                if agent_hub is not None:
+                    agent_hub.end_capture(agent_capture)
                 lock.release()
             raise
 
@@ -759,6 +774,8 @@ def build_ptt_hotkey_handlers(
                 owner_last_score = -1.0
             realtime_asr_worker = state.get("realtime_asr_worker")
             duration_limit_timer = state.get("duration_limit_timer")
+            agent_capture = state.get("agent_capture")
+            capture_args = state.get("capture_args", args)
             if process is None or audio_path is None or temp_dir is None or started is None:
                 return False
             if expected_handle is not None and process is not expected_handle:
@@ -833,6 +850,8 @@ def build_ptt_hotkey_handlers(
         except Exception as exc:  # noqa: BLE001
             _temp_dir.cleanup()
             _transition_to_idle()
+            if agent_hub is not None:
+                agent_hub.end_capture(agent_capture)
             lock.release()
             on_error({"event": "error", "error": f"{type(exc).__name__}: {exc}"})
             return False
@@ -843,6 +862,14 @@ def build_ptt_hotkey_handlers(
 
         def _worker() -> None:
             try:
+                def _deliver_result(payload):
+                    if agent_hub is not None:
+                        agent_hub.accept_transcript(
+                            agent_capture, payload,
+                            failed=bool(getattr(realtime_asr_worker, "error", "")),
+                        )
+                    on_result(payload)
+
                 realtime_final_text = ""
                 realtime_detected_language = ""
                 realtime_transcribe_latency_ms = 0.0
@@ -988,7 +1015,7 @@ def build_ptt_hotkey_handlers(
                     )
                 run_postprocess_pipeline(
                     PostprocessPipelineContext(
-                        args=args,
+                        args=capture_args,
                         audio_path=audio_path,
                         record_backend=recorder_backend,
                         record_latency_ms=record_latency_ms,
@@ -1012,7 +1039,7 @@ def build_ptt_hotkey_handlers(
                         composition_session=realtime_composition_session,
                         prefetched_semif_applied=realtime_semif_applied,
                         on_state=on_state,
-                        on_result=on_result,
+                        on_result=_deliver_result,
                         on_error=on_error,
                     )
                 )
@@ -1053,6 +1080,8 @@ def build_ptt_hotkey_handlers(
                 _temp_dir.cleanup()
                 _set_state("processing_thread", None)
                 _set_state("recording_state", RecordingState.IDLE)
+                if agent_hub is not None:
+                    agent_hub.end_capture(agent_capture)
                 lock.release()
 
         processing_thread = threading.Thread(target=_worker, name="recordian-postprocess")

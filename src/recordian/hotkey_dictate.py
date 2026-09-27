@@ -229,8 +229,12 @@ def _main_impl() -> None:
             notifier.notify(Notification(title="Recordian 已退出", body="热键守护进程已停止", urgency="low"))
 
     desktop_status = {"value": "idle"}
+    agent_hub = None
+    agent_panel = None
 
     def _emit(payload: dict[str, object]) -> None:
+        if agent_hub is not None:
+            agent_hub.observe(payload)
         event_status = {
             "recording_started": "recording", "processing_started": "transcribing",
             "ready": "idle", "result": "idle", "error": "idle", "stopped": "stopped",
@@ -243,6 +247,21 @@ def _main_impl() -> None:
         except Exception:
             # Notification failure should not break dictation flow.
             pass
+
+    agents_path = Path(args.config_path).expanduser().parent / "agents.json"
+    if agents_path.exists() and args.trigger_mode in {"ptt", "toggle"}:
+        try:
+            from .agent_entry import AgentHub
+            from .agent_panel import AgentPanel
+
+            agent_hub = AgentHub(agents_path, agents_path.parent / "agent-tasks.json")
+            agent_panel = AgentPanel(agent_hub)
+            args._agent_hub = agent_hub
+        except Exception as exc:
+            if agent_hub is not None:
+                agent_hub.close()
+            agent_hub = None
+            _emit({"event": "log", "message": f"agent_entry_unavailable: {exc}"})
 
     trigger_keys = parse_hotkey_spec(args.hotkey)
     stop_keys = parse_hotkey_spec(args.stop_hotkey) if getattr(args, "stop_hotkey", "").strip() else set()
@@ -311,6 +330,12 @@ def _main_impl() -> None:
         import signal as _signal
 
         _signal.signal(_signal.SIGUSR1, _on_overlay_stop_signal)
+        if agent_hub is not None:
+            def _on_agent_shutdown(signum, frame):
+                # Let the controller drain its own recording before closing
+                # the hub, which cancels only subprocesses it launched.
+                threading.Thread(target=exit_daemon, daemon=True).start()
+            _signal.signal(_signal.SIGTERM, _on_agent_shutdown)
 
         if bool(getattr(args, "enable_voice_wake", False)):
             runtime_cfg = make_wake_runtime_config(args)
@@ -510,6 +535,10 @@ def _main_impl() -> None:
 
     if voice_wake_service is not None:
         voice_wake_service.stop()
+    if agent_panel is not None:
+        agent_panel.close()
+    if agent_hub is not None:
+        agent_hub.close()
 
     _emit({"event": "stopped"})
 

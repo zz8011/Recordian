@@ -173,6 +173,15 @@ def build_appindicator_menu(
     context_item.connect("activate", lambda _: app.root.after(0, app.open_context_editor))
     menu.append(context_item)
 
+    agent_item = Gtk.MenuItem(label="Agent 语音任务...")
+
+    def _open_agent_panel(_item):
+        from .agent_panel import open_panel
+        app.root.after(0, open_panel)
+
+    agent_item.connect("activate", _open_agent_panel)
+    menu.append(agent_item)
+
     settings_item = Gtk.MenuItem(label="设置...")
     settings_item.connect("activate", lambda _: app.root.after(0, app.open_settings))
     menu.append(settings_item)
