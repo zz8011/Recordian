@@ -254,7 +254,7 @@ def _main_impl() -> None:
             from .agent_entry import AgentHub
             from .agent_panel import AgentPanel
 
-            agent_hub = AgentHub(agents_path, agents_path.parent / "agent-tasks.json")
+            agent_hub = AgentHub(agents_path, agents_path.parent / "agent-tasks.json", settings_path=args.config_path)
             agent_panel = AgentPanel(agent_hub)
             args._agent_hub = agent_hub
         except Exception as exc:
@@ -354,6 +354,8 @@ def _main_impl() -> None:
 
             def _on_wake(keyword: str) -> None:
                 try:
+                    if agent_hub is not None and not agent_hub.allows_voice_wake():
+                        return
                     start_recording("voice_wake")
                 except Exception as exc:  # noqa: BLE001
                     _emit({"event": "error", "error": f"voice_wake_start_failed: {exc}"})

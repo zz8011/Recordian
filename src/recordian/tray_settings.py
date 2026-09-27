@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import os
-
 import logging
 from pathlib import Path
 from typing import Any, cast
@@ -518,6 +516,44 @@ def open_settings_gtk(
         recommend_box.pack_start(recommend_button, False, False, 0)
         recommend_box.pack_start(recommend_hint, False, False, 0)
         daily_page.pack_start(recommend_box, False, False, 0)
+
+        sec_agent = _create_collapsible_section(daily_page, "Agent 语音入口（开关立即生效）")
+        agent_row = _add_field(
+            sec_agent, 0, key="enable_agent", label="启用 Agent", kind="bool",
+            value=current.get("enable_agent", True), default_bool=True,
+            hint="切换立即保存，无需重启。关闭后不发送新任务，F9 照常输入；已开始的任务继续执行。",
+        )
+        agent_row = _add_field(
+            sec_agent, agent_row, key="wake_to_agent", label="唤醒后交给 Agent", kind="bool",
+            value=current.get("wake_to_agent", True), default_bool=True,
+            hint="开启：hey 小二交给 Agent；关闭：唤醒后普通语音输入。Agent 总开关关闭时，不响应发任务的唤醒。",
+        )
+        agent_transport = Gtk.Label(label="调用方式：本机 Hermes CLI · F9 始终用于普通语音输入")
+        agent_transport.set_xalign(0.0)
+        agent_transport.set_line_wrap(True)
+        sec_agent.attach(agent_transport, 0, agent_row, 2, 1)
+
+        agent_feedback = Gtk.Label(label="这两个开关独立保存，不需要点击底部保存按钮。")
+        agent_feedback.set_xalign(0.0)
+        agent_feedback.set_line_wrap(True)
+        sec_agent.attach(agent_feedback, 0, agent_row + 1, 2, 1)
+        agent_switch_sync = {"active": False}
+
+        def _save_agent_switch(widget: Any, _param: Any, key: str) -> None:
+            if agent_switch_sync["active"]:
+                return
+            try:
+                save_config_changes(config_path, {key: bool(widget.get_active())}, apply_now=False)
+                app._invalidate_config_cache()
+                agent_feedback.set_text("已保存并生效；F9 普通语音输入不受影响。")
+            except Exception as exc:
+                agent_switch_sync["active"] = True
+                widget.set_active(not widget.get_active())
+                agent_switch_sync["active"] = False
+                agent_feedback.set_text(f"保存失败：{type(exc).__name__}，请重试。")
+
+        for agent_key in ("enable_agent", "wake_to_agent"):
+            entries[agent_key][1].connect("notify::active", _save_agent_switch, agent_key)
 
         sec_daily_talk = _create_section(daily_page, "说话方式")
         row = 0
@@ -2035,6 +2071,8 @@ def open_settings_gtk(
                     "warmup": bool(_get_value("warmup")),
                     "debug_diagnostics": bool(_get_value("debug_diagnostics")),
                     "enable_voice_wake": bool(_get_value("enable_voice_wake")),
+                    "enable_agent": bool(_get_value("enable_agent")),
+                    "wake_to_agent": bool(_get_value("wake_to_agent")),
                     "wake_prefix": _parse_csv_field("wake_prefix", list(current.get("wake_prefix", ["嗨", "嘿"]))),
                     "wake_name": _parse_csv_field("wake_name", list(current.get("wake_name", ["小二"]))),
                     "wake_cooldown_s": _parse_float_field("wake_cooldown_s", float(current.get("wake_cooldown_s", 3.0))),

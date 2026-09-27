@@ -15,6 +15,8 @@ KEY_LABEL_MAP: dict[str, str] = {
     "refine_provider": "润色方式",
     "refine_preset": "润色风格",
     "enable_voice_wake": "语音唤醒",
+    "enable_agent": "Agent 总开关",
+    "wake_to_agent": "唤醒交给 Agent",
     "auto_hard_enter": "说完自动回车",
     "enable_streaming_commit": "边说边出字",
     "commit_backend": "上屏方式",

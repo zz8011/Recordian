@@ -254,8 +254,11 @@ class Capture:
 
 
 class AgentHub:
-    def __init__(self, config_path: Path, state_path: Path, *, adapters=None):
+    def __init__(self, config_path: Path, state_path: Path, *, adapters=None, settings_path=None):
         self.config_path, self.state_path = config_path, state_path
+        self.settings_path = Path(settings_path) if settings_path else config_path.with_name('hotkey.json')
+        self.enabled = True
+        self.wake_to_agent = True
         raw = json.loads(config_path.read_text())
         self.instances = {a.id: a for a in map(AgentInstance.parse, raw.get('instances', []))}
         if not self.instances:
@@ -293,6 +296,33 @@ class AgentHub:
         instance = self.instances.get(key)
         return [instance.executable, instance.workspace, instance.home] if instance else None
 
+    def _refresh_preferences(self):
+        # Read at capture/submission boundaries and when showing settings.
+        # A malformed configuration must never enable task execution.
+        try:
+            data = json.loads(self.settings_path.read_text())
+            self.enabled = data.get('enable_agent', True) is True
+            self.wake_to_agent = data.get('wake_to_agent', True) is True
+        except FileNotFoundError:
+            pass
+        except (OSError, ValueError, AttributeError):
+            self.enabled = False
+
+    def set_preferences(self, data):
+        if not data or set(data) - {'enable_agent', 'wake_to_agent'} or any(type(v) is not bool for v in data.values()):
+            raise ValueError('Agent 设置必须是开关值')
+        with self.lock:
+            raw = json.loads(self.settings_path.read_text()) if self.settings_path.exists() else {}
+            raw.update(data)
+            private_json(self.settings_path, raw)
+            self._refresh_preferences()
+            self.notice = 'Agent 已开启' if self.enabled else 'Agent 已关闭；F9 普通语音输入仍可使用'
+
+    def allows_voice_wake(self):
+        with self.lock:
+            self._refresh_preferences()
+            return self.enabled or not self.wake_to_agent
+
     def configure_instance(self, data):
         from dataclasses import asdict
         instance = AgentInstance.parse(data)
@@ -309,10 +339,13 @@ class AgentHub:
     def snapshot(self):
         from dataclasses import asdict
         with self.lock:
+            self._refresh_preferences()
             return json.loads(json.dumps({'mode': self.mode, 'selected': self.selected, 'phase': self.phase,
+                'enable_agent': self.enabled, 'wake_to_agent': self.wake_to_agent,
                 'preview': self.preview, 'notice': self.notice, 'capturing': self.capture is not None,
                 'capture_mode': self.capture.mode if self.capture else None,
-                'trigger_routes': {'voice_wake': 'agent', 'hotkey': 'dictation', 'agent_panel': 'agent'},
+                'trigger_routes': {'voice_wake': ('agent' if self.enabled else 'disabled') if self.wake_to_agent else 'dictation',
+                                   'hotkey': 'dictation', 'agent_panel': 'agent' if self.enabled else 'disabled'},
                 'instances': [asdict(a) for a in self.instances.values()], 'sessions': self.sessions,
                 'tasks': self.tasks[-100:]}, ensure_ascii=False))
 
@@ -328,12 +361,16 @@ class AgentHub:
 
     def begin_capture(self, trigger_source='panel'):
         with self.lock:
+            self._refresh_preferences()
             if self.closed or self.capture is not None:
                 raise RuntimeError('语音入口正在处理上一段录音')
-            modes = {'voice_wake': 'agent', 'agent_panel': 'agent', 'hotkey': 'dictation', 'panel': self.mode}
+            modes = {'voice_wake': 'agent' if self.wake_to_agent else 'dictation',
+                     'agent_panel': 'agent', 'hotkey': 'dictation', 'panel': self.mode}
             if trigger_source not in modes:
                 raise ValueError('未知录音来源')
             mode = modes[trigger_source]
+            if mode == 'agent' and not self.enabled:
+                raise RuntimeError('Agent 已关闭，F9 普通语音输入仍可使用')
             if mode == 'agent' and self.selected in self.cancels:
                 raise RuntimeError('这个 Agent 正在执行任务，请等它完成或先停止任务')
             self.capture = Capture(mode, self.selected)
@@ -365,6 +402,10 @@ class AgentHub:
             capture.delivered = True
             result = payload.get('result', {})
             self.preview = str(result.get('text', ''))
+            self._refresh_preferences()
+            if not self.enabled:
+                self.notice = 'Agent 已关闭，这段录音没有发送；可在面板查看识别文字'
+                return
             outcome = (result.get('commit') or {}).get('outcome', '')
             if failed or outcome in {'uncertain', 'stale', 'cancelled', 'suppressed'}:
                 self.notice = '这段录音未完整识别，没有提交给 Agent，请重新录音'
@@ -386,6 +427,9 @@ class AgentHub:
         if not text or len(text) > MAX_TEXT:
             raise ValueError('请输入有效指令（不超过 60000 字符）')
         with self.lock:
+            self._refresh_preferences()
+            if not self.enabled:
+                raise ValueError('Agent 已关闭，请先在设置中开启')
             if self.closed:
                 raise ValueError('语音入口已停止')
             if request_id:

@@ -843,3 +843,18 @@ def _capture_window(window: Any, gtk: Any, gdk: Any) -> Any:
     pixbuf = gdk.pixbuf_get_from_window(gdk_window, 0, 0, width, height)
     assert pixbuf is not None
     return pixbuf
+
+
+def test_agent_settings_save_without_backend_restart(tmp_path: Path) -> None:
+    gtk, glib = _gtk()
+    original = _base_current(enable_agent=True, wake_to_agent=True)
+    app = _fake_app(tmp_path, original)
+    window = _open_settings(app, gtk, glib, original)
+    _switch_for(window, gtk, '启用 Agent').set_active(False)
+    _switch_for(window, gtk, '唤醒后交给 Agent').set_active(False)
+    _pump(glib)
+    saved = ConfigManager.load(app.config_path)
+    assert saved['enable_agent'] is False and saved['wake_to_agent'] is False
+    assert app.backend.restart_calls == 0
+    window.destroy()
+    _pump(glib)

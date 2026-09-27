@@ -85,6 +85,8 @@ class AgentPanel:
                         raise ValueError('请求无效')
                     if self.path == '/api/select':
                         owner.hub.select(data['mode'], data['agent_id'])
+                    elif self.path == '/api/settings':
+                        owner.hub.set_preferences(data)
                     elif self.path == '/api/submit':
                         with owner.hub.lock:
                             if owner.hub.capture is not None:

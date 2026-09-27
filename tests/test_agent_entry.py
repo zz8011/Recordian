@@ -227,3 +227,66 @@ def test_busy_agent_does_not_block_keyboard_dictation(hub):
     assert capture.mode == 'dictation'
     hub.end_capture(capture)
     hub.cancels.clear()
+
+
+def test_live_disable_blocks_new_and_pending_tasks_but_preserves_dictation(hub):
+    hub.settings_path.write_text(json.dumps({'enable_agent': True, 'private_other_setting': 'preserved'}))
+    capture = hub.begin_capture('voice_wake')
+    hub.set_preferences({'enable_agent': False})
+    hub.accept_transcript(capture, {'result': {'text': '未发送的任务', 'commit': {'outcome': 'committed'}}})
+    hub.end_capture(capture)
+    assert not hub.tasks and not hub.allows_voice_wake()
+    with pytest.raises(ValueError, match='Agent 已关闭'):
+        hub.submit('不能发送', 'hermes')
+    with pytest.raises(RuntimeError, match='Agent 已关闭'):
+        hub.begin_capture('agent_panel')
+    ordinary = hub.begin_capture('hotkey')
+    assert ordinary.mode == 'dictation'
+    hub.end_capture(ordinary)
+    data = json.loads(hub.settings_path.read_text())
+    assert data['private_other_setting'] == 'preserved'
+    restarted = AgentHub(hub.config_path, hub.state_path, adapters={'hermes': FakeAdapter})
+    assert restarted.snapshot()['enable_agent'] is False
+    restarted.close()
+    hub.set_preferences({'enable_agent': True})
+    assert hub.allows_voice_wake()
+    hub.submit('恢复发送', 'hermes')
+    wait_done(hub)
+    assert FakeAdapter.calls[-1][1] == '恢复发送'
+
+
+def test_native_settings_change_wake_route_without_restart_or_mid_capture_rerouting(hub):
+    capture = hub.begin_capture('voice_wake')
+    hub.settings_path.write_text(json.dumps({'enable_agent': True, 'wake_to_agent': False}))
+    assert hub.snapshot()['trigger_routes']['voice_wake'] == 'dictation'
+    assert capture.mode == 'agent'
+    hub.end_capture(capture)
+    capture = hub.begin_capture('voice_wake')
+    assert capture.mode == 'dictation'
+    hub.end_capture(capture)
+    hub.set_preferences({'enable_agent': False})
+    assert hub.allows_voice_wake()  # Explicit ordinary dictation is still allowed.
+    assert hub.begin_capture('voice_wake').mode == 'dictation'
+
+
+def test_disable_does_not_cancel_running_agent(hub):
+    class Blocking:
+        def run(self, instance, text, session_id, cancel, on_event):
+            assert cancel.wait(2)
+            raise InterruptedError('Stopped explicitly')
+    hub.adapters = {'hermes': Blocking}
+    hub.submit('已经开始的任务', 'hermes')
+    hub.set_preferences({'enable_agent': False})
+    assert not hub.cancels['hermes'].is_set()
+    hub.cancel('hermes')
+    wait_done(hub)
+    assert hub.tasks[-1]['status'] == 'cancelled'
+
+
+def test_malformed_settings_fail_closed_and_recover(hub):
+    hub.settings_path.write_text('{invalid')
+    assert not hub.snapshot()['enable_agent']
+    with pytest.raises(ValueError):
+        hub.set_preferences({'enable_agent': 'false'})
+    hub.settings_path.write_text('{"enable_agent":true}')
+    assert hub.snapshot()['enable_agent']
