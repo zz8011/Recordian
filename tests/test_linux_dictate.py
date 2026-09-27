@@ -53,7 +53,8 @@ def test_build_ffmpeg_record_cmd_with_monitor_pipe() -> None:
         enable_monitor=True,
     )
     assert "-filter_complex" in cmd
-    assert "[0:a]asplit=2[record][monitor]" in cmd
+    graph = next(part for part in cmd if "asplit=2[record][monitor]" in part)
+    assert "sample_rates=16000" in graph
     assert cmd[-5:] == ["-f", "f32le", "-acodec", "pcm_f32le", "pipe:1"]
 
 

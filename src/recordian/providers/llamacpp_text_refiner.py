@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import concurrent.futures
+import logging
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 from .base_text_refiner import BaseTextRefiner
+
+logger = logging.getLogger(__name__)
 
 
 class LlamaCppTextRefiner(BaseTextRefiner):
@@ -15,14 +18,18 @@ class LlamaCppTextRefiner(BaseTextRefiner):
     - GPU 加速（CUDA）
     - CPU 后备
     - 低显存占用
+
+    preset 模板会被**原样**渲染后作为 user 消息交给模型（与 cloud provider 语义
+    一致）；只有在没有 preset 时才退回内置 few-shot 原始补全。
     """
 
+    #: 推理失败时的短日志前缀，便于在 recordian.log 里定位。
     def __init__(
         self,
         model_path: str,
         *,
         n_gpu_layers: int = -1,  # -1 表示全部放 GPU
-        n_ctx: int = 2048,
+        n_ctx: int = 3072,  # intent preset 约 1.4k token，2048 会截断掉正文
         n_threads: int | None = None,
         max_new_tokens: int = 512,
         temperature: float = 0.1,
@@ -43,6 +50,7 @@ class LlamaCppTextRefiner(BaseTextRefiner):
         self._n_ctx = n_ctx
         self._n_threads = n_threads
         self._llm = None
+        self.last_error = ""
 
     def _lazy_load(self) -> None:
         if self._llm is not None:
@@ -52,15 +60,20 @@ class LlamaCppTextRefiner(BaseTextRefiner):
         except ModuleNotFoundError as exc:
             raise RuntimeError(
                 "llama-cpp-python 未安装。请执行:\n"
-                "CMAKE_ARGS=\"-DLLAMA_CUDA=on\" pip install llama-cpp-python"
+                "pip install llama-cpp-python --extra-index-url "
+                "https://abetlen.github.io/llama-cpp-python/whl/cpu"
             ) from exc
+        if not Path(self.model_path).expanduser().exists():
+            raise RuntimeError(f"精炼模型文件不存在: {self.model_path}")
         self._llm = Llama(
-            model_path=self.model_path,
+            model_path=str(Path(self.model_path).expanduser()),
             n_gpu_layers=self._n_gpu_layers,
             n_ctx=self._n_ctx,
             n_threads=self._n_threads,
             verbose=False,
-            chat_format="chatml",
+            # chat_format=None -> 用 GGUF 自带的 chat template（Qwen3 的模板里带
+            # thinking 开关，硬编码 chatml 会丢掉这些行为）
+            chat_format=None,
         )
 
     @property
@@ -82,56 +95,109 @@ class LlamaCppTextRefiner(BaseTextRefiner):
 
         self._lazy_load()
 
-        # 根据 prompt_template 判断使用哪种 Few-shot
-        prompt = self._build_fewshot_prompt(text)
-
         # 使用 ThreadPoolExecutor 添加超时保护
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-            future = executor.submit(self._run_inference, prompt, text)
+            future = executor.submit(self._run_inference, text)
             try:
-                result = future.result(timeout=self.timeout)
+                generated = future.result(timeout=self.timeout)
             except concurrent.futures.TimeoutError:
-                # 超时，返回原文本
+                self.last_error = f"timeout>{self.timeout}s"
+                logger.warning("llamacpp refine 超时（>%ss），按 ASR 原文提交", self.timeout)
+                return text
+            except Exception as exc:  # noqa: BLE001
+                self.last_error = f"{type(exc).__name__}: {exc}"
+                logger.warning("llamacpp refine 失败: %s: %s", type(exc).__name__, exc)
                 return text
 
-        # 提取生成的文本
-        if result and "choices" in result and len(result["choices"]) > 0:
-            generated = result["choices"][0]["text"].strip()
+        generated = str(generated or "").strip()
+        if not generated:
+            return ""
 
-            # 移除 <think> 标签
-            generated = self._remove_think_tags(generated)
+        # 移除 <think> 标签
+        generated = self._remove_think_tags(generated).replace("/no_think", "").strip()
 
-            # 移除可能的前缀
-            for prefix in ["输出：", "书面语：", "纪要：", "文档："]:
-                if generated.startswith(prefix):
-                    generated = generated[len(prefix):].strip()
-                    break
+        # 移除可能的前缀
+        for prefix in ["输出：", "书面语：", "纪要：", "文档："]:
+            if generated.startswith(prefix):
+                generated = generated[len(prefix):].strip()
+                break
 
-            # 只取第一段（避免多余输出）
-            if "\n\n" in generated:
-                generated = generated.split("\n\n")[0].strip()
+        # 只取第一段（避免多余输出）
+        if "\n\n" in generated:
+            generated = generated.split("\n\n")[0].strip()
 
-            # 检测并移除重复句子
-            generated = self._remove_repetitions(generated)
+        # 检测并移除重复句子
+        generated = self._remove_repetitions(generated)
 
-            return generated
+        return generated
 
-        return ""
+    def _build_chat_messages(self, text: str) -> list[dict[str, str]] | None:
+        """渲染 preset 模板为 chat 消息；没有 preset 时返回 None。"""
+        template = self.prompt_template
+        if not template:
+            return None
+        if "{text}" in template:
+            content = template.replace("{text}", text)
+        else:
+            content = f"{template}\n原文：\n{text}"
+        if not self.enable_thinking:
+            # Qwen3 的软开关：非 thinking 模式必须显式关闭，否则会输出推理过程
+            content = f"{content}\n/no_think"
+        return [{"role": "user", "content": content}]
 
-    def _run_inference(self, prompt: str, text: str) -> dict:
-        """执行推理（可被超时中断）"""
+    def _run_inference(self, text: str) -> str:
+        """执行推理（可被超时中断），返回生成的文本。"""
         if self._llm is None:
             raise RuntimeError("llama model not loaded")
-        result = self._llm(
-            prompt,
-            max_tokens=self._max_output_tokens_for_text(text),
-            temperature=0.1,  # 稍微增加随机性，避免过于死板
-            repeat_penalty=1.2,  # 降低惩罚，避免影响正常输出
-            top_p=0.9,
-            stop=["\n\n", "输入：", "<think>", "<|"],  # 优化停止词
-            echo=False,
-        )
-        return cast(dict, result)
+
+        max_tokens = self._max_output_tokens_for_text(text)
+        messages = self._build_chat_messages(text)
+        if messages is not None:
+            try:
+                result = self._llm.create_chat_completion(
+                    messages=messages,
+                    max_tokens=max_tokens,
+                    temperature=0.1,
+                    repeat_penalty=1.2,
+                    top_p=0.9,
+                    # 注意：这里不能停 "\n\n"——Qwen3 会先吐 ` thinking\n\n response`
+                    # （非 thinking 模式下是空块），按空行截断会让输出整个变空。
+                    stop=["输入：", "<|"],
+                )
+            except Exception as exc:  # noqa: BLE001
+                # GGUF 没有内嵌 chat template 时，退回内置 few-shot 原始补全
+                logger.warning("chat template 不可用（%s），退回 few-shot 补全", type(exc).__name__)
+                messages = None
+
+        if messages is None:
+            prompt = self._build_fewshot_prompt(text)
+            result = cast(dict, self._llm(
+                prompt,
+                max_tokens=max_tokens,
+                temperature=0.1,
+                repeat_penalty=1.2,
+                top_p=0.9,
+                stop=["\n\n", "输入：", "<think>", "<|"],  # 优化停止词
+                echo=False,
+            ))
+            return self._extract_completion_text(result)
+
+        return self._extract_chat_text(cast(dict, result))
+
+    @staticmethod
+    def _extract_chat_text(result: dict[str, Any]) -> str:
+        choices = result.get("choices") or []
+        if not choices:
+            return ""
+        message = choices[0].get("message") or {}
+        return str(message.get("content") or "").strip()
+
+    @staticmethod
+    def _extract_completion_text(result: dict[str, Any]) -> str:
+        choices = result.get("choices") or []
+        if not choices:
+            return ""
+        return str(choices[0].get("text") or "").strip()
 
     def _build_fewshot_prompt(self, text: str) -> str:
         """根据 prompt_template 动态构建 Few-shot prompt

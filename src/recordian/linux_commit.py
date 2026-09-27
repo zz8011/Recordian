@@ -3,6 +3,7 @@ from __future__ import annotations
 import ctypes
 import logging
 import os
+import re
 import subprocess
 import sys
 import threading
@@ -11,6 +12,7 @@ from collections.abc import Sequence
 from ctypes.util import find_library
 from dataclasses import dataclass
 from shutil import which
+from typing import cast
 
 from .exceptions import CommitError
 
@@ -30,6 +32,15 @@ class CommitResult:
     backend: str
     committed: bool
     detail: str = ""
+    # Structured terminal state for streaming composition sessions:
+    # ""         - not a composition-session result (plain commit path)
+    # "committed"  - the write was confirmed by the addon
+    # "stale"      - session invalidated (focus lost / reset / user typed /
+    #                foreign preedit / destroyed); nothing was written by us
+    # "uncertain"  - transport failure after a possibly-applied write
+    #                (timeout, lost reply); the write state is unknown
+    # "cancelled"  - preedit cleared without committing (our own choice)
+    outcome: str = ""
 
 
 class TextCommitter:
@@ -53,6 +64,462 @@ class StdoutCommitter(TextCommitter):
         print(text, file=sys.stderr)
         return CommitResult(backend=self.backend_name, committed=False, detail="printed_to_stderr")
 
+    def delete_chars(self, count: int) -> CommitResult:
+        n = max(0, int(count))
+        return CommitResult(backend=self.backend_name, committed=False, detail=f"backspace:{n}")
+
+
+_FCITX_SERVICE = "org.fcitx.Fcitx5"
+_FCITX_PATH = "/recordian"
+_FCITX_INTERFACE = "org.fcitx.Fcitx.Recordian1"
+_FCITX_CALL_TIMEOUT_S = 2.0
+
+# Machine-recognizable DBus error names used by the Recordian fcitx addon.
+# ``busctl`` strips the structured error name from its stderr (it only prints
+# ``Call failed: <message>``), so the addon embeds the full error name in the
+# message text itself and this parser recovers it from any transport
+# (busctl message text, gdbus ``GDBus.Error:<name>:`` lines, or legacy
+# stderr that still contained the name). Safety decisions below NEVER rely
+# on guessing English prose — only on this token or on fail-closed defaults.
+_DBUS_ERROR_NAME_RE = re.compile(
+    r"org\.fcitx\.Fcitx\.Recordian\.Error\.([A-Za-z0-9_]+)"
+)
+
+
+def _parse_dbus_error_name(message: str) -> str:
+    """Return the short Recordian addon error name embedded in *message*.
+
+    Returns "" when no structured name is present (older addon or a plain
+    transport failure). Callers must treat "" as "unknown" and fail closed.
+    """
+    match = _DBUS_ERROR_NAME_RE.search(str(message or ""))
+    return match.group(1) if match else ""
+
+
+def _fcitx_channel_available() -> bool:
+    """Return True when the Recordian fcitx addon is answering on the session bus."""
+    if not which("busctl"):
+        return False
+    try:
+        result = subprocess.run(
+            ["busctl", "--user", "call", _FCITX_SERVICE, _FCITX_PATH, _FCITX_INTERFACE, "Ping"],
+            capture_output=True,
+            text=True,
+            timeout=0.4,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return result.returncode == 0 and "ok" in result.stdout
+
+
+def _parse_busctl_string(output: str) -> str:
+    """Decode the string value from a ``busctl call`` reply.
+
+    ``busctl --user call ... Ping`` prints the return value in its typed
+    display format, e.g. ``s "ok"`` (signature letter, then a C-style
+    quoted string). JSON replies (``--json=short``) look like
+    ``{"type":"s","data":"committed ..."}``. Plain quoted values without
+    the signature prefix are accepted too, so hand-crafted stubs keep
+    working.
+
+    Returns the decoded string; never raises.
+    """
+    import json
+    import re
+
+    text = str(output or "").strip()
+    if not text:
+        return ""
+    if text.startswith("{"):
+        try:
+            payload = json.loads(text)
+        except ValueError:
+            return text
+        if isinstance(payload, dict) and payload.get("type") == "s":
+            data = payload.get("data", "")
+            return data if isinstance(data, str) else text
+        return text
+    match = re.match(r'^([a-z]{1,3})\s+(.*)$', text, re.S)
+    if match and match.group(2).startswith('"'):
+        # Typed display format: 's "value"'. The quoted part is a C-style
+        # string; json.loads handles \", \\, \uXXXX escapes the same way.
+        text = match.group(2).strip()
+    if len(text) >= 2 and text.startswith('"') and text.endswith('"'):
+        try:
+            decoded = json.loads(text)
+            if isinstance(decoded, str):
+                return decoded
+        except ValueError:
+            pass
+        return text[1:-1]
+    return text
+
+
+def _fcitx_busctl_call(method: str, signature: str, args: Sequence[str]) -> str:
+    """Call a method on the Recordian fcitx addon and return its stdout string."""
+    if not which("busctl"):
+        raise CommitError("busctl not found")
+    cmd = ["busctl", "--user", "call", _FCITX_SERVICE, _FCITX_PATH, _FCITX_INTERFACE, method]
+    if signature:
+        cmd.append(signature)
+    cmd.extend(str(arg) for arg in args)
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=_FCITX_CALL_TIMEOUT_S,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise CommitError(f"{method}: timed out after {_FCITX_CALL_TIMEOUT_S}s") from exc
+    except OSError as exc:
+        raise CommitError(f"{method}: {exc}") from exc
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "fcitx call failed").strip()
+        raise CommitError(f"{method}: {detail}")
+    return _parse_busctl_string(result.stdout or "")
+
+
+class FcitxStreamingSession:
+    """Explicit composition session bound to one focused InputContext.
+
+    Created by :meth:`FcitxCommitter.begin_composition`. Updates replace the
+    client preedit of the *bound* context only; commit writes the final text
+    exactly once; cancel clears the preedit without committing. The fcitx
+    addon invalidates the session on focus loss, context destruction, user
+    key input, or sensitive-capability changes — in that case ``active``
+    goes False and further calls are safe no-ops that report the failure.
+    """
+
+    def __init__(
+        self,
+        committer: FcitxCommitter,
+        token: str,
+        *,
+        preedit_capable: bool,
+        info: str = "",
+        supports_segments: bool = False,
+    ) -> None:
+        self.committer = committer
+        self.token = token
+        self.preedit_capable = preedit_capable
+        self.info = info
+        # True only when BeginSession's descriptor carried segments=1.
+        # Older bridges omit the marker and keep the short-session API.
+        self.supports_segments = bool(supports_segments)
+        self.stale_reason = ""
+        self._closed = False
+        self._next_segment = 1
+        self._lock = threading.Lock()
+
+    @property
+    def active(self) -> bool:
+        return not self._closed
+
+    def _mark_stale(self, reason: str) -> None:
+        if not self.stale_reason:
+            self.stale_reason = reason
+
+    def update_preedit(self, text: str) -> CommitResult:
+        with self._lock:
+            if self._closed:
+                return CommitResult(
+                    backend="fcitx",
+                    committed=False,
+                    detail=f"preedit_stale:{self.stale_reason or 'closed'}",
+                    outcome="stale",
+                )
+        try:
+            detail = _fcitx_busctl_call("UpdatePreedit", "ss", [self.token, str(text)])
+        except (CommitError, OSError) as exc:
+            # Fail closed on EVERY failure: real ``busctl`` strips the DBus
+            # error name from stderr (only "Call failed: unknown session"
+            # survives), so string-matching "StaleSession" is unreliable.
+            # A preedit update that could not be confirmed means the liveness
+            # of the bound context is unknown — the session is invalidated
+            # and no later commit / fallback may write anywhere.
+            message = str(exc)
+            reason = _parse_dbus_error_name(message) or "session_invalidated"
+            with self._lock:
+                self._closed = True
+            self._mark_stale(reason)
+            # Best-effort cleanup of the addon-side session: the update may
+            # have been APPLIED before the reply was lost, so the server-side
+            # preedit would linger until its 120 s TTL (and GTK toolkits may
+            # auto-commit it on focus-out). Cancel the ORIGINAL token once,
+            # exactly like commit() does on an uncertain failure — the
+            # session is never reopened and the commit is never retried.
+            # If the cleanup itself fails the diagnostics keep the
+            # uncertainty: not every toolkit rolls back, so this is a best
+            # effort, not a guarantee.
+            try:
+                _fcitx_busctl_call("CancelSession", "s", [self.token])
+                message = f"{message};preedit_cancelled"
+            except (CommitError, OSError):
+                message = f"{message};preedit_may_linger"
+            return CommitResult(
+                backend="fcitx",
+                committed=False,
+                detail=f"preedit_stale:{reason}:{message}",
+                outcome="stale",
+            )
+        return CommitResult(backend="fcitx", committed=True, detail=detail, outcome="committed")
+
+    def commit_segment(self, text: str) -> CommitResult:
+        """Commit one continuous chunk on the original token.
+
+        Sequence starts at 1 and increases only for a call this client
+        actually sends. The addon accepts only that exact next sequence.
+        A duplicate, a skip, a stale guard, or a lost reply closes this
+        client. Nothing is retried, the session is not reopened, and
+        CommitText / CommitSession are not used as a fallback. A confirmed
+        segment leaves the same token active for a later final commit.
+        """
+        with self._lock:
+            if self._closed:
+                return CommitResult(
+                    backend="fcitx",
+                    committed=False,
+                    detail=f"segment_stale:{self.stale_reason or 'closed'}",
+                    outcome="stale",
+                )
+            if not self.supports_segments:
+                # Short-session bridges have no CommitSegment. Leave this
+                # client open so CommitSession can still finish the utterance.
+                return CommitResult(
+                    backend="fcitx",
+                    committed=False,
+                    detail="segments_unsupported",
+                    outcome="stale",
+                )
+            sequence = self._next_segment
+            # Reserve the sequence before the call. On failure the client
+            # closes, so the number is never reused and never skipped ahead
+            # by a follow-up call.
+            self._next_segment = sequence + 1
+        try:
+            detail = _fcitx_busctl_call(
+                "CommitSegment", "sus", [self.token, str(sequence), str(text)]
+            )
+        except (CommitError, OSError) as exc:
+            message = str(exc)
+            error_name = _parse_dbus_error_name(message)
+            stale = error_name == "StaleSession" or "StaleSession" in message
+            with self._lock:
+                self._closed = True
+            if stale:
+                self._mark_stale("session_invalidated")
+            elif error_name == "BadSequence":
+                self._mark_stale("bad_sequence")
+            else:
+                # Timeout or a reply with no structured name: the segment
+                # may already have been written. Terminal uncertain.
+                self._mark_stale("segment_failed")
+            if not stale:
+                try:
+                    _fcitx_busctl_call("CancelSession", "s", [self.token])
+                    message = f"{message};preedit_cancelled"
+                except (CommitError, OSError):
+                    message = f"{message};preedit_may_linger"
+            outcome = "stale" if (stale or error_name == "BadSequence") else "uncertain"
+            return CommitResult(
+                backend="fcitx",
+                committed=False,
+                detail=f"segment_failed:{message}",
+                outcome=outcome,
+            )
+        # The addon names the sequence it accepted: "segment <n> ".
+        # "segment 1 " must not accept "segment 12 " or "segment 2 ".
+        ack_prefix = f"segment {sequence} "
+        if not str(detail).startswith(ack_prefix):
+            with self._lock:
+                self._closed = True
+            self._mark_stale("segment_unconfirmed")
+            try:
+                _fcitx_busctl_call("CancelSession", "s", [self.token])
+                detail = f"{detail};preedit_cancelled"
+            except (CommitError, OSError):
+                detail = f"{detail};preedit_may_linger"
+            return CommitResult(
+                backend="fcitx",
+                committed=False,
+                detail=f"segment_failed:{detail}",
+                outcome="uncertain",
+            )
+        return CommitResult(
+            backend="fcitx",
+            committed=True,
+            detail=detail,
+            outcome="committed",
+        )
+
+    def commit(self, text: str) -> CommitResult:
+        with self._lock:
+            if self._closed:
+                return CommitResult(
+                    backend="fcitx",
+                    committed=False,
+                    detail=f"commit_stale:{self.stale_reason or 'closed'}",
+                    outcome="stale",
+                )
+            self._closed = True
+        try:
+            detail = _fcitx_busctl_call("CommitSession", "ss", [self.token, str(text)])
+        except (CommitError, OSError) as exc:
+            message = str(exc)
+            # Structured classification: the addon embeds its DBus error
+            # name in the message text (see _parse_dbus_error_name). Without
+            # a recognizable name the outcome stays "uncertain" — the reply
+            # may have been lost after the write was applied — which
+            # suppresses every fallback just like "stale".
+            stale = _parse_dbus_error_name(message) == "StaleSession" or "StaleSession" in message
+            self._mark_stale("session_invalidated" if stale else "commit_failed")
+            if not stale:
+                # Uncertain transport failure: the addon-side session may
+                # still be alive with our preedit showing. Cancel it so no
+                # residue is left behind; never retry with a plain commit.
+                try:
+                    _fcitx_busctl_call("CancelSession", "s", [self.token])
+                    message = f"{message};preedit_cancelled"
+                except (CommitError, OSError):
+                    message = f"{message};preedit_may_linger"
+            return CommitResult(
+                backend="fcitx",
+                committed=False,
+                detail=f"commit_failed:{message}",
+                outcome="stale" if stale else "uncertain",
+            )
+        committed = detail.startswith("committed") or detail == "cleared"
+        if not committed:
+            self._mark_stale(detail or "no_commit")
+        return CommitResult(
+            backend="fcitx",
+            committed=committed,
+            detail=detail,
+            outcome="committed" if committed else "uncertain",
+        )
+
+    def cancel(self) -> CommitResult:
+        with self._lock:
+            if self._closed:
+                # A closed session already sent its one best-effort
+                # CancelSession (uncertain commit / failed preedit update) or
+                # was consumed server-side (committed / definitively stale):
+                # never resend, never reopen.
+                return CommitResult(
+                    backend="fcitx",
+                    committed=False,
+                    detail="cancel_noop:closed",
+                    outcome="cancelled",
+                )
+            self._closed = True
+        try:
+            detail = _fcitx_busctl_call("CancelSession", "s", [self.token])
+        except (CommitError, OSError) as exc:
+            return CommitResult(
+                backend="fcitx",
+                committed=False,
+                detail=f"cancel_failed:{exc}",
+                outcome="uncertain",
+            )
+        return CommitResult(backend="fcitx", committed=True, detail=detail, outcome="cancelled")
+
+
+class CompositionRefusedError(CommitError):
+    """A composition-capable backend refused to start a session.
+
+    Raised when the fcitx addon is present (the channel answered Ping) but
+    BeginSession failed — the focused context shows a user composition
+    (ExistingPreedit), there is no focused/non-sensitive context
+    (NoInputContext), the session table is full (SessionBusy), or the
+    transport failed mid-call (timeout: a session may even have been
+    created we no longer control). In ALL of these cases the backend
+    *does* support composition; falling back to a plain CommitText /
+    clipboard commit would write over the user's preedit or into a new
+    focus, so callers must treat this as terminal ("suppressed"): zero
+    commits, zero backspaces, no local fallback for this utterance.
+    """
+
+    def __init__(self, message: str, *, reason: str = "") -> None:
+        super().__init__(message)
+        self.reason = reason or _parse_dbus_error_name(message)
+
+
+class FcitxCommitter(TextCommitter):
+    """Commit a finished string through the fcitx Recordian addon.
+
+    The addon calls InputContext::commitString on the focused context. This
+    bypasses Rime, so it does not update the Rime user dictionary.
+
+    Streaming callers should use :meth:`begin_composition` instead of
+    repeated ``commit``: it binds one focused InputContext, streams preedit
+    updates to it and commits exactly once, without re-focusing windows.
+    """
+
+    backend_name = "fcitx"
+
+    def __init__(self, target_window_id: int | None = None, *, streaming: bool = False) -> None:
+        self.target_window_id = target_window_id
+        self.streaming = bool(streaming)
+        self._focused_once = False
+
+    def begin_composition(self, initial_preview: str = "") -> FcitxStreamingSession:
+        """Bind a streaming composition session to the focused InputContext.
+
+        Raises :class:`CompositionRefusedError` (a ``CommitError``) when the
+        addon refuses or the call fails: fcitx has no focused non-sensitive
+        input context, the context already shows the user's own preedit, the
+        session table is full, or the reply was lost. All of these mean the
+        backend supports composition but will not serve this utterance —
+        callers must suppress every fallback write, not degrade to plain
+        CommitText.
+        """
+        try:
+            descriptor = _fcitx_busctl_call("BeginSession", "s", [str(initial_preview)])
+        except CommitError as exc:
+            raise CompositionRefusedError(
+                f"fcitx BeginSession refused: {exc}", reason=_parse_dbus_error_name(str(exc))
+            ) from exc
+        parts = descriptor.split()
+        if not parts:
+            raise CompositionRefusedError("fcitx BeginSession returned empty descriptor")
+        token = parts[0]
+        preedit_capable = "preedit=1" in parts[1:]
+        # Exact field. Older bridges omit it; "segments=10" must not match.
+        supports_segments = "segments=1" in parts[1:]
+        return FcitxStreamingSession(
+            self,
+            token,
+            preedit_capable=preedit_capable,
+            supports_segments=supports_segments,
+            info=descriptor,
+        )
+
+    def commit(self, text: str) -> CommitResult:
+        if text == "":
+            return CommitResult(backend=self.backend_name, committed=True, detail="empty")
+        if not which("busctl"):
+            raise CommitError("busctl not found")
+        if isinstance(self.target_window_id, int) and which("xdotool") and not (self.streaming and self._focused_once):
+            # Focus once. Repeating it on every partial makes the caret stutter.
+            _xdotool_focus_window(self.target_window_id)
+            time.sleep(0.05)
+            self._focused_once = True
+        try:
+            detail = _fcitx_busctl_call("CommitText", "s", [text])
+        except CommitError:
+            raise
+        return CommitResult(backend=self.backend_name, committed=True, detail=detail or "committed")
+
+
+    def delete_chars(self, count: int) -> CommitResult:
+        return XDoToolCommitter(
+            target_window_id=self.target_window_id if isinstance(self.target_window_id, int) else None,
+            streaming=True,
+        ).delete_chars(count)
+
 
 class WTypeCommitter(TextCommitter):
     backend_name = "wtype"
@@ -63,22 +530,58 @@ class WTypeCommitter(TextCommitter):
         _run_command(["wtype", "--", text])
         return CommitResult(backend=self.backend_name, committed=True)
 
+    def delete_chars(self, count: int) -> CommitResult:
+        n = max(0, int(count))
+        if n <= 0:
+            return CommitResult(backend=self.backend_name, committed=True, detail="backspace:0")
+        if not which("wtype"):
+            raise CommitError("wtype not found in PATH")
+        cmd = ["wtype"]
+        for _ in range(n):
+            cmd.extend(["-k", "BackSpace"])
+        _run_command(cmd)
+        return CommitResult(backend=self.backend_name, committed=True, detail=f"backspace:{n}")
+
 
 class XDoToolCommitter(TextCommitter):
     """xdotool type — fallback for apps that don't handle clipboard paste well."""
     backend_name = "xdotool"
 
-    def __init__(self, target_window_id: int | None = None) -> None:
+    def __init__(self, target_window_id: int | None = None, *, streaming: bool = False) -> None:
         self.target_window_id = target_window_id
+        self.streaming = bool(streaming)
+        self._focused_once = False
+
+    def _ensure_focus(self) -> None:
+        if not isinstance(self.target_window_id, int):
+            return
+        if self.streaming and self._focused_once:
+            return
+        _xdotool_focus_window(self.target_window_id)
+        time.sleep(0.04 if self.streaming else 0.12)
+        self._focused_once = True
 
     def commit(self, text: str) -> CommitResult:
         if not which("xdotool"):
             raise CommitError("xdotool not found in PATH")
-        if isinstance(self.target_window_id, int):
-            _xdotool_focus_window(self.target_window_id)
-            time.sleep(0.12)
-        _run_command(["xdotool", "type", "--delay", "1", "--clearmodifiers", "--", text])
+        self._ensure_focus()
+        delay = "0" if self.streaming else "1"
+        _run_command(["xdotool", "type", "--delay", delay, "--clearmodifiers", "--", text])
         return CommitResult(backend=self.backend_name, committed=True)
+
+    def delete_chars(self, count: int) -> CommitResult:
+        n = max(0, int(count))
+        if n <= 0:
+            return CommitResult(backend=self.backend_name, committed=True, detail="backspace:0")
+        if not which("xdotool"):
+            raise CommitError("xdotool not found in PATH")
+        self._ensure_focus()
+        if _send_backspaces_via_xtest(n, window_id=None):
+            return CommitResult(backend=self.backend_name, committed=True, detail=f"backspace:{n}:xtest")
+        _run_command(
+            ["xdotool", "key", "--clearmodifiers", "--repeat", str(n), "--delay", "0", "BackSpace"]
+        )
+        return CommitResult(backend=self.backend_name, committed=True, detail=f"backspace:{n}")
 
 
 def send_paste_shortcut(*, target_window_id: int | None = None) -> CommitResult:
@@ -110,7 +613,7 @@ def send_hard_enter(committer: TextCommitter) -> CommitResult:
             _run_command(["wtype", "-k", "Return"])
             return CommitResult(backend=backend, committed=True, detail="hard_enter_sent")
 
-        if target_backend.startswith("xdotool") or target_backend in {"auto", "auto-fallback", "fallback"}:
+        if target_backend == "fcitx" or target_backend.startswith("xdotool") or target_backend in {"auto", "auto-fallback", "fallback"}:
             if not which("xdotool"):
                 raise CommitError("xdotool not found in PATH")
             wid = getattr(target_committer, "target_window_id", None)
@@ -381,29 +884,72 @@ class CommitterWithFallback(TextCommitter):
         raise CommitError(error_msg) from last_error
 
 
-def resolve_streaming_committer(committer: TextCommitter) -> TextCommitter:
-    """Pick a lower-latency committer for incremental streaming when possible.
+def _fcitx_committer_from(committer: TextCommitter) -> FcitxCommitter | None:
+    if isinstance(committer, FcitxCommitter):
+        return committer
+    committers = getattr(committer, "committers", None)
+    if not isinstance(committers, list):
+        return None
+    for entry in committers:
+        if not isinstance(entry, tuple) or not entry:
+            continue
+        candidate = entry[0]
+        if isinstance(candidate, FcitxCommitter):
+            return candidate
+    return None
 
-    Clipboard paste is reliable for one-shot commit, but it is too slow for
-    token-by-token updates because each flush needs clipboard settle time and a
-    paste shortcut. When streaming is enabled, prefer direct typing if the
-    current backend is clipboard-based.
+
+def resolve_streaming_committer(committer: TextCommitter) -> TextCommitter:
+    """Pick the committer used for streaming (preedit) updates when possible.
+
+    The fcitx channel supports bound composition sessions, so streaming keeps
+    it instead of any clipboard fallback. Legacy backends (xdotool-clipboard,
+    wtype, …) are returned unchanged: streaming on them is preview-only and
+    the final text is committed once at the end. Converting a clipboard
+    backend into per-keystroke synthetic typing would be a dangerous key
+    stream, so that path is deliberately gone.
     """
-    backend = str(getattr(committer, "backend_name", "")).strip().lower()
-    if backend == "xdotool-clipboard" and which("xdotool"):
-        target_window_id = getattr(committer, "target_window_id", None)
-        if isinstance(target_window_id, int):
-            if _is_electron_window(target_window_id):
-                return committer
-        return XDoToolCommitter(target_window_id=target_window_id if isinstance(target_window_id, int) else None)
+    fcitx_committer = _fcitx_committer_from(committer)
+    if fcitx_committer is not None:
+        return FcitxCommitter(
+            target_window_id=fcitx_committer.target_window_id
+            if isinstance(fcitx_committer.target_window_id, int)
+            else None,
+            streaming=True,
+        )
     return committer
+
+
+def open_composition_session(committer: TextCommitter) -> FcitxStreamingSession | None:
+    """Open an explicit preedit composition session if the backend supports it.
+
+    Returns the session object, or ``None`` when the backend has no
+    composition API (legacy one-shot commit semantics apply — this is the
+    ONLY None case: a backend that never had composition support).
+
+    Raises :class:`CompositionRefusedError` when a composition-capable
+    backend refused or failed to start a session (user preedit present,
+    no focused context, sensitive field, session table full, lost reply).
+    That is fundamentally different from "no composition support": the
+    backend is up and protecting a context the caller must not touch, so
+    the whole utterance is suppressed instead of falling back to a plain
+    commit that would clobber the user's preedit or hit a new focus.
+    """
+    fcitx_committer = _fcitx_committer_from(committer)
+    if fcitx_committer is not None:
+        # begin_composition raises CompositionRefusedError on any failure.
+        return fcitx_committer.begin_composition("")
+    begin = getattr(committer, "begin_composition", None)
+    if callable(begin):
+        return cast("FcitxStreamingSession | None", begin(""))
+    return None
 
 
 def resolve_committer(backend: str, *, target_window_id: int | None = None) -> TextCommitter:
     """Resolve text output backend for Linux desktop integration.
 
     Args:
-        backend: Backend name (auto, auto-fallback, xdotool, xdotool-clipboard, wtype, stdout, none)
+        backend: Backend name (auto, auto-fallback, fcitx, xdotool, xdotool-clipboard, wtype, stdout, none)
         target_window_id: Optional X11 window ID for window-specific routing
 
     Returns:
@@ -424,6 +970,8 @@ def resolve_committer(backend: str, *, target_window_id: int | None = None) -> T
         return NoopCommitter()
     if normalized == "stdout":
         return StdoutCommitter()
+    if normalized == "fcitx":
+        return FcitxCommitter(target_window_id=target_window_id)
     if normalized == "wtype":
         return WTypeCommitter()
     if normalized == "xdotool":
@@ -454,6 +1002,12 @@ def resolve_committer(backend: str, *, target_window_id: int | None = None) -> T
         if normalized == "auto-fallback":
             committers: list[tuple[TextCommitter, str]] = []
             timeout_ms = _parse_clipboard_timeout_ms(os.environ.get("RECORDIAN_CLIPBOARD_TIMEOUT_MS"))
+
+            if _fcitx_channel_available():
+                committers.append((
+                    FcitxCommitter(target_window_id=target_window_id),
+                    "fcitx",
+                ))
 
             # Try xdotool-clipboard first (best for CJK and Electron)
             if which("xdotool") and (which("xclip") or which("xsel")):
@@ -489,19 +1043,29 @@ def resolve_committer(backend: str, *, target_window_id: int | None = None) -> T
             else:
                 raise CommitError("No text commit backend available")
 
-        # Regular auto mode (no fallback)
-        # Prefer xdotool-clipboard: handles CJK and Electron apps correctly on X11.
-        # Required for Electron apps due to complex input controls.
+        # Regular auto mode. When the fcitx channel is up, commit through it
+        # and keep clipboard paste behind it.
+        chosen: TextCommitter | None = None
         if which("xdotool") and (which("xclip") or which("xsel")):
             timeout_ms = _parse_clipboard_timeout_ms(os.environ.get("RECORDIAN_CLIPBOARD_TIMEOUT_MS"))
-            return XdotoolClipboardCommitter(
+            chosen = XdotoolClipboardCommitter(
                 target_window_id=target_window_id,
                 clipboard_timeout_ms=timeout_ms
             )
-        if which("wtype"):
-            return WTypeCommitter()
-        if which("xdotool"):
-            return XDoToolCommitter()
+        elif which("wtype"):
+            chosen = WTypeCommitter()
+        elif which("xdotool"):
+            chosen = XDoToolCommitter()
+        if chosen is not None and _fcitx_channel_available():
+            return CommitterWithFallback(
+                committers=[
+                    (FcitxCommitter(target_window_id=target_window_id), "fcitx"),
+                    (chosen, chosen.backend_name),
+                ],
+                notify_on_fallback=False,
+            )
+        if chosen is not None:
+            return chosen
         raise CommitError(
             "No text commit backend available. Please install xdotool+xclip or wtype:\n"
             "  sudo apt install xdotool xclip  # for X11\n"
@@ -861,6 +1425,78 @@ def _xdotool_hard_return(*, window_id: int | None = None) -> None:
         raise CommitError("xdotool not found") from exc
     except subprocess.CalledProcessError as exc:
         raise CommitError(f"xdotool hard return failed: {exc}") from exc
+
+
+def send_backspaces(committer: TextCommitter, count: int) -> CommitResult:
+    """Delete *count* characters left of the caret through the current backend."""
+    n = max(0, int(count))
+    backend = str(getattr(committer, "backend_name", "unknown"))
+    if n <= 0:
+        return CommitResult(backend=backend, committed=True, detail="backspace:0")
+    method = getattr(committer, "delete_chars", None)
+    if callable(method):
+        return cast("CommitResult", method(n))
+    if backend == "wtype":
+        return WTypeCommitter().delete_chars(n)
+    if backend.startswith("xdotool") or backend in {"auto", "auto-fallback", "fallback"}:
+        wid = getattr(committer, "target_window_id", None)
+        return XDoToolCommitter(
+            target_window_id=wid if isinstance(wid, int) else None,
+            streaming=True,
+        ).delete_chars(n)
+    return CommitResult(backend=backend, committed=False, detail="backspace_unsupported_backend")
+
+
+def _send_backspaces_via_xtest(count: int, *, window_id: int | None = None) -> bool:
+    libs = _load_xtest_libraries()
+    if libs is None:
+        return False
+    x11, xtst = libs
+    if window_id is not None and _should_refocus_window(window_id):
+        _xdotool_focus_window(window_id)
+        time.sleep(0.04)
+    display = x11.XOpenDisplay(None)
+    if not display:
+        return False
+    try:
+        keysym = x11.XStringToKeysym(b"BackSpace")
+        if not keysym:
+            return False
+        keycode = int(x11.XKeysymToKeycode(display, keysym))
+        if keycode <= 0:
+            return False
+        # PTT holds Control. A bare BackSpace then becomes Ctrl+BackSpace and
+        # deletes the previous word, not the one character SemIf approved.
+        keymap = (ctypes.c_char * 32)()
+        x11.XQueryKeymap(display, keymap)
+        modifier_codes: list[int] = []
+        for name in (b"Control_L", b"Control_R", b"Shift_L", b"Shift_R", b"Alt_L", b"Alt_R"):
+            sym = x11.XStringToKeysym(name)
+            if not sym:
+                continue
+            code = int(x11.XKeysymToKeycode(display, sym))
+            if code <= 0:
+                continue
+            if ord(keymap[code // 8]) & (1 << (code % 8)):
+                modifier_codes.append(code)
+                xtst.XTestFakeKeyEvent(display, code, 0, 0)
+        x11.XFlush(display)
+        for _ in range(max(0, int(count))):
+            if xtst.XTestFakeKeyEvent(display, keycode, 1, 0) == 0:
+                return False
+            if xtst.XTestFakeKeyEvent(display, keycode, 0, 0) == 0:
+                return False
+        for code in modifier_codes:
+            xtst.XTestFakeKeyEvent(display, code, 1, 0)
+        x11.XFlush(display)
+        return True
+    except Exception:
+        return False
+    finally:
+        try:
+            x11.XCloseDisplay(display)
+        except Exception:
+            pass
 
 
 def _send_hard_enter_via_xtest(*, window_id: int | None = None) -> bool:

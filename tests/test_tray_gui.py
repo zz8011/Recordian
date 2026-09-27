@@ -109,10 +109,18 @@ def test_next_event_poll_delay_ms_backs_off_when_idle() -> None:
     assert _next_event_poll_delay_ms(handled_events=3) == 24
 
 
-def test_status_summary_label_includes_last_language() -> None:
-    state = UiState(last_run=RecentRunObservation(record_ms=121.0, transcribe_ms=200.0, detected_language="zh", asr_path="prefetched"))
+def test_status_summary_label_shows_readiness_without_path() -> None:
+    state = UiState(
+        status="idle",
+        backend_running=True,
+        last_run=RecentRunObservation(record_ms=121.0, transcribe_ms=200.0, detected_language="zh", asr_path="prefetched"),
+    )
 
-    assert _status_summary_label(state) == "时间: 321 ms | 语言: zh | 路径: prefetched"
+    label = _status_summary_label(state, {"trigger_mode": "ptt", "hotkey": "<ctrl_r>"})
+    assert label == "就绪 · 按住 右 Ctrl 说话"
+    assert "路径" not in label
+    assert "prefetched" not in label
+    assert "时间" not in label
 
 
 def test_extract_recent_run_observation_parses_result_payload() -> None:
@@ -460,35 +468,26 @@ def test_sound_path_fields_use_file_chooser() -> None:
     assert "sound_off_path" in source
 
 
-def test_status_summary_shows_text_when_available() -> None:
-    """R10: 有识别文本时状态栏显示文本摘要"""
+def test_status_summary_shows_state_not_transcript() -> None:
     state = UiState(
+        status="recording",
+        backend_running=True,
         last_run=RecentRunObservation(
             record_ms=100.0,
             transcribe_ms=200.0,
             text="你好世界这是一段测试",
-        )
-    )
-    label = _status_summary_label(state)
-    assert "你好世界" in label
-
-
-def test_status_summary_shows_time_when_no_text() -> None:
-    """R10: 无识别文本时状态栏显示时间"""
-    state = UiState(
-        last_run=RecentRunObservation(
-            record_ms=121.0,
-            transcribe_ms=200.0,
-            detected_language="zh",
             asr_path="prefetched",
-        )
+        ),
     )
     label = _status_summary_label(state)
-    assert "时间" in label
+    assert label == "正在听写"
+    assert "你好世界" not in label
+    rows = _collect_recent_runtime_rows(state)
+    assert any("你好世界" in row["detail"] for row in rows)
 
 
-def test_tray_menu_has_quick_mode_label() -> None:
-    """R12: 托盘菜单文本精炼项应包含'快速模式'标签"""
-    from recordian.tray_menu import build_appindicator_menu
-    source = inspect.getsource(build_appindicator_menu)
-    assert "快速模式" in source
+def test_status_summary_names_stopped_and_error() -> None:
+    stopped = UiState(status="stopped", backend_running=False)
+    assert _status_summary_label(stopped).startswith("已暂停")
+    failed = UiState(status="error", backend_running=True, detail="microphone missing")
+    assert _status_summary_label(failed) == "出错"

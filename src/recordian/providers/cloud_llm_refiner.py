@@ -5,6 +5,35 @@ from urllib.parse import urlparse
 
 from .base_text_refiner import BaseTextRefiner
 
+#: GPUStack 在模型实例未运行时返回的 404 文案片段。
+MODEL_NOT_RUNNING_HINTS = ("no running instances", "model not found")
+
+
+def _describe_refine_failure(*, api_base: str, model: str, status: int, body: str) -> str:
+    """把精炼失败翻译成一句可读中文（overlay 只显示前 72 字符，重点放前面）。"""
+    lowered = str(body or "").lower()
+    if status == 404 and any(hint in lowered for hint in MODEL_NOT_RUNNING_HINTS):
+        return (
+            f"文字精炼模型「{model}」没有运行实例（HTTP 404）；"
+            f"请在 GPUStack 启动该模型（{api_base}），本次按 ASR 原文上屏"
+        )
+    if status in {502, 503, 504}:
+        return f"文字精炼后端暂时不可用（HTTP {status}），模型实例可能正在重启（{api_base}）"
+    if status in {401, 403}:
+        return f"文字精炼鉴权失败（HTTP {status}）；请检查 refine_api_key（{api_base}）"
+    preview = str(body or "").strip().replace("\n", " ")[:120]
+    return f"文字精炼调用失败（HTTP {status}）: {preview}（{api_base}）"
+
+
+def _describe_refine_transport_failure(*, api_base: str, model: str, timeout_s: float, exc: BaseException) -> str:
+    """连接层失败（超时/连不上）的中文说明。"""
+    name = type(exc).__name__
+    if name in {"Timeout", "ReadTimeout", "ConnectTimeout"}:
+        return f"文字精炼请求超时（>{timeout_s:.0f}s），后端可能卡住或网络不通（{api_base}）"
+    if name in {"ConnectionError", "NewConnectionError", "RemoteDisconnected"}:
+        return f"无法连接文字精炼后端 {api_base}（模型 {model}）；请检查主机是否在线、端口是否可达"
+    return f"文字精炼请求失败：{name}: {exc}（{api_base}）"
+
 
 def _detect_api_format(api_base: str) -> str:
     normalized = api_base.rstrip("/")
@@ -46,7 +75,7 @@ class CloudLLMRefiner(BaseTextRefiner):
         prompt_template: str | None = None,
         api_format: str = "auto",  # "auto", "anthropic", "openai"
         enable_thinking: bool = False,
-        timeout: int = 30,  # API 超时时间（秒），默认30秒
+        timeout: float = 30.0,  # API 超时时间（秒），默认30秒
     ) -> None:
         super().__init__(
             max_tokens=max_tokens,
@@ -125,9 +154,33 @@ class CloudLLMRefiner(BaseTextRefiner):
     def _raise_on_error(self, response) -> None:
         """Raise RuntimeError when the API response is non-200."""
         if response.status_code != 200:
+            try:
+                body = str(response.text or "")
+            except Exception:  # noqa: BLE001
+                body = ""
             raise RuntimeError(
-                f"API 调用失败: {response.status_code} {response.text}"
+                _describe_refine_failure(
+                    api_base=self.api_base,
+                    model=self.model,
+                    status=int(response.status_code),
+                    body=body,
+                )
             )
+
+    def _post_json(self, url: str, headers: dict, payload: dict):
+        """POST 并在连接层失败时给出可读中文报错。"""
+        requests = self._ensure_requests()
+        try:
+            return requests.post(url, headers=headers, json=payload, timeout=self.timeout)
+        except Exception as exc:  # noqa: BLE001
+            raise RuntimeError(
+                _describe_refine_transport_failure(
+                    api_base=self.api_base,
+                    model=self.model,
+                    timeout_s=self.timeout,
+                    exc=exc,
+                )
+            ) from exc
 
     # --- Anthropic --------------------------------------------------------
 
@@ -252,18 +305,12 @@ class CloudLLMRefiner(BaseTextRefiner):
     def _refine_openai(self, text: str) -> str:
         """使用 OpenAI API 格式（Groq, DeepSeek 等）"""
         messages = self._build_messages(text)
-        requests = self._ensure_requests()
 
         # 调用 OpenAI-compatible API
         headers = self._build_openai_headers()
         payload = self._build_openai_payload(messages, source_text=text)
 
-        response = requests.post(
-            f"{self.api_base}/chat/completions",
-            headers=headers,
-            json=payload,
-            timeout=self.timeout,
-        )
+        response = self._post_json(f"{self.api_base}/chat/completions", headers, payload)
         self._raise_on_error(response)
 
         output = self._parse_openai_response(response.json())

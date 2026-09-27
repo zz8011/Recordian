@@ -18,7 +18,9 @@ from typing import Any, cast
 
 from .audio_feedback import play_sound
 from .auto_lexicon import AutoLexicon
+from .duration_guard import clamp_oneshot_duration_s, recording_limit_s_for_provider
 from .linux_commit import (
+    _fcitx_committer_from,
     get_focused_window_id,
     paste_to_enter_delay_seconds,
     resolve_committer,
@@ -82,7 +84,7 @@ def build_hotkey_handlers(
         def _worker() -> None:
             try:
                 _play_global_cue(args, "on")
-                result = run_dictate_once(args)
+                result = run_dictate_once(_oneshot_args_within_duration_limit(args))
                 on_result({"event": "result", "result": asdict(result)})
             except Exception as exc:  # noqa: BLE001
                 on_error({"event": "error", "error": f"{type(exc).__name__}: {exc}"})
@@ -96,6 +98,24 @@ def build_hotkey_handlers(
         stop_event.set()
 
     return _run_once, _exit, stop_event
+
+
+def _oneshot_args_within_duration_limit(args: argparse.Namespace) -> argparse.Namespace:
+    """Clamp a oneshot ``--duration`` to the Confucius protective limit.
+
+    See :mod:`recordian.duration_guard`. Returns ``args`` unchanged for
+    other providers or durations already within the limit.
+    """
+    raw_duration = getattr(args, "duration", None)
+    clamped = clamp_oneshot_duration_s(
+        str(getattr(args, "asr_provider", "")),
+        None if raw_duration is None else float(raw_duration),
+    )
+    if clamped == raw_duration:
+        return args
+    clone = argparse.Namespace(**vars(args))
+    clone.duration = clamped
+    return clone
 
 
 def _play_global_cue(args: argparse.Namespace, cue: str) -> None:
@@ -124,6 +144,20 @@ def _commit_text(committer: Any, text: str, *, auto_hard_enter: bool = False) ->
         return {"backend": committer.backend_name, "committed": False, "detail": str(exc)}
 
 
+def _composition_capable_committer(committer: Any) -> bool:
+    """True when the commit chain contains an fcitx composition committer.
+
+    Used by the PTT deadline path: for a composition-capable backend a
+    BeginSession call may still be in flight (busctl timeout is longer than
+    a short join) when the worker join times out, so the controller can
+    NEVER classify that worker as "no composition" — the only safe
+    classification is uncertain (fallback suppressed). Legacy backends
+    (xdotool-clipboard, wtype, …) have no composition API and keep the
+    full-audio fallback.
+    """
+    return _fcitx_committer_from(committer) is not None
+
+
 def build_ptt_hotkey_handlers(
     *,
     args: argparse.Namespace,
@@ -131,7 +165,10 @@ def build_ptt_hotkey_handlers(
     on_error: Callable[[dict[str, object]], None],
     on_busy: Callable[[dict[str, object]], None],
     on_state: Callable[[dict[str, object]], None],
+    timer_factory: Callable[[float, Callable[[], None]], Any] | None = None,
 ) -> tuple[Callable[..., bool], Callable[[], bool], Callable[[], None], threading.Event]:
+    if timer_factory is None:
+        timer_factory = threading.Timer
     lock = threading.Lock()
     stop_event = threading.Event()
     cooldown_s = max(0.0, args.cooldown_ms / 1000.0)
@@ -147,6 +184,7 @@ def build_ptt_hotkey_handlers(
                 max_hotwords=int(getattr(args, "auto_lexicon_max_hotwords", 40)),
                 min_accepts=int(getattr(args, "auto_lexicon_min_accepts", 2)),
                 max_terms=int(getattr(args, "auto_lexicon_max_terms", 5000)),
+                max_auto_hotwords=int(getattr(args, "auto_lexicon_max_auto_hotwords", 15)),
             )
             if args.debug_diagnostics:
                 on_state(
@@ -165,15 +203,14 @@ def build_ptt_hotkey_handlers(
             on_state({"event": "log", "message": f"auto_lexicon_disabled: {type(exc).__name__}: {exc}"})
 
     def _resolve_hotwords() -> list[str]:
-        base_hotwords = list(getattr(args, "hotword", []))
-        if auto_lexicon is None:
-            return base_hotwords
+        from .hotword_corrector import compose_effective_hotwords
+
         try:
-            return auto_lexicon.compose_hotwords(base_hotwords)
+            return compose_effective_hotwords(args, auto_lexicon=auto_lexicon)
         except Exception as exc:  # noqa: BLE001
             if args.debug_diagnostics:
                 on_state({"event": "log", "message": f"diag auto_lexicon_compose_failed: {exc}"})
-            return base_hotwords
+            return list(getattr(args, "hotword", []) or [])
 
     # Initialize text refiner if enabled
     from .providers.base_text_refiner import BaseTextRefiner
@@ -219,6 +256,7 @@ def build_ptt_hotkey_handlers(
                 temperature=0.1,
                 prompt_template=custom_prompt if custom_prompt else None,
                 enable_thinking=getattr(args, "enable_thinking", False),
+                timeout=float(getattr(args, "refine_timeout", 120.0)),
             )
             on_state({"event": "log", "message": f"使用云端 LLM: {refiner.model}"})
         elif refine_provider == "llamacpp":
@@ -328,6 +366,7 @@ def build_ptt_hotkey_handlers(
         "voice_owner_active": True,
         "voice_owner_seen": False,
         "voice_owner_last_score": -1.0,
+        "duration_limit_timer": None,
     }
 
     def _get_state(key: str) -> object:
@@ -345,7 +384,18 @@ def build_ptt_hotkey_handlers(
         with state_lock:
             state.update(updates)
 
+    def _cancel_duration_limit_timer() -> None:
+        timer = _get_state("duration_limit_timer")
+        _set_state("duration_limit_timer", None)
+        cancel = getattr(timer, "cancel", None)
+        if callable(cancel):
+            try:
+                cancel()
+            except Exception:  # noqa: BLE001
+                pass
+
     def _transition_to_idle() -> None:
+        _cancel_duration_limit_timer()
         _update_state({
             "process": None,
             "temp_dir": None,
@@ -378,6 +428,30 @@ def build_ptt_hotkey_handlers(
         ):
             processing_thread.join()
 
+    def _on_duration_limit(record_handle: object, limit_s: float) -> None:
+        # Fires from the timer thread. NO precheck here: the handle identity
+        # check and the consumption of state["process"] must happen in the
+        # SAME _stop_recording critical section, otherwise a manual stop +
+        # new start between precheck and stop would let this stale callback
+        # stop the NEW recording (TOCTOU). A lost race is a silent no-op —
+        # the user-visible limit notification is emitted only for the stop
+        # that was actually accepted.
+        with state_lock:
+            worker = state.get("realtime_asr_worker")
+            if (
+                state.get("process") is record_handle
+                and isinstance(worker, _RealtimeASRWorkerHandle)
+                and bool(getattr(worker, "continuous", False))
+            ):
+                # Continuous capability CONFIRMED (segments-capable
+                # composition session + Confucius realtime worker): segment
+                # rotation enforces the per-socket audio budget on sample
+                # counts, so the 25 s fallback guard must not kill the one
+                # microphone. Mere worker existence (old plugin / refused /
+                # preview-only) does NOT skip — the guard stays in force.
+                return
+        _stop_recording(expected_handle=record_handle, limit_s=limit_s)
+
     def _start_recording(trigger_source: str = "hotkey") -> bool:
         now = time.monotonic()
         last_trigger = float(cast(float, _get_state("last_trigger")))
@@ -404,6 +478,8 @@ def build_ptt_hotkey_handlers(
             return False
 
         temp_dir: TemporaryDirectory[str] | None = None
+        record_handle: RecordProcessHandle | subprocess.Popen[Any] | None = None
+        realtime_worker: _RealtimeASRWorkerHandle | None = None
         try:
             _set_state("recording_state", RecordingState.RECORDING)
             temp_dir = TemporaryDirectory(prefix="recordian-ptt-")
@@ -464,32 +540,192 @@ def build_ptt_hotkey_handlers(
                 )
             )
             routing = resolve_remote_paste_routing(args)
-            realtime_worker = _start_realtime_asr_worker(
-                args=args,
-                provider=provider,
-                record_handle=record_handle,
-                committer=committer,
-                enable_local_commit=bool(routing.commit_local),
-                auto_hard_enter=_resolve_auto_hard_enter(args),
-                resolve_hotwords=_resolve_hotwords,
-                normalize_final_text=_normalize_final_text,
-                on_state=on_state,
-            )
-            if realtime_worker is not None:
-                _set_state("realtime_asr_worker", realtime_worker)
+            # Reads the config file — keep file IO outside state_lock.
+            auto_hard_enter = _resolve_auto_hard_enter(args)
+
+            def _capture_fatal(reason: str) -> None:
+                # Bound to THIS start's exact record handle: a fatal from the
+                # realtime/continuous worker (network, monitor overflow,
+                # stale/uncertain IME) stops only its own recording. A late
+                # fire after the slot was consumed is a silent no-op.
+                on_state(
+                    {
+                        "event": "log",
+                        "message": f"realtime_capture_fatal: {reason} — 终止本次采集",
+                    }
+                )
+                _stop_recording(expected_handle=record_handle)
+
+            # Protective duration limit (duration_guard.py). Confucius only;
+            # other providers get no timer.
+            duration_limit_s = recording_limit_s_for_provider(provider)
+            limit_timer = None
+            orphan_worker = None
+            # Worker creation + registration + timer arming happen in ONE
+            # state_lock critical section gated on record-handle ownership.
+            # _start_realtime_asr_worker is nonblocking here (opens the
+            # monitor reader — a queue append — and spawns the daemon worker
+            # thread; the network session lives inside that thread), so no
+            # join/network/file IO sits under the lock. A concurrent stop
+            # therefore either runs BEFORE this section — ownership already
+            # lost (state["process"] consumed): the factory is skipped
+            # entirely, no orphan worker is created, and this start must NOT
+            # mutate state, clean up temp_dir, or release the lock (the
+            # postprocess thread owns those) — or AFTER it, snapshotting the
+            # registered worker and joining/cancelling it through the normal
+            # stop path. (state_lock is an RLock: a same-thread reentrant
+            # stop from inside the factory is re-checked after the factory
+            # returns, and a worker returned into a consumed slot is disposed
+            # below instead of being written back.) The timer delay counts
+            # from the recorded start time, not from arming time;
+            # timer_factory only constructs the object, start() (which spawns
+            # the thread for threading.Timer) happens outside the lock.
+            with state_lock:
+                if state.get("process") is record_handle:
+                    realtime_worker = _start_realtime_asr_worker(
+                        args=args,
+                        provider=provider,
+                        record_handle=record_handle,
+                        committer=committer,
+                        enable_local_commit=bool(routing.commit_local),
+                        auto_hard_enter=auto_hard_enter,
+                        resolve_hotwords=_resolve_hotwords,
+                        normalize_final_text=_normalize_final_text,
+                        on_state=on_state,
+                        refine_enabled=refiner is not None,
+                        on_capture_fatal=_capture_fatal,
+                    )
+                    if realtime_worker is not None:
+                        if state.get("process") is record_handle:
+                            state["realtime_asr_worker"] = realtime_worker
+                        else:
+                            # state_lock is reentrant: a same-thread stop
+                            # inside the factory may have consumed the
+                            # recording while the worker was being created.
+                            # Never write the stale handle back into state
+                            # owned by the stop/newer session — dispose the
+                            # returned worker below (outside the lock).
+                            orphan_worker = realtime_worker
+                            realtime_worker = None
+                    if duration_limit_s is not None:
+                        started_at = state.get("record_started_at")
+                        if state.get("process") is record_handle and started_at is not None:
+                            remaining_s = max(0.0, duration_limit_s - (time.perf_counter() - float(cast(float, started_at))))
+                            limit_timer = timer_factory(
+                                remaining_s,
+                                lambda: _on_duration_limit(record_handle, duration_limit_s),
+                            )
+                            limit_timer.daemon = True
+                            state["duration_limit_timer"] = limit_timer
+            if orphan_worker is not None:
+                # Contract: cancel_event stops the worker from writing and it
+                # never commits; cancel_session closes the ASR session.
+                orphan_cancel_event = getattr(orphan_worker, "cancel_event", None)
+                if orphan_cancel_event is not None:
+                    orphan_cancel_event.set()
+                orphan_cancel_session = getattr(orphan_worker, "cancel_session", None)
+                if callable(orphan_cancel_session):
+                    try:
+                        orphan_cancel_session()
+                    except Exception:  # noqa: BLE001
+                        pass
+            if limit_timer is not None:
+                limit_timer.start()
             return True
         except Exception:  # noqa: BLE001
-            # 确保在异常路径停止音频采样线程
-            level_stop_val: object = _get_state("level_stop")
-            if isinstance(level_stop_val, threading.Event):
-                level_stop_val.set()
-            if temp_dir is not None:
-                temp_dir.cleanup()
-            _transition_to_idle()
-            lock.release()
+            # Abort ownership is claimed by EXACT record-handle identity, not
+            # by recording_state (a NEWER recording is RECORDING too) and
+            # never by reading current state slots (they may belong to the
+            # newer session). Atomic check+consume under state_lock: after
+            # the consume, state["process"] is None, so a later stop cannot
+            # claim this recording twice. Lost ownership (a concurrent stop
+            # consumed it, or a newer session owns the slot) means: no state
+            # mutation, no cleanup, no lock release — the rightful owner does
+            # those. The outer lock stays held until an accepted abort has
+            # finished cleaning up.
+            abort_temp_dir: TemporaryDirectory[str] | None = None
+            abort_level_stop: object = None
+            abort_timer: object = None
+            claimed = False
+            with state_lock:
+                if (
+                    record_handle is not None
+                    and state.get("process") is record_handle
+                ) or (
+                    # Recorder never created (start_record_process raised):
+                    # nothing was ever published, the outer lock is still ours
+                    # and no stop could have consumed anything.
+                    record_handle is None
+                    and state.get("process") is None
+                    and state.get("recording_state") == RecordingState.RECORDING
+                ):
+                    claimed = True
+                    abort_temp_dir = cast(TemporaryDirectory[str] | None, state.get("temp_dir")) or temp_dir
+                    abort_level_stop = state.get("level_stop")
+                    abort_timer = state.get("duration_limit_timer")
+                    state.update({
+                        "process": None,
+                        "temp_dir": None,
+                        "audio_path": None,
+                        "record_started_at": None,
+                        "level_stop": None,
+                        "duration_limit_timer": None,
+                        "realtime_asr_worker": None,
+                        "recording_state": RecordingState.IDLE,
+                        "record_source": "hotkey",
+                        "voice_session_active": False,
+                        "voice_last_speech_ts": 0.0,
+                        "voice_started_ts": 0.0,
+                        "voice_speech_detected": False,
+                        "voice_auto_stopping": False,
+                        "voice_semantic_enabled": False,
+                        "voice_semantic_has_text": False,
+                        "voice_semantic_last_text_ts": 0.0,
+                        "voice_semantic_last_text": "",
+                        "voice_owner_filter_enabled": False,
+                        "voice_owner_active": True,
+                        "voice_owner_seen": False,
+                        "voice_owner_last_score": -1.0,
+                    })
+            if claimed:
+                # All blocking work happens here, outside state_lock, on THIS
+                # start's snapshots only.
+                abort_timer_cancel = getattr(abort_timer, "cancel", None)
+                if callable(abort_timer_cancel):
+                    try:
+                        abort_timer_cancel()
+                    except Exception:  # noqa: BLE001
+                        pass
+                if isinstance(abort_level_stop, threading.Event):
+                    abort_level_stop.set()
+                if realtime_worker is not None:
+                    # Registered moments ago but this start is failing:
+                    # cancel it so it stops writing and never commits.
+                    worker_cancel_event = getattr(realtime_worker, "cancel_event", None)
+                    if worker_cancel_event is not None:
+                        worker_cancel_event.set()
+                    worker_cancel_session = getattr(realtime_worker, "cancel_session", None)
+                    if callable(worker_cancel_session):
+                        try:
+                            worker_cancel_session()
+                        except Exception:  # noqa: BLE001
+                            pass
+                if record_handle is not None:
+                    # Do not leave our own recorder running on init failure.
+                    try:
+                        stop_record_process(record_handle, recorder_backend=recorder_backend)
+                    except Exception:  # noqa: BLE001
+                        pass
+                if abort_temp_dir is not None:
+                    abort_temp_dir.cleanup()
+                lock.release()
             raise
 
-    def _stop_recording() -> bool:
+    def _stop_recording(
+        *,
+        expected_handle: object | None = None,
+        limit_s: float | None = None,
+    ) -> bool:
         with state_lock:
             process = state.get("process")
             started = state.get("record_started_at")
@@ -503,7 +739,16 @@ def build_ptt_hotkey_handlers(
             except Exception:
                 owner_last_score = -1.0
             realtime_asr_worker = state.get("realtime_asr_worker")
+            duration_limit_timer = state.get("duration_limit_timer")
             if process is None or audio_path is None or temp_dir is None or started is None:
+                return False
+            if expected_handle is not None and process is not expected_handle:
+                # Stale duration-limit callback: the recording slot is owned
+                # by a NEWER session (or already consumed). The identity check
+                # and the consumption of state["process"] below happen in this
+                # same critical section, so a stale timer can never stop the
+                # next recording, even if it started running before the
+                # previous session's timer was cancelled.
                 return False
 
             # Narrow dict[str, object] values to expected types after None-guard.
@@ -530,7 +775,31 @@ def build_ptt_hotkey_handlers(
                 "voice_owner_seen": False,
                 "voice_owner_last_score": -1.0,
                 "realtime_asr_worker": None,
+                "duration_limit_timer": None,
             })
+
+        # Cancel outside the lock; cancel() on an already-firing timer only
+        # sets its finished event, and the atomic handle check above makes a
+        # late fire a no-op. Never join the timer (it may be this thread).
+        cancel_timer = getattr(duration_limit_timer, "cancel", None)
+        if callable(cancel_timer):
+            try:
+                cancel_timer()
+            except Exception:  # noqa: BLE001
+                pass
+
+        if limit_s is not None:
+            # User-visible notice only for the stop that was ACCEPTED above
+            # (a stale callback that lost the race returns silently). Emitted
+            # outside state_lock; the usual processing_started/result events
+            # follow from the normal stop path below.
+            on_state(
+                {
+                    "event": "recording_duration_limit",
+                    "limit_s": limit_s,
+                    "provider": getattr(provider, "provider_name", "unknown"),
+                }
+            )
 
         if isinstance(level_stop, threading.Event):
             level_stop.set()
@@ -554,34 +823,145 @@ def build_ptt_hotkey_handlers(
                 realtime_detected_language = ""
                 realtime_transcribe_latency_ms = 0.0
                 realtime_commit_info: dict[str, object] | None = None
+                realtime_outcome = ""
+                realtime_composition_session: object | None = None
+                realtime_semif_applied = False
+                realtime_composition_started = False
+                realtime_segments_committed = 0
                 if isinstance(realtime_asr_worker, _RealtimeASRWorkerHandle):
                     asr_timeout_s = float(getattr(args, "asr_timeout_s", 30.0))
+                    realtime_composition_started = bool(
+                        getattr(realtime_asr_worker, "composition_started", False)
+                    )
                     realtime_asr_worker.thread.join(timeout=asr_timeout_s)
                     if realtime_asr_worker.thread.is_alive():
+                        # Signal the worker first so a late finish can no
+                        # longer write preedit or commit the partial text.
+                        cancel_event = getattr(realtime_asr_worker, "cancel_event", None)
+                        if cancel_event is not None:
+                            cancel_event.set()
                         cancel_session = realtime_asr_worker.cancel_session
                         if cancel_session is not None:
                             try:
                                 cancel_session()
                             except Exception:
                                 pass
-                        on_state(
-                            {
-                                "event": "log",
-                                "message": (
-                                    "realtime_asr_timeout_fallback:"
-                                    f" timeout_s={asr_timeout_s:.1f}"
-                                    " using_full_audio_transcription"
-                                ),
-                            }
+                        # The pre-join snapshot of composition_started is
+                        # NOT trustworthy here: a Begin pending during the
+                        # join may have completed since, and one may still be
+                        # in flight right now. composition_started is
+                        # irreversible (False→True only), so re-read it after
+                        # the cancel; a refusal (worker.composition_refused)
+                        # is equally terminal — its commit_info already says
+                        # "suppressed". For a composition-capable backend
+                        # even a False reading cannot prove "no session":
+                        # the only safe classification is uncertain.
+                        composition_now = bool(
+                            getattr(realtime_asr_worker, "composition_started", False)
                         )
-                    elif realtime_asr_worker.error:
-                        on_state({"event": "log", "message": f"realtime_asr_failed: {realtime_asr_worker.error}"})
+                        refused_now = bool(
+                            getattr(realtime_asr_worker, "composition_refused", False)
+                        )
+                        begin_may_be_pending = (
+                            bool(resolve_remote_paste_routing(args).commit_local)
+                            and _composition_capable_committer(committer)
+                        )
+                        if composition_now or refused_now or begin_may_be_pending:
+                            # Deadline hit while a composition session held a
+                            # preedit on the focused context, was refused, or
+                            # a Begin may still be pending: the outcome is
+                            # uncertain (the toolkit may have kept/committed
+                            # the preedit, the worker may still be writing or
+                            # binding). Falling back to a full-sentence
+                            # commit could duplicate text or hit the wrong
+                            # window, so the pipeline must suppress it.
+                            detail = "realtime_asr_timeout_suppressed"
+                            if refused_now:
+                                detail = "realtime_asr_timeout_refused_suppressed"
+                            elif not composition_now:
+                                detail = "realtime_asr_timeout_suppressed:begin_may_be_pending"
+                            realtime_outcome = "uncertain"
+                            realtime_commit_info = {
+                                "backend": "fcitx",
+                                "committed": False,
+                                "detail": detail,
+                                "outcome": "uncertain",
+                            }
+                            on_state(
+                                {
+                                    "event": "log",
+                                    "message": (
+                                        "realtime_asr_timeout_suppressed:"
+                                        f" timeout_s={asr_timeout_s:.1f}"
+                                        f" composition_started={composition_now}"
+                                        f" refused={refused_now}"
+                                        " composition session outcome uncertain —"
+                                        " 不回退整句提交，避免重复/错窗口"
+                                    ),
+                                }
+                            )
+                        else:
+                            on_state(
+                                {
+                                    "event": "log",
+                                    "message": (
+                                        "realtime_asr_timeout_fallback:"
+                                        f" timeout_s={asr_timeout_s:.1f}"
+                                        " using_full_audio_transcription"
+                                    ),
+                                }
+                            )
                     else:
                         realtime_final_text = realtime_asr_worker.final_text
                         realtime_detected_language = realtime_asr_worker.detected_language
                         realtime_transcribe_latency_ms = realtime_asr_worker.transcribe_latency_ms
                         if isinstance(realtime_asr_worker.commit_info, dict):
                             realtime_commit_info = realtime_asr_worker.commit_info
+                        realtime_outcome = str(
+                            getattr(realtime_asr_worker, "outcome", "") or ""
+                        )
+                        realtime_composition_session = getattr(
+                            realtime_asr_worker, "composition_session", None
+                        )
+                        realtime_semif_applied = bool(
+                            getattr(realtime_asr_worker, "semif_applied", False)
+                        )
+                        if realtime_asr_worker.error:
+                            on_state({"event": "log", "message": f"realtime_asr_failed: {realtime_asr_worker.error}"})
+                            # A failure does not imply an empty
+                            # worker.final_text: continuous dictation keeps the
+                            # prefix it already committed, while a preview-only
+                            # failure leaves no final text at all. Neither a
+                            # partial hypothesis nor that committed prefix is
+                            # treated as the final transcript. When a
+                            # composition session was
+                            # bound, commit_info carries an uncertain/stale
+                            # outcome and the pipeline suppresses the
+                            # fallback; preview-only failures fall back to
+                            # the full-audio transcription below.
+                # Once any prefix segment was committed through the IME token,
+                # the full-paragraph refiner must not rewrite that prefix:
+                # the pipeline gets no refiner at all, and its existing
+                # "already committed" contract keeps the prefetched commit
+                # (no re-transcription, no second commit, no file fallback).
+                if isinstance(realtime_asr_worker, _RealtimeASRWorkerHandle):
+                    realtime_segments_committed = int(
+                        getattr(realtime_asr_worker, "segments_committed", 0) or 0
+                    )
+                    if not realtime_outcome:
+                        realtime_outcome = str(getattr(realtime_asr_worker, "outcome", "") or "")
+                pipeline_refiner = refiner if realtime_segments_committed == 0 else None
+                if refiner is not None and realtime_segments_committed > 0:
+                    on_state(
+                        {
+                            "event": "log",
+                            "message": (
+                                "continuous_refine_suppressed: "
+                                f"segments_committed={realtime_segments_committed} — "
+                                "已提交前缀不参与整段 refine"
+                            ),
+                        }
+                    )
                 run_postprocess_pipeline(
                     PostprocessPipelineContext(
                         args=args,
@@ -593,7 +973,7 @@ def build_ptt_hotkey_handlers(
                         owner_last_score=owner_last_score,
                         state=state,
                         provider=provider,
-                        refiner=refiner,
+                        refiner=pipeline_refiner,
                         committer=committer,
                         auto_lexicon=auto_lexicon,
                         refine_postprocess_rule=refine_postprocess_rule,
@@ -603,11 +983,48 @@ def build_ptt_hotkey_handlers(
                         prefetched_detected_language=realtime_detected_language,
                         prefetched_transcribe_latency_ms=realtime_transcribe_latency_ms,
                         prefetched_commit_info=realtime_commit_info,
+                        prefetched_outcome=realtime_outcome,
+                        prefetched_composition_started=realtime_composition_started,
+                        composition_session=realtime_composition_session,
+                        prefetched_semif_applied=realtime_semif_applied,
                         on_state=on_state,
                         on_result=on_result,
                         on_error=on_error,
                     )
                 )
+                if (
+                    realtime_segments_committed > 0
+                    and realtime_outcome not in {"committed", "released_for_refine"}
+                ):
+                    # A continuous turn that committed a prefix and then
+                    # failed is NOT a success: the pipeline result carries the
+                    # preserved prefix (never a fallback re-commit), and this
+                    # error keeps the failure visible to the user instead of
+                    # masquerading as a clean commit.
+                    try:
+                        on_error(
+                            {
+                                "event": "error",
+                                "error": (
+                                    "continuous_partial_failure: "
+                                    f"segments_committed={realtime_segments_committed} "
+                                    f"outcome={realtime_outcome or 'uncertain'} — "
+                                    "已提交前缀保留，剩余内容未写入"
+                                ),
+                            }
+                        )
+                    except Exception:  # noqa: BLE001
+                        pass
+                leftover_session = getattr(realtime_asr_worker, "composition_session", None)
+                cancel_leftover = getattr(leftover_session, "cancel", None)
+                if callable(cancel_leftover):
+                    # Defensive: the pipeline commits or cancels the carried
+                    # session; if anything slipped through, clear our own
+                    # preedit now (no-op once the session is closed).
+                    try:
+                        cancel_leftover()
+                    except Exception:  # noqa: BLE001
+                        pass
             finally:
                 _temp_dir.cleanup()
                 _set_state("processing_thread", None)

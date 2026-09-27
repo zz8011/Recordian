@@ -1,0 +1,25 @@
+# Confucius4-R2T2 streaming server — runtime dependencies
+#
+# The server (server/confucius_streaming_server.py) itself imports lazily;
+# these are only needed on the machine that actually loads the model.
+#
+# Two layers, intentionally separate from Recordian's base install:
+#
+# 1) WebSocket transport (lightweight, pip-installable anywhere).
+#    websockets.asyncio (the asyncio implementation this server uses) was
+#    introduced in 13.0 — 12.x does NOT provide it.
+#    Reference: https://websockets.readthedocs.io/en/13.0.1/
+websockets>=13.0
+#
+# 2) Model stack (heavy, GPU). NOT pip-installed from this file by default —
+#    reuse an existing Qwen3-ASR/vLLM environment or build one per
+#    server/README-confucius.md:
+#    - torch 2.9.1 + vllm 0.14.0 + qwen-asr 0.0.6 (validated combination)
+#    - transformers 4.57.6, librosa, soundfile, numpy
+#    - the `r2t2` package from the pinned upstream checkout
+#      (Confucius4-R2T2 @ c4611929bc3592b38dab34e96a8c9940d6da3755),
+#      supplied via --r2t2-source / R2T2_SOURCE or `pip install .` in that repo
+#
+# Validated install sources (2026-09-24, this project): Tsinghua PyPI mirror
+# (https://pypi.tuna.tsinghua.edu.cn/simple) for pure-Python wheels; model
+# weights and VAD assets from ModelScope. See README-confucius.md.

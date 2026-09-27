@@ -6,9 +6,36 @@ from typing import Any, cast
 
 from recordian.config import ConfigManager
 from recordian.preset_manager import PresetManager
+from recordian.recommended_profile import (
+    BUSY_SAVE_MESSAGE,
+    CONFUCIUS_STOCK_MIGRATION_NOTICE,
+    CORRECTION_PROVIDER_CHOICES,
+    DICTATION_BUSY_STATUSES,
+    LANGUAGE_CHOICES,
+    PROVIDER_CHOICES,
+    RECOMMENDED_PROFILE_NOTICE,
+    RECORD_BACKEND_CHOICES,
+    RECORD_FORMAT_CHOICES,
+    SAVE_EFFECT_INTRO,
+    TRIGGER_MODE_CHOICES,
+    confucius_endpoint_problem,
+    endpoint_hints_for_provider,
+    http_cloud_endpoint_problem,
+    migrate_confucius_realtime_endpoint,
+    recommended_profile_values,
+)
 from recordian.refine_model_discovery import fetch_model_list
-from recordian.runtime_config import normalize_runtime_config
-from recordian.setting_effects import combined_setting_effect, effect_label, effect_status_message
+from recordian.runtime_config import (
+    DEFAULT_JEV_TIMEOUT_S,
+    DEFAULT_SEMIF_TIMEOUT_S,
+    format_contextual_aliases,
+    normalize_contextual_aliases,
+    normalize_correction_provider,
+    normalize_jev_timeout_s,
+    normalize_runtime_config,
+    normalize_semif_timeout_s,
+)
+from recordian.setting_effects import SettingEffect, combined_setting_effect, effect_label, effect_status_message
 from recordian.tray_settings_utils import KEY_LABEL_MAP
 from recordian.tray_utils import save_config_changes
 from recordian.voice_wake import DEFAULT_WAKE_KEYWORD_THRESHOLD, DEFAULT_WAKE_NUM_THREADS
@@ -167,29 +194,65 @@ def open_settings_gtk(
                 app._gtk_settings_window = None
 
         win = Gtk.Window(title="Recordian 设置")
-        win.set_default_size(900, 760)
+        win.set_default_size(780, 680)
         win.set_position(Gtk.WindowPosition.CENTER)
         win.set_keep_above(True)
         app._gtk_settings_window = win
 
-        root_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        root_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         root_box.set_border_width(12)
         win.add(root_box)
 
-        title_label = Gtk.Label(label="Recordian 设置")
-        title_label.set_xalign(0.0)
-        title_label.set_markup("<b>Recordian 设置</b>")
-        root_box.pack_start(title_label, False, False, 0)
-
         config_label = Gtk.Label(label=f"配置文件: {config_path}")
         config_label.set_xalign(0.0)
-        config_label.set_opacity(0.75)
-        root_box.pack_start(config_label, False, False, 0)
+        config_label.set_opacity(0.55)
+        try:
+            from gi.repository import Pango  # type: ignore
+
+            config_label.set_ellipsize(Pango.EllipsizeMode.MIDDLE)
+        except Exception:
+            pass
+
+        daily_page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        daily_page.set_border_width(2)
+        daily_scroll = Gtk.ScrolledWindow()
+        daily_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        daily_scroll.set_propagate_natural_height(False)
+        daily_scroll.add(daily_page)
+        daily_scroll.set_vexpand(True)
+        root_box.pack_start(daily_scroll, True, True, 0)
 
         notebook = Gtk.Notebook()
-        root_box.pack_start(notebook, True, True, 0)
+        notebook.set_scrollable(True)
+        notebook.set_vexpand(False)
+        notebook.set_hexpand(True)
+        advanced_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        advanced_box.set_border_width(4)
+        advanced_box.set_vexpand(False)
+        advanced_box.pack_start(notebook, True, True, 0)
+        advanced_box.pack_start(config_label, False, False, 0)
+        advanced = Gtk.Expander(label="高级设置")
+        advanced.set_expanded(False)
+        advanced.set_vexpand(False)
+        advanced.set_resize_toplevel(False)
+        advanced.add(advanced_box)
+        root_box.pack_start(advanced, False, False, 0)
+
+        def _sync_advanced_space(*_args: object) -> None:
+            opened = bool(advanced.get_expanded())
+            advanced.set_vexpand(opened)
+            advanced_box.set_vexpand(opened)
+            notebook.set_vexpand(opened)
+            for child in notebook.get_children():
+                child.set_propagate_natural_height(False)
+                child.set_vexpand(opened)
+                child.set_min_content_height(220 if opened else 0)
+            daily_scroll.set_vexpand(True)
 
         entries: dict[str, tuple[str, Any]] = {}
+        field_rows: dict[str, list[Any]] = {}
+        hint_labels: dict[str, Any] = {}
+        mapped_ids: dict[str, list[str]] = {}
         status_label_ref: dict[str, Any] = {"widget": None}
         try:
             from gi.repository import Gdk, GLib  # type: ignore
@@ -197,16 +260,19 @@ def open_settings_gtk(
             Gdk = None
             GLib = None
 
-        def _create_tab(name: str) -> Gtk.Box:
+        def _create_tab(name: str) -> Any:
             page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
             page.set_border_width(10)
             scroll = Gtk.ScrolledWindow()
             scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+            scroll.set_propagate_natural_height(False)
+            scroll.set_min_content_height(0)
+            scroll.set_vexpand(False)
             scroll.add(page)
             notebook.append_page(scroll, Gtk.Label(label=name))
             return page
 
-        def _create_section(parent: Gtk.Box, title: str) -> Gtk.Grid:
+        def _create_section(parent: Any, title: str) -> Any:
             frame = Gtk.Frame(label=title)
             frame.set_margin_top(4)
             frame.set_margin_bottom(6)
@@ -218,8 +284,22 @@ def open_settings_gtk(
             parent.pack_start(frame, False, False, 0)
             return grid
 
+        def _create_collapsible_section(parent: Any, title: str) -> Any:
+            """Section hidden behind a collapsed expander — for rarely-touched tuning fields."""
+            expander = Gtk.Expander(label=title)
+            expander.set_expanded(False)
+            expander.set_margin_top(4)
+            expander.set_margin_bottom(6)
+            grid = Gtk.Grid()
+            grid.set_border_width(10)
+            grid.set_column_spacing(12)
+            grid.set_row_spacing(6)
+            expander.add(grid)
+            parent.pack_start(expander, False, False, 0)
+            return grid
+
         def _add_field(
-            grid: Gtk.Grid,
+            grid: Any,
             row: int,
             *,
             key: str,
@@ -227,10 +307,12 @@ def open_settings_gtk(
             value: object,
             kind: str = "entry",
             options: tuple[str, ...] = (),
+            choices: tuple[tuple[str, str], ...] = (),
             hint: str = "",
             default_bool: bool = False,
             secret: bool = False,
         ) -> int:
+            tracked: list[Any] = []
             if kind == "bool":
                 row_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
                 row_box.set_hexpand(True)
@@ -244,8 +326,11 @@ def open_settings_gtk(
                 if hint:
                     hint_label = Gtk.Label(label=hint)
                     hint_label.set_xalign(0.0)
+                    hint_label.set_line_wrap(True)
+                    hint_label.set_max_width_chars(48)
                     hint_label.set_opacity(0.75)
                     left_box.pack_start(hint_label, False, False, 0)
+                    hint_labels[key] = hint_label
                 row_box.pack_start(left_box, True, True, 0)
 
                 widget = Gtk.Switch()
@@ -273,14 +358,33 @@ def open_settings_gtk(
 
                 grid.attach(row_box, 0, row, 2, 1)
                 entries[key] = ("bool", widget)
+                field_rows[key] = [row_box]
                 return row + 1
 
             label_widget = Gtk.Label(label=label)
             label_widget.set_xalign(0.0)
             label_widget.set_yalign(0.0)
             grid.attach(label_widget, 0, row, 1, 1)
+            tracked.append(label_widget)
             next_row = row + 1
-            if kind == "combo":
+            if kind == "mapped":
+                ids = [item_id for item_id, _item_label in choices]
+                labels = [item_label for _item_id, item_label in choices]
+                selected = str(value)
+                if selected and selected not in ids:
+                    ids.append(selected)
+                    labels.append(selected)
+                widget = Gtk.ComboBoxText()
+                widget.set_hexpand(True)
+                for item_label in labels:
+                    widget.append_text(item_label)
+                if ids:
+                    widget.set_active(ids.index(selected) if selected in ids else 0)
+                grid.attach(widget, 1, row, 1, 1)
+                entries[key] = ("mapped", widget)
+                mapped_ids[key] = ids
+                tracked.append(widget)
+            elif kind == "combo":
                 widget = Gtk.ComboBoxText()
                 selected = str(value)
                 options_list = list(options)
@@ -296,6 +400,21 @@ def open_settings_gtk(
                     widget.set_active(active_idx)
                 grid.attach(widget, 1, row, 1, 1)
                 entries[key] = ("combo", widget)
+                tracked.append(widget)
+            elif kind == "text":
+                widget = Gtk.TextView()
+                widget.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
+                widget.get_buffer().set_text(str(value))
+                widget.set_hexpand(True)
+                scroll = Gtk.ScrolledWindow()
+                scroll.set_hexpand(True)
+                scroll.set_min_content_height(72)
+                scroll.set_shadow_type(Gtk.ShadowType.IN)
+                scroll.add(widget)
+                grid.attach(scroll, 1, row, 1, 1)
+                entries[key] = ("text", widget)
+                tracked.append(scroll)
+                tracked.append(widget)
             elif kind == "file":
                 row_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
                 row_box.set_hexpand(True)
@@ -314,6 +433,7 @@ def open_settings_gtk(
                 row_box.pack_start(chooser, False, False, 0)
                 grid.attach(row_box, 1, row, 1, 1)
                 entries[key] = ("entry", entry)
+                tracked.append(row_box)
             else:
                 widget = Gtk.Entry()
                 widget.set_text(str(value))
@@ -322,7 +442,7 @@ def open_settings_gtk(
                     widget.set_visibility(False)
                     widget.set_invisible_char("●")
                 if key in HOTKEY_CAPTURE_FIELDS and Gdk is not None:
-                    widget.set_placeholder_text("点击后按组合键自动识别")
+                    widget.set_placeholder_text("点击后按下要使用的键")
 
                     def _on_hotkey_press(entry: Any, event: object, field_label: str = label) -> bool:
                         keyval = getattr(event, "keyval", None)
@@ -347,12 +467,18 @@ def open_settings_gtk(
                     widget.connect("key-press-event", _on_hotkey_press)
                 grid.attach(widget, 1, row, 1, 1)
                 entries[key] = ("entry", widget)
+                tracked.append(widget)
             if hint:
                 hint_label = Gtk.Label(label=hint)
                 hint_label.set_xalign(0.0)
+                hint_label.set_line_wrap(True)
+                hint_label.set_max_width_chars(52)
                 hint_label.set_opacity(0.75)
                 grid.attach(hint_label, 1, next_row, 1, 1)
+                hint_labels[key] = hint_label
+                tracked.append(hint_label)
                 next_row += 1
+            field_rows[key] = tracked
             return next_row
 
         preset_manager = PresetManager()
@@ -370,55 +496,136 @@ def open_settings_gtk(
                 names.append(stem)
             return names
 
-        tab_basic = _create_tab("基础")
-        tab_asr = _create_tab("ASR")
-        tab_refine = _create_tab("文本精炼")
-        tab_presets = _create_tab("预设管理")
-        tab_remote = _create_tab("远程粘贴")
-        tab_wake = _create_tab("语音唤醒")
-        tab_advanced = _create_tab("高级")
+        intro = Gtk.Label(
+            label="日常听写。适合中文和英文，在浏览器、微信和编辑器里按住说话即可。"
+        )
+        intro.set_xalign(0.0)
+        intro.set_line_wrap(True)
+        intro.set_max_width_chars(52)
+        daily_page.pack_start(intro, False, False, 0)
 
-        sec_hotkey = _create_section(tab_basic, "热键与触发")
+        recommend_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        recommend_button = Gtk.Button(label="使用本机推荐配置")
+        recommend_button.set_halign(Gtk.Align.START)
+        recommend_hint = Gtk.Label(label="按需填写本机常用设置，保存后生效。常用词和口令会保留。")
+        recommend_hint.set_xalign(0.0)
+        recommend_hint.set_line_wrap(True)
+        recommend_hint.set_max_width_chars(52)
+        recommend_hint.set_lines(2)
+        recommend_hint.set_opacity(0.75)
+        recommend_box.pack_start(recommend_button, False, False, 0)
+        recommend_box.pack_start(recommend_hint, False, False, 0)
+        daily_page.pack_start(recommend_box, False, False, 0)
+
+        sec_daily_talk = _create_section(daily_page, "说话方式")
         row = 0
         row = _add_field(
-            sec_hotkey,
+            sec_daily_talk,
+            row,
+            key="trigger_mode",
+            label="怎么开始",
+            value=current.get("trigger_mode", "ptt"),
+            kind="mapped",
+            choices=TRIGGER_MODE_CHOICES,
+            hint="按住说话：按住键说话，松开结束。点一下开关：按一次开始，再按一次结束。",
+        )
+        row = _add_field(
+            sec_daily_talk,
             row,
             key="hotkey",
-            label="触发热键",
+            label="按住说话的键",
             value=current.get("hotkey", "<ctrl_r>"),
-            hint="点击输入框后直接按组合键自动识别（Delete/Backspace 可清空）",
+            hint="推荐右 Ctrl。点进输入框后直接按下要使用的键，Delete 可清空。",
         )
+        _add_field(
+            sec_daily_talk,
+            row,
+            key="toggle_hotkey",
+            label="开关用的键",
+            value=current.get("toggle_hotkey", "<alt_r>"),
+            hint="推荐右 Alt。点一下开关时用这一键。",
+        )
+
+        sec_daily_asr = _create_section(daily_page, "识别和上屏")
+        row = 0
+        row = _add_field(
+            sec_daily_asr,
+            row,
+            key="qwen_language",
+            label="语言",
+            value=current.get("qwen_language", "auto"),
+            kind="mapped",
+            choices=LANGUAGE_CHOICES,
+            hint="自动会在中文和英文之间判断，适合浏览器、微信和编辑器。",
+        )
+        row = _add_field(
+            sec_daily_asr,
+            row,
+            key="input_device",
+            label="麦克风",
+            value=current.get("input_device", "default"),
+            hint="留空或 default 使用系统当前麦克风。要固定某一只时，填写系统里的设备名。",
+        )
+        row = _add_field(
+            sec_daily_asr,
+            row,
+            key="enable_streaming_commit",
+            label="边说边出字",
+            value=current.get("enable_streaming_commit", False),
+            kind="bool",
+            default_bool=False,
+            hint="开：边说边在光标处显示。关：松手后一次性贴上。部分应用只会在松手后贴上。",
+        )
+        row = _add_field(
+            sec_daily_asr,
+            row,
+            key="auto_hard_enter",
+            label="说完自动回车",
+            value=current.get("auto_hard_enter", False),
+            kind="bool",
+            default_bool=False,
+            hint="默认关闭。打开后，文字上屏结束会再按一次回车。聊天窗口里容易误发。",
+        )
+        _add_field(
+            sec_daily_asr,
+            row,
+            key="asr_context",
+            label="常用词",
+            value=current.get("asr_context", ""),
+            hint="人名、产品名、命令都可以，中英文都行，用逗号分隔。推荐配置不会清掉这里。",
+        )
+
+        tab_basic = _create_tab("录音细节")
+        tab_asr = _create_tab("识别服务")
+        tab_refine = _create_tab("文字润色")
+        tab_presets = _create_tab("润色风格")
+        tab_remote = _create_tab("远程粘贴")
+        tab_wake = _create_tab("语音唤醒")
+        tab_advanced = _create_tab("上屏和诊断")
+
+        sec_hotkey = _create_section(tab_basic, "其它热键")
+        row = 0
         row = _add_field(
             sec_hotkey,
             row,
             key="stop_hotkey",
-            label="停止热键",
+            label="停止键",
             value=current.get("stop_hotkey", ""),
-            hint="留空表示使用默认停止逻辑",
+            hint="留空则沿用原来的停止方式。推荐配置会把它设成右 Ctrl。",
         )
-        row = _add_field(sec_hotkey, row, key="toggle_hotkey", label="切换热键", value=current.get("toggle_hotkey", ""))
-        row = _add_field(
-            sec_hotkey,
-            row,
-            key="trigger_mode",
-            label="触发模式",
-            value=current.get("trigger_mode", "ptt"),
-            kind="combo",
-            options=("ptt", "toggle", "oneshot"),
-        )
-        _add_field(sec_hotkey, row, key="cooldown_ms", label="冷却时间 (ms)", value=current.get("cooldown_ms", 300))
+        _add_field(sec_hotkey, row, key="cooldown_ms", label="两次触发间隔 (毫秒)", value=current.get("cooldown_ms", 300))
 
         sec_record = _create_section(tab_basic, "录音")
         row = 0
-        row = _add_field(sec_record, row, key="duration", label="录音时长 (s)", value=current.get("duration", 4.0))
+        row = _add_field(sec_record, row, key="duration", label="单次最长录音 (秒)", value=current.get("duration", 4.0))
         row = _add_field(
             sec_record,
             row,
             key="record_backend",
-            label="录音后端",
+            label="录音方式",
             value=current_record_backend,
-            kind="combo",
-            options=("auto", "ffmpeg-pulse", "arecord"),
+            kind="mapped",
+            choices=RECORD_BACKEND_CHOICES,
         )
         row = _add_field(
             sec_record,
@@ -426,77 +633,135 @@ def open_settings_gtk(
             key="record_format",
             label="录音格式",
             value=current_record_format,
-            kind="combo",
-            options=("ogg", "wav"),
+            kind="mapped",
+            choices=RECORD_FORMAT_CHOICES,
+            hint="本机 Confucius 推荐 WAV、16000 Hz、单声道。",
         )
         row = _add_field(sec_record, row, key="sample_rate", label="采样率", value=current.get("sample_rate", 16000))
-        row = _add_field(sec_record, row, key="channels", label="声道数", value=current.get("channels", 1))
-        _add_field(sec_record, row, key="input_device", label="输入设备", value=current.get("input_device", "default"))
+        _add_field(sec_record, row, key="channels", label="声道数", value=current.get("channels", 1))
 
-        sec_asr = _create_section(tab_asr, "识别配置")
+        sec_asr = _create_section(tab_asr, "识别服务")
         row = 0
         row = _add_field(
             sec_asr,
             row,
             key="asr_provider",
-            label="ASR Provider",
+            label="识别方式",
             value=current.get("asr_provider", "qwen-asr"),
-            kind="combo",
-            options=("qwen-asr", "http-cloud"),
+            kind="mapped",
+            choices=PROVIDER_CHOICES,
+            hint="换方式后，下面只显示这个方式真正会用到的项目。",
         )
         row = _add_field(
             sec_asr,
             row,
             key="qwen_model",
-            label="ASR 模型（路径或模型ID）",
+            label="模型",
             value=current.get("qwen_model", ""),
-            hint="qwen-asr: 本地模型路径；http-cloud: 远端服务的 model 名称（如 Qwen/Qwen3-ASR-0.6B）",
+            hint="本机 Qwen 填模型位置；网络识别填服务里的模型名。",
         )
         row = _add_field(
             sec_asr,
             row,
-            key="qwen_language",
-            label="Qwen 语言",
-            value=current.get("qwen_language", "Chinese"),
-            kind="combo",
-            options=("Chinese", "English", "auto"),
+            key="qwen_max_new_tokens",
+            label="最长输出",
+            value=current.get("qwen_max_new_tokens", 8192),
+            hint="只对本机 Qwen 有效。本机 Confucius 和网络识别会忽略它，但保存时仍保留原值。",
         )
-        row = _add_field(sec_asr, row, key="qwen_max_new_tokens", label="Qwen Max Tokens", value=current.get("qwen_max_new_tokens", 8192))
         row = _add_field(
             sec_asr,
             row,
             key="asr_endpoint",
-            label="HTTP ASR Endpoint",
+            label="识别接口",
             value=current.get("asr_endpoint", "http://127.0.0.1:8000/v1/audio/transcriptions"),
-            hint="仅 asr_provider=http-cloud 时生效。vLLM/OpenAI 兼容接口示例：/v1/audio/transcriptions",
+            hint="只对网络识别有效。地址以 http:// 或 https:// 开头。",
         )
         row = _add_field(
             sec_asr,
             row,
             key="asr_realtime_endpoint",
-            label="HTTP ASR Realtime",
+            label="实时地址",
             value=current.get("asr_realtime_endpoint", ""),
-            hint="仅 asr_provider=http-cloud 时生效。实时增量 ASR 示例：http://192.168.5.111:40002",
+            hint="流式 Confucius 用 ws:// 或 wss://，自定义路径会保留。网络识别用 http(s) 地址。",
         )
         row = _add_field(
             sec_asr,
             row,
             key="asr_api_key",
-            label="HTTP ASR API Key",
+            label="访问口令",
             value=current.get("asr_api_key", ""),
-            hint="仅 asr_provider=http-cloud 时生效（留空表示不带鉴权头）",
+            hint="本机 Confucius 和网络识别都会用到。这里不会生成口令。",
             secret=True,
         )
-        row = _add_field(sec_asr, row, key="asr_timeout_s", label="HTTP ASR Timeout (s)", value=current.get("asr_timeout_s", 30.0))
+        row = _add_field(
+            sec_asr,
+            row,
+            key="asr_timeout_s",
+            label="等待上限 (秒)",
+            value=current.get("asr_timeout_s", 30.0),
+            hint="流式 Confucius 等待识别结束，以及网络识别的整段请求，都会用到这个上限。",
+        )
         row = _add_field(
             sec_asr,
             row,
             key="asr_context_preset",
-            label="ASR Context 预设",
+            label="常用词预设",
             value=current.get("asr_context_preset", ""),
-            hint="留空或填写: default/formal/meeting/technical/simple",
+            hint="留空，或填 default、formal、meeting、technical、simple。日常常用词在上面一页。",
         )
-        row = _add_field(sec_asr, row, key="asr_context", label="ASR Context 自定义", value=current.get("asr_context", ""))
+        row = _add_field(
+            sec_asr,
+            row,
+            key="enable_semif_correction",
+            label="上下文纠词",
+            value=current.get("enable_semif_correction", False),
+            kind="bool",
+            default_bool=False,
+            hint="默认关闭。只在已声明的别名上问一次语义角色，失败、超时或拿不准都保留原文。",
+        )
+        row = _add_field(
+            sec_asr,
+            row,
+            key="correction_provider",
+            label="纠词来源",
+            value=current.get("correction_provider", "semif"),
+            kind="mapped",
+            choices=CORRECTION_PROVIDER_CHOICES,
+            hint="默认使用本机或内网部署的 SemIf。官方 Jev 复用 jev 的登录，密钥由 jev 管理；选择官方 Jev 无需填写地址。",
+        )
+        row = _add_field(
+            sec_asr,
+            row,
+            key="semif_endpoint",
+            label="SemIf 服务地址",
+            value=current.get("semif_endpoint", ""),
+            hint="选择本地 SemIf 时使用；切换到官方 Jev 后仍保留此地址。",
+        )
+        row = _add_field(
+            sec_asr,
+            row,
+            key="semif_timeout_s",
+            label="SemIf 等待 (秒)",
+            value=current.get("semif_timeout_s", DEFAULT_SEMIF_TIMEOUT_S),
+            hint="默认 0.12 秒，必须大于 0 且不超过 0.35 秒。",
+        )
+        row = _add_field(
+            sec_asr,
+            row,
+            key="jev_timeout_s",
+            label="Jev 等待 (秒)",
+            value=current.get("jev_timeout_s", DEFAULT_JEV_TIMEOUT_S),
+            hint="默认 1.5 秒，不超过 2 秒。这是整句判断的总时间，预览不会等它。",
+        )
+        row = _add_field(
+            sec_asr,
+            row,
+            key="contextual_aliases",
+            label="语境别名",
+            value=format_contextual_aliases(current.get("contextual_aliases", [])),
+            kind="text",
+            hint="每行一条，如 jeff→jev::软件工具。也可以用逗号分隔。只有整句语境明确时才替换，拿不准就保留原文。",
+        )
         _add_field(
             sec_asr,
             row,
@@ -505,6 +770,7 @@ def open_settings_gtk(
             value=current.get("device", "cuda"),
             kind="combo",
             options=("cuda", "cpu", "auto"),
+            hint="只对本机 Qwen 有效。换成其它识别方式后，这里会藏起来，原值仍会保存。",
         )
 
         sec_refine = _create_section(tab_refine, "文本精炼")
@@ -527,13 +793,13 @@ def open_settings_gtk(
             value=current.get("enable_text_refine", False),
             kind="bool",
             default_bool=False,
-            hint="关闭后直接输出识别结果，等同于托盘里的快速模式。",
+            hint="关闭后直接使用识别结果。关掉时，下面的润色项目会变灰，已经填写的内容仍会保存。",
         )
         row = _add_field(
             sec_refine,
             row,
             key="refine_provider",
-            label="精炼 Provider",
+            label="润色方式",
             value=current_refine_provider,
             kind="combo",
             options=("local", "cloud", "llamacpp"),
@@ -547,7 +813,7 @@ def open_settings_gtk(
         current_preset_value_label = Gtk.Label(label=_get_current_refine_preset_name())
         current_preset_value_label.set_xalign(0.0)
         current_preset_box.pack_start(current_preset_value_label, False, False, 0)
-        current_preset_hint = Gtk.Label(label="切换请到「预设管理」页，或直接使用托盘菜单。")
+        current_preset_hint = Gtk.Label(label="换风格请到「润色风格」页，或用托盘里的「更多」。润色关闭时不能切换。")
         current_preset_hint.set_xalign(0.0)
         current_preset_hint.set_opacity(0.75)
         current_preset_box.pack_start(current_preset_hint, False, False, 0)
@@ -637,6 +903,7 @@ def open_settings_gtk(
         model_vbox.pack_start(refresh_status, False, False, 0)
         sec_refine.attach(model_vbox, 1, row, 1, 1)
         entries["refine_api_model"] = ("combo", model_combo)
+        field_rows["refine_api_model"] = [model_label, model_vbox]
         row += 1
 
         # Local/llamacpp provider fields
@@ -656,24 +923,6 @@ def open_settings_gtk(
             value=current.get("refine_device", "cuda"),
             kind="combo",
             options=("cuda", "cpu", "auto"),
-        )
-        row = _add_field(
-            sec_refine,
-            row,
-            key="capture_refine_samples",
-            label="记录精炼样本",
-            value=current.get("capture_refine_samples", False),
-            kind="bool",
-            default_bool=False,
-            hint="每次口述保存一轮 ASR 和二轮精炼结果，便于后续对比调参。",
-        )
-        row = _add_field(
-            sec_refine,
-            row,
-            key="capture_refine_samples_path",
-            label="样本文件路径",
-            value=current.get("capture_refine_samples_path", "~/.local/share/recordian/refine-samples.jsonl"),
-            hint="JSONL 文件；每行一条样本记录。",
         )
         row = _add_field(sec_refine, row, key="refine_n_gpu_layers", label="llama.cpp GPU 层数", value=current.get("refine_n_gpu_layers", -1))
         row = _add_field(sec_refine, row, key="refine_max_tokens", label="精炼 Max Tokens", value=current.get("refine_max_tokens", 512))
@@ -842,31 +1091,11 @@ def open_settings_gtk(
             sec_advanced,
             row,
             key="commit_backend",
-            label="上屏后端",
+            label="上屏方式",
             value=current_commit_backend,
             kind="combo",
-            options=("auto", "wtype", "xdotool", "xdotool-clipboard", "stdout", "none"),
-            hint="X11 + Electron 建议 xdotool-clipboard",
-        )
-        row = _add_field(
-            sec_advanced,
-            row,
-            key="auto_hard_enter",
-            label="自动硬回车",
-            value=current.get("auto_hard_enter", False),
-            kind="bool",
-            default_bool=False,
-            hint="识别文本上屏后，额外发送一次 Enter 键",
-        )
-        row = _add_field(
-            sec_advanced,
-            row,
-            key="enable_streaming_commit",
-            label="流式上屏",
-            value=current.get("enable_streaming_commit", False),
-            kind="bool",
-            default_bool=False,
-            hint="关闭时保持当前一次性上屏；开启后按模型流式结果增量上屏。",
+            options=("auto", "fcitx", "wtype", "xdotool", "xdotool-clipboard", "stdout", "none"),
+            hint="自动会先用输入法通道，不行再粘贴。",
         )
         row = _add_field(
             sec_advanced,
@@ -885,6 +1114,24 @@ def open_settings_gtk(
             value=current.get("debug_diagnostics", False),
             kind="bool",
             default_bool=False,
+        )
+        row = _add_field(
+            sec_advanced,
+            row,
+            key="capture_refine_samples",
+            label="记录精炼样本",
+            value=current.get("capture_refine_samples", False),
+            kind="bool",
+            default_bool=False,
+            hint="每次口述保存一轮 ASR 和二轮精炼结果，便于后续对比调参。",
+        )
+        row = _add_field(
+            sec_advanced,
+            row,
+            key="capture_refine_samples_path",
+            label="样本文件路径",
+            value=current.get("capture_refine_samples_path", "~/.local/share/recordian/refine-samples.jsonl"),
+            hint="JSONL 文件；每行一条样本记录。",
         )
         _add_field(
             sec_advanced,
@@ -1064,6 +1311,7 @@ def open_settings_gtk(
         sound_on_box.pack_start(sound_on_chooser, False, False, 0)
         sec_wake_main.attach(sound_on_box, 1, row, 1, 1)
         entries["sound_on_path"] = ("entry", sound_on_entry)
+        field_rows["sound_on_path"] = [sound_on_label, sound_on_box]
         row += 1
 
         sound_off_label = Gtk.Label(label="结束音效路径")
@@ -1084,6 +1332,7 @@ def open_settings_gtk(
         sound_off_box.pack_start(sound_off_chooser, False, False, 0)
         sec_wake_main.attach(sound_off_box, 1, row, 1, 1)
         entries["sound_off_path"] = ("entry", sound_off_entry)
+        field_rows["sound_off_path"] = [sound_off_label, sound_off_box]
         row += 1
 
         wake_model_dir = Path(__file__).parent.parent.parent / "models" / "sherpa-onnx-kws-zipformer-wenetspeech-3.3M-2024-01-01"
@@ -1097,7 +1346,7 @@ def open_settings_gtk(
             "wake_semantic_timeout_ms",
         }
 
-        sec_wake_model = _create_section(tab_wake, "模型与阈值")
+        sec_wake_model = _create_collapsible_section(tab_wake, "模型与阈值（高级，默认无需修改）")
         row = 0
         row = _add_field(
             sec_wake_model,
@@ -1123,7 +1372,7 @@ def open_settings_gtk(
             value=current.get("wake_keyword_score", 1.5),
         )
 
-        sec_wake_advanced = _create_section(tab_wake, "高级调优")
+        sec_wake_advanced = _create_collapsible_section(tab_wake, "高级调优（仅在唤醒不稳定时调整）")
         row = 0
         row = _add_field(
             sec_wake_advanced,
@@ -1299,8 +1548,11 @@ def open_settings_gtk(
             hint="累计语音证据达到该时长，判定已开口",
         )
 
-        status_label = Gtk.Label(label="已载入当前配置。保存后会按设置类型立即生效、下次录音生效，或在必要时重启后端。")
+        status_label = Gtk.Label(label=SAVE_EFFECT_INTRO)
         status_label.set_xalign(0.0)
+        status_label.set_line_wrap(True)
+        status_label.set_max_width_chars(42)
+        status_label.set_lines(2)
         status_label.set_opacity(0.78)
         status_label_ref["widget"] = status_label
 
@@ -1467,9 +1719,18 @@ def open_settings_gtk(
             kind, widget = entries[key]
             if kind == "bool":
                 return bool(widget.get_active())
+            if kind == "mapped":
+                ids = mapped_ids.get(key, [])
+                index = widget.get_active()
+                if index < 0 or index >= len(ids):
+                    return ""
+                return ids[index]
             if kind == "combo":
                 text = widget.get_active_text()
                 return text if text is not None else ""
+            if kind == "text":
+                buffer = widget.get_buffer()
+                return buffer.get_text(buffer.get_start_iter(), buffer.get_end_iter(), True)
             return widget.get_text()
 
         def _set_entry_text(key: str, value: str) -> None:
@@ -1488,11 +1749,177 @@ def open_settings_gtk(
             if kind == "bool" and hasattr(widget, "set_active"):
                 widget.set_active(bool(value))
 
+        def _set_form_value(key: str, value: object) -> None:
+            target = entries.get(key)
+            if not target:
+                return
+            kind, widget = target
+            if kind == "bool":
+                widget.set_active(bool(value))
+                return
+            if kind == "entry":
+                widget.set_text(str(value))
+                return
+            if kind == "text":
+                widget.get_buffer().set_text(str(value))
+                return
+            if kind == "mapped":
+                token = str(value)
+                ids = mapped_ids.setdefault(key, [])
+                if token not in ids:
+                    ids.append(token)
+                    widget.append_text(token)
+                widget.set_active(ids.index(token))
+                return
+            if kind == "combo":
+                token = str(value)
+                model = widget.get_model()
+                for index, row_data in enumerate(model or []):
+                    if str(row_data[0]) == token:
+                        widget.set_active(index)
+                        return
+                widget.append_text(token)
+                refreshed = widget.get_model()
+                widget.set_active(len(list(refreshed)) - 1 if refreshed is not None else 0)
+
+        def _set_rows_visible(keys: tuple[str, ...], visible: bool) -> None:
+            for key in keys:
+                for widget in field_rows.get(key, []):
+                    widget.set_no_show_all(not visible)
+                    widget.set_visible(bool(visible))
+
+        def _set_rows_sensitive(keys: tuple[str, ...], sensitive: bool) -> None:
+            for key in keys:
+                for widget in field_rows.get(key, []):
+                    widget.set_sensitive(bool(sensitive))
+
+        refine_dependent = (
+            "refine_provider",
+            "refine_api_base",
+            "refine_api_key",
+            "refine_api_model",
+            "refine_model",
+            "refine_device",
+            "refine_n_gpu_layers",
+            "refine_max_tokens",
+            "enable_thinking",
+            "capture_refine_samples",
+            "capture_refine_samples_path",
+        )
+        wake_dependent = tuple(
+            key for key in entries
+            if key.startswith("wake_") and key != "enable_voice_wake"
+        )
+        remote_dependent = (
+            "remote_paste_host",
+            "remote_paste_port",
+            "remote_paste_timeout_s",
+            "remote_paste_mode",
+            "remote_paste_sync_wait_s",
+            "remote_paste_follow_deskflow_active_screen",
+            "deskflow_active_screen_path",
+            "deskflow_log_path",
+            "remote_paste_screen_name",
+        )
+        preset_editor_widgets = [
+            preset_combo,
+            btn_set_current,
+            preset_name_entry,
+            btn_create,
+            preset_text,
+            btn_save_preset,
+            btn_delete_preset,
+            btn_refresh_preset,
+        ]
+
+        def _sync_provider_visibility(*_args: object) -> None:
+            provider_id = str(_get_value("asr_provider")).strip()
+            _set_rows_visible(("qwen_model",), provider_id in {"qwen-asr", "http-cloud"})
+            _set_rows_visible(("qwen_max_new_tokens", "device"), provider_id == "qwen-asr")
+            _set_rows_visible(("asr_endpoint",), provider_id == "http-cloud")
+            _set_rows_visible(("asr_timeout_s",), provider_id in {"http-cloud", "confucius-asr"})
+            _set_rows_visible(
+                ("asr_realtime_endpoint", "asr_api_key"),
+                provider_id in {"http-cloud", "confucius-asr"},
+            )
+            hints = endpoint_hints_for_provider(provider_id)
+            for key, text in hints.items():
+                hint = hint_labels.get(key)
+                if hint is not None:
+                    hint.set_text(text)
+
+        def _sync_feature_sensitivity(*_args: object) -> None:
+            refine_on = bool(_get_value("enable_text_refine"))
+            _set_rows_sensitive(refine_dependent, refine_on)
+            for widget in preset_editor_widgets:
+                widget.set_sensitive(refine_on)
+            if refine_on:
+                _load_selected_preset()
+            _set_rows_sensitive(wake_dependent, bool(_get_value("enable_voice_wake")))
+            btn_record_owner_sample.set_sensitive(bool(_get_value("enable_voice_wake")))
+            _set_rows_sensitive(remote_dependent, bool(_get_value("enable_remote_paste")))
+            correction_on = bool(_get_value("enable_semif_correction"))
+            provider_id = normalize_correction_provider(_get_value("correction_provider"))
+            semif_selected = provider_id == "semif"
+            _set_rows_sensitive(
+                ("correction_provider", "contextual_aliases"),
+                correction_on,
+            )
+            _set_rows_visible(("semif_endpoint", "semif_timeout_s"), semif_selected)
+            _set_rows_visible(("jev_timeout_s",), not semif_selected)
+            _set_rows_sensitive(("semif_endpoint", "semif_timeout_s"), correction_on and semif_selected)
+            _set_rows_sensitive(("jev_timeout_s",), correction_on and not semif_selected)
+
+        def _reconcile_confucius_endpoint(*, announce: bool) -> None:
+            if str(_get_value("asr_provider")).strip() != "confucius-asr":
+                return
+            raw = str(_get_value("asr_realtime_endpoint")).strip()
+            migrated = migrate_confucius_realtime_endpoint(raw)
+            if migrated is not None and migrated != raw:
+                _set_entry_text("asr_realtime_endpoint", migrated)
+                if announce:
+                    _set_status(CONFUCIUS_STOCK_MIGRATION_NOTICE)
+                return
+            problem = confucius_endpoint_problem(raw)
+            if problem and announce:
+                _set_status(problem)
+
+        def _on_provider_changed(*_args: object) -> None:
+            _sync_provider_visibility()
+            _reconcile_confucius_endpoint(announce=True)
+
+        hidden_overrides: dict[str, object] = {}
+
+        def _apply_recommended(*_args: object) -> None:
+            values = recommended_profile_values()
+            provider_id = values.pop("asr_provider")
+            endpoint = values.pop("asr_realtime_endpoint")
+            hidden_overrides["enable_streaming_refine"] = values.pop("enable_streaming_refine", False)
+            for key, value in values.items():
+                _set_form_value(key, value)
+            _set_form_value("asr_realtime_endpoint", str(endpoint))
+            _set_form_value("asr_provider", provider_id)
+            _sync_provider_visibility()
+            _sync_feature_sensitivity()
+            _set_status(RECOMMENDED_PROFILE_NOTICE)
+
+        recommend_button.connect("clicked", _apply_recommended)
+        entries["asr_provider"][1].connect("changed", _on_provider_changed)
+        for master_key in (
+            "enable_text_refine",
+            "enable_voice_wake",
+            "enable_remote_paste",
+            "enable_semif_correction",
+        ):
+            entries[master_key][1].connect("notify::active", _sync_feature_sensitivity)
+        entries["correction_provider"][1].connect("changed", _sync_feature_sensitivity)
+
         btn_record_owner_sample.connect("clicked", lambda *_: app.open_speaker_enrollment_wizard())
 
         def _save(*, restart_backend: bool) -> None:
             latest_config: dict[str, object] = {}
             changed_keys: list[str] = []
+            migrated_endpoint = False
 
             def _parse_int_field(key: str, default: int) -> int:
                 raw = str(_get_value(key)).strip()
@@ -1509,6 +1936,22 @@ def open_settings_gtk(
                 return [item.strip() for item in raw.split(",") if item.strip()]
 
             try:
+                provider_id = str(_get_value("asr_provider")).strip()
+                realtime_endpoint = str(_get_value("asr_realtime_endpoint")).strip()
+                http_endpoint = str(_get_value("asr_endpoint")).strip()
+                if provider_id == "confucius-asr":
+                    migrated = migrate_confucius_realtime_endpoint(realtime_endpoint)
+                    if migrated is not None and migrated != realtime_endpoint:
+                        migrated_endpoint = True
+                        _set_entry_text("asr_realtime_endpoint", migrated)
+                    elif confucius_endpoint_problem(realtime_endpoint):
+                        status_label.set_text(confucius_endpoint_problem(realtime_endpoint) or "")
+                        return
+                elif provider_id == "http-cloud":
+                    problem = http_cloud_endpoint_problem(realtime_endpoint, http_endpoint)
+                    if problem:
+                        status_label.set_text(problem)
+                        return
                 latest_config = ConfigManager.load(config_path)
                 payload = {
                     "hotkey": str(_get_value("hotkey")).strip(),
@@ -1539,6 +1982,16 @@ def open_settings_gtk(
                     "asr_realtime_endpoint": str(_get_value("asr_realtime_endpoint")).strip(),
                     "asr_api_key": str(_get_value("asr_api_key")).strip(),
                     "asr_timeout_s": _parse_float_field("asr_timeout_s", float(current.get("asr_timeout_s", 30.0))),
+                    "enable_semif_correction": bool(_get_value("enable_semif_correction")),
+                    "correction_provider": normalize_correction_provider(_get_value("correction_provider")),
+                    "semif_endpoint": str(_get_value("semif_endpoint")).strip(),
+                    "semif_timeout_s": normalize_semif_timeout_s(
+                        _parse_float_field("semif_timeout_s", float(current.get("semif_timeout_s", DEFAULT_SEMIF_TIMEOUT_S)))
+                    ),
+                    "jev_timeout_s": normalize_jev_timeout_s(
+                        _parse_float_field("jev_timeout_s", float(current.get("jev_timeout_s", DEFAULT_JEV_TIMEOUT_S)))
+                    ),
+                    "contextual_aliases": normalize_contextual_aliases(str(_get_value("contextual_aliases"))),
                     "device": str(_get_value("device")).strip() or str(current.get("device", "cuda")),
                     "enable_text_refine": bool(_get_value("enable_text_refine")),
                     "refine_provider": str(_get_value("refine_provider")).strip(),
@@ -1679,7 +2132,11 @@ def open_settings_gtk(
                     "hub": latest_config.get("hub", "ms"),
                     "remote_code": latest_config.get("remote_code", ""),
                     "hotword": latest_config.get("hotword", []),
-                    "enable_streaming_refine": latest_config.get("enable_streaming_refine", False),
+                    "hotword_replacement": latest_config.get("hotword_replacement", []),
+                    "enable_streaming_refine": hidden_overrides.get(
+                        "enable_streaming_refine",
+                        latest_config.get("enable_streaming_refine", False),
+                    ),
                 }
                 payload = normalize_runtime_config(
                     payload,
@@ -1704,6 +2161,12 @@ def open_settings_gtk(
                 payload["wake_owner_threshold"] = min(0.99, max(0.0, cast(float, payload["wake_owner_threshold"])))
                 payload["wake_owner_window_s"] = max(0.6, cast(float, payload["wake_owner_window_s"]))
                 payload["wake_owner_silence_extend_s"] = max(0.0, cast(float, payload["wake_owner_silence_extend_s"]))
+                changed_keys = [key for key, value in payload.items() if latest_config.get(key) != value]
+                effect = combined_setting_effect(changed_keys) if changed_keys else SettingEffect.IMMEDIATE
+                busy = str(getattr(getattr(app, "state", None), "status", "")) in DICTATION_BUSY_STATUSES
+                if busy and restart_backend and effect is SettingEffect.RESTART_REQUIRED:
+                    status_label.set_text(BUSY_SAVE_MESSAGE)
+                    return
                 effect, restarted, changed_keys = save_config_changes(
                     config_path,
                     payload,
@@ -1718,29 +2181,43 @@ def open_settings_gtk(
                 return
 
             app._invalidate_config_cache()
-            changed_labels = ", ".join(KEY_LABEL_MAP.get(k, k) for k in changed_keys)
-            status_label.set_text(
-                f"已保存并重启后端（变更: {changed_labels}）" if restarted else f"{effect_status_message(effect, restarted=restarted)} ({config_path})"
-            )
+            changed_labels = "、".join(KEY_LABEL_MAP.get(k, k) for k in changed_keys)
+            if restarted:
+                message = "已保存并生效。听写服务已重新启动。"
+            elif effect is SettingEffect.IMMEDIATE:
+                message = "已保存并生效。这次修改马上起作用。"
+            elif effect is SettingEffect.NEXT_SESSION:
+                message = "已保存并生效。下次说话时使用新设置。"
+            else:
+                message = effect_status_message(effect, restarted=restarted)
+            if migrated_endpoint:
+                message = "已把旧的默认识别地址换成本机 Confucius 地址。" + message
+            if changed_labels:
+                message = f"{message} 变更：{changed_labels}。"
+            status_label.set_text(message)
             app._update_tray_menu()
 
-        btn_save = Gtk.Button(label="仅保存")
-        btn_save.connect("clicked", lambda *_: _save(restart_backend=False))
-        footer.pack_end(btn_save, False, False, 0)
-
-        btn_save_restart = Gtk.Button(label="保存并应用")
+        btn_save_restart = Gtk.Button(label="保存并生效")
+        btn_save_restart.get_style_context().add_class("suggested-action")
         btn_save_restart.connect("clicked", lambda *_: _save(restart_backend=True))
         footer.pack_end(btn_save_restart, False, False, 0)
 
-        btn_close = Gtk.Button(label="关闭")
-        btn_close.connect("clicked", lambda *_: win.destroy())
-        footer.pack_end(btn_close, False, False, 0)
+        btn_cancel = Gtk.Button(label="取消")
+        btn_cancel.connect("clicked", lambda *_: win.destroy())
+        footer.pack_end(btn_cancel, False, False, 0)
 
         def _on_destroy(*_args: object) -> None:
             app._gtk_settings_window = None
 
         win.connect("destroy", _on_destroy)
+        advanced.connect("notify::expanded", _sync_advanced_space)
+        _sync_provider_visibility()
+        _sync_feature_sensitivity()
+        win.set_default_size(780, 680)
+        win.resize(780, 680)
         win.show_all()
+        _sync_advanced_space()
+        _reconcile_confucius_endpoint(announce=True)
         win.present()
         return False
 

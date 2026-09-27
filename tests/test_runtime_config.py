@@ -42,6 +42,83 @@ def test_normalize_runtime_config_centralizes_compatibility_mappings() -> None:
     assert normalized["wake_owner_profile"] == str(Path("~/.config/recordian/profile.json").expanduser())
     assert normalized["wake_owner_sample"] == str(Path("~/owner.wav").expanduser())
     assert normalized["auto_lexicon_db"] == str(Path("~/lexicon.db").expanduser())
+    assert normalized["enable_streaming_commit"] is False
+    assert normalized["asr_realtime_endpoint"] == ""
+
+
+def test_normalize_runtime_config_defaults_streaming_off() -> None:
+    normalized = normalize_runtime_config(
+        {"enable_streaming_commit": True, "asr_realtime_endpoint": "  http://127.0.0.1:40002  "},
+        include_sound_defaults=False,
+        allow_auto_fallback_commit=True,
+    )
+    assert normalized["enable_streaming_commit"] is True
+    assert normalized["asr_realtime_endpoint"] == "http://127.0.0.1:40002"
+
+    defaults = normalize_runtime_config({}, include_sound_defaults=False)
+    assert defaults["enable_streaming_commit"] is False
+    assert defaults["asr_realtime_endpoint"] == ""
+
+
+def test_normalize_runtime_config_semif_contract() -> None:
+    defaults = normalize_runtime_config({}, include_sound_defaults=False)
+    assert defaults["enable_semif_correction"] is False
+    assert defaults["semif_endpoint"] == ""
+    assert defaults["semif_timeout_s"] == 0.12
+
+    enabled = normalize_runtime_config(
+        {
+            "enable_semif_correction": True,
+            "semif_endpoint": "  http://192.168.5.111:42032/v1/systemone  ",
+            "semif_timeout_s": 0.2,
+        },
+        include_sound_defaults=False,
+    )
+    assert enabled["enable_semif_correction"] is True
+    assert enabled["semif_endpoint"] == "http://192.168.5.111:42032/v1/systemone"
+    assert enabled["semif_timeout_s"] == 0.2
+
+
+def test_normalize_semif_timeout_bounds() -> None:
+    from recordian.runtime_config import normalize_semif_timeout_s
+
+    assert normalize_semif_timeout_s(0.5) == 0.35  # capped
+    assert normalize_semif_timeout_s(0.35) == 0.35  # exact max passes through
+    assert normalize_semif_timeout_s(0.0) == 0.12  # non-positive -> default
+    assert normalize_semif_timeout_s(-1.0) == 0.12
+    assert normalize_semif_timeout_s("not-a-number") == 0.12
+    assert normalize_semif_timeout_s(None) == 0.12
+    assert normalize_semif_timeout_s("0.2") == 0.2
+
+
+def test_normalize_semif_timeout_rejects_non_finite() -> None:
+    import math
+
+    from recordian.runtime_config import normalize_semif_timeout_s
+
+    # NaN slipped through before: NaN <= 0 is False and min(NaN, 0.35) is NaN,
+    # violating the finite-positive bounded contract.
+    for nasty in (float("nan"), float("inf"), float("-inf"), "nan", "inf", "-inf", math.nan, math.inf):
+        result = normalize_semif_timeout_s(nasty)
+        assert result == 0.12, f"{nasty!r} -> {result!r}"
+        assert math.isfinite(result) and result > 0.0
+
+
+def test_normalize_semif_timeout_malformed_fallback_uses_default() -> None:
+    from recordian.runtime_config import DEFAULT_SEMIF_TIMEOUT_S, normalize_semif_timeout_s
+
+    # A malformed explicit fallback must not leak NaN/non-positive either.
+    assert normalize_semif_timeout_s(0.2, fallback=float("nan")) == 0.2
+    assert normalize_semif_timeout_s("bad", fallback=float("nan")) == DEFAULT_SEMIF_TIMEOUT_S
+    assert normalize_semif_timeout_s("bad", fallback=-1.0) == DEFAULT_SEMIF_TIMEOUT_S
+
+
+def test_normalize_asr_provider_choices() -> None:
+    normalized = normalize_runtime_config({"asr_provider": "confucius-asr"}, include_sound_defaults=False)
+    assert normalized["asr_provider"] == "confucius-asr"
+
+    fallback = normalize_runtime_config({"asr_provider": "gpt-cloud"}, include_sound_defaults=False)
+    assert fallback["asr_provider"] == "qwen-asr"
 
 
 def test_normalize_runtime_config_fills_sound_defaults_from_legacy_beep() -> None:
@@ -121,3 +198,115 @@ def test_apply_namespace_runtime_normalization_preserves_backend_only_values() -
     assert args.wake_prefix == ["嘿"]
     assert args.wake_name == ["小二"]
     assert args.wake_tokens_type == "ppinyin"
+
+
+def test_correction_provider_defaults_and_separate_timeouts() -> None:
+    defaults = normalize_runtime_config({})
+    assert defaults["correction_provider"] == "semif"
+    assert defaults["enable_semif_correction"] is False
+    assert defaults["jev_timeout_s"] == 1.5
+    assert defaults["semif_timeout_s"] == 0.12
+    selected = normalize_runtime_config(
+        {
+            "correction_provider": "jev",
+            "jev_timeout_s": 9,
+            "semif_timeout_s": 9,
+            "enable_semif_correction": True,
+        }
+    )
+    assert selected["correction_provider"] == "jev"
+    assert selected["jev_timeout_s"] == 2.0
+    assert selected["semif_timeout_s"] == 0.35
+    assert normalize_runtime_config({"correction_provider": "nope"})["correction_provider"] == "semif"
+
+
+def test_parse_args_round_trip_keeps_jev_provider_and_aliases(tmp_path, monkeypatch) -> None:
+    import json
+
+    from recordian.arg_parser import _parse_args_with_config, build_parser
+
+    cfg = tmp_path / "hotkey.json"
+    cfg.write_text(
+        json.dumps(
+            {
+                "enable_semif_correction": True,
+                "correction_provider": "jev",
+                "semif_endpoint": "http://10.2.2.2:9/semif",
+                "semif_timeout_s": 0.3,
+                "jev_timeout_s": 1.4,
+                "contextual_aliases": [{"heard": "jeff", "word": "jev", "meaning": "软件工具"}],
+                "asr_context": "微信, Recordian",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "sys.argv",
+        ["recordian", "--config-path", str(cfg), "--contextual-alias", "cody→Kodi::播放器"],
+    )
+    args = _parse_args_with_config(build_parser())
+    assert args.correction_provider == "jev"
+    assert args.enable_semif_correction is True
+    assert args.semif_endpoint == "http://10.2.2.2:9/semif"
+    assert args.semif_timeout_s == 0.3
+    assert args.jev_timeout_s == 1.4
+    assert args.asr_context == "微信, Recordian"
+    assert {"heard": "jeff", "word": "jev", "meaning": "软件工具"} in args.contextual_aliases
+    assert {"heard": "cody", "word": "Kodi", "meaning": "播放器"} in args.contextual_aliases
+
+    legacy = tmp_path / "legacy.json"
+    legacy.write_text(json.dumps({"enable_semif_correction": False, "asr_context": "日常"}), encoding="utf-8")
+    monkeypatch.setattr("sys.argv", ["recordian", "--config-path", str(legacy)])
+    old = _parse_args_with_config(build_parser())
+    assert old.correction_provider == "semif"
+    assert old.enable_semif_correction is False
+    assert old.contextual_aliases == []
+    assert old.jev_timeout_s == 1.5
+    assert old.asr_context == "日常"
+
+
+def test_normalize_contextual_aliases_default_empty() -> None:
+    normalized = normalize_runtime_config({})
+    assert normalized["contextual_aliases"] == []
+
+
+def test_normalize_contextual_aliases_accepts_dicts_and_strings() -> None:
+    normalized = normalize_runtime_config(
+        {
+            "contextual_aliases": [
+                {"heard": "jeff", "word": "jev", "meaning": "软件工具"},
+                "kodi→Cody::人名",
+                {"heard": "", "word": "x", "meaning": "工具"},
+                {"heard": "same", "word": "same", "meaning": "工具"},
+                {"heard": "jeff", "word": "jev", "meaning": "软件工具"},
+                "no-meaning-string",
+            ]
+        }
+    )
+    assert normalized["contextual_aliases"] == [
+        {"heard": "jeff", "word": "jev", "meaning": "软件工具"},
+        {"heard": "kodi", "word": "Cody", "meaning": "人名"},
+    ]
+
+
+def test_normalize_contextual_aliases_rejects_non_list() -> None:
+    normalized = normalize_runtime_config({"contextual_aliases": 42})
+    assert normalized["contextual_aliases"] == []
+
+
+def test_format_contextual_aliases_round_trip() -> None:
+    aliases = [
+        {"heard": "jeff", "word": "jev", "meaning": "软件工具"},
+        {"heard": "cody", "word": "Kodi", "meaning": "播放器软件"},
+    ]
+    text = runtime_config.format_contextual_aliases(aliases)
+    assert text == "jeff→jev::软件工具\ncody→Kodi::播放器软件"
+    assert runtime_config.normalize_contextual_aliases(text) == aliases
+
+
+def test_normalize_contextual_aliases_accepts_cjk_separators() -> None:
+    text = "jeff→jev::软件工具，cody->Kodi::播放器软件；无效行"
+    assert runtime_config.normalize_contextual_aliases(text) == [
+        {"heard": "jeff", "word": "jev", "meaning": "软件工具"},
+        {"heard": "cody", "word": "Kodi", "meaning": "播放器软件"},
+    ]

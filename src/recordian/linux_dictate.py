@@ -5,17 +5,19 @@ import atexit
 import json
 import logging
 import math
-import queue
+import os
 import signal
 import subprocess
 import threading
 import time
+from collections import deque
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from shutil import which
 from tempfile import TemporaryDirectory
 from typing import Any, BinaryIO, cast
 
+from .duration_guard import MONITOR_BACKLOG_S
 from .linux_commit import resolve_committer, send_hard_enter
 from .providers import ASRProvider, HttpCloudProvider, QwenASRProvider
 from .remote_paste.client import add_remote_paste_args, resolve_remote_paste_routing, send_remote_paste_from_args
@@ -25,6 +27,36 @@ logger = logging.getLogger(__name__)
 
 # 全局进程注册表
 _ACTIVE_PROCESSES: list[subprocess.Popen[Any]] = []
+
+#: 录音 ffmpeg 的 stderr 落盘位置；录音失败（设备忙/被切走）时靠它定位原因。
+RECORD_STDERR_LOG_PATH = Path.home() / ".local" / "share" / "recordian" / "record-ffmpeg.log"
+_record_stderr_log: BinaryIO | None = None
+
+
+def _record_stderr_sink() -> BinaryIO | None:
+    """懒加载一个进程级共享的 ffmpeg stderr 日志文件（追加写）。"""
+    global _record_stderr_log  # noqa: PLW0603
+    if _record_stderr_log is not None:
+        return _record_stderr_log
+    try:
+        path = Path(os.environ.get("RECORDIAN_RECORD_LOG", str(RECORD_STDERR_LOG_PATH))).expanduser()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        _record_stderr_log = open(path, "ab", buffering=0)  # noqa: SIM115
+        atexit.register(_close_record_stderr_log)
+    except OSError:
+        return None
+    return _record_stderr_log
+
+
+def _close_record_stderr_log() -> None:
+    global _record_stderr_log  # noqa: PLW0603
+    sink, _record_stderr_log = _record_stderr_log, None
+    if sink is None:
+        return
+    try:
+        sink.close()
+    except OSError:
+        pass
 
 
 def _cleanup_processes() -> None:
@@ -68,91 +100,147 @@ class RecordProcessHandle:
     monitor_hub: Any | None = None
 
 
-_MONITOR_EOF = object()
+class MonitorOverflowError(RuntimeError):
+    """One reader fell behind the capture pump.
+
+    The pump does not block and does not drop bytes quietly: this reader's
+    next drained read raises, and further chunks are not queued for it.
+    """
+
+
+class _ReaderSlot:
+    def __init__(self, max_bytes: int) -> None:
+        self.max_bytes = max(1, int(max_bytes))
+        self.cv = threading.Condition()
+        self.chunks: deque[bytes] = deque()
+        self.buffered = 0
+        self.eof = False
+        self.overflow = False
+        self.closed = False
 
 
 class _MonitorReader:
-    def __init__(self, owner: _MonitorFanout, q: queue.Queue[object]) -> None:
+    def __init__(self, owner: _MonitorFanout, slot: _ReaderSlot) -> None:
         self._owner = owner
-        self._queue = q
+        self._slot = slot
         self._buffer = bytearray()
-        self._eof = False
         self._closed = False
 
     def read(self, size: int = -1) -> bytes:
-        if self._closed:
-            return b""
         if size == 0:
             return b""
         want = -1 if size is None else int(size)
-        while not self._eof and (want < 0 or len(self._buffer) < want):
-            item = self._queue.get()
-            if item is _MONITOR_EOF:
-                self._eof = True
-                break
-            if isinstance(item, bytes) and item:
-                self._buffer.extend(item)
-        if want < 0:
+        slot = self._slot
+        with slot.cv:
+            while True:
+                while slot.chunks and (want < 0 or len(self._buffer) < want):
+                    chunk = slot.chunks.popleft()
+                    slot.buffered -= len(chunk)
+                    self._buffer.extend(chunk)
+                if want >= 0 and len(self._buffer) >= want:
+                    break
+                if slot.overflow and not self._buffer:
+                    raise MonitorOverflowError(
+                        f"monitor reader backlog exceeded ({slot.max_bytes} bytes)"
+                    )
+                if slot.eof or slot.closed or self._closed:
+                    break
+                if slot.overflow:
+                    break
+                slot.cv.wait()
+        if want < 0 or want > len(self._buffer):
             out = bytes(self._buffer)
             self._buffer.clear()
-            return out
-        if want <= 0:
-            return b""
-        out = bytes(self._buffer[:want])
-        del self._buffer[:want]
+        else:
+            out = bytes(self._buffer[:want])
+            del self._buffer[:want]
+        if not out and not self._buffer:
+            with slot.cv:
+                if slot.overflow:
+                    raise MonitorOverflowError(
+                        f"monitor reader backlog exceeded ({slot.max_bytes} bytes)"
+                    )
         return out
 
     def close(self) -> None:
         if self._closed:
             return
         self._closed = True
-        self._owner.remove_reader(self._queue)
+        slot = self._slot
+        with slot.cv:
+            slot.closed = True
+            slot.cv.notify_all()
+        self._owner.remove_reader(slot)
         self._buffer.clear()
 
 
 class _MonitorFanout:
-    def __init__(self, source: BinaryIO, *, chunk_size: int = 4096) -> None:
+    def __init__(
+        self,
+        source: BinaryIO,
+        *,
+        chunk_size: int = 4096,
+        max_backlog_bytes: int | None = None,
+    ) -> None:
         self._source = source
         self._chunk_size = max(1, int(chunk_size))
+        # Default is 8 s of 16 kHz mono f32. Callers with a known rate pass
+        # the real size; the pump still never blocks on a slow reader.
+        if max_backlog_bytes is None:
+            max_backlog_bytes = int(MONITOR_BACKLOG_S * 16000 * 4)
+        self._max_bytes = max(self._chunk_size, int(max_backlog_bytes))
         self._lock = threading.Lock()
-        self._queues: list[queue.Queue[object]] = []
+        self._slots: list[_ReaderSlot] = []
         self._closed = False
         self._thread = threading.Thread(target=self._run, name="recordian-monitor-fanout", daemon=True)
         self._thread.start()
 
     def open_reader(self) -> _MonitorReader:
-        q: queue.Queue[object] = queue.Queue()
+        slot = _ReaderSlot(self._max_bytes)
         with self._lock:
             if self._closed:
-                q.put(_MONITOR_EOF)
+                slot.eof = True
             else:
-                self._queues.append(q)
-        return _MonitorReader(self, q)
+                self._slots.append(slot)
+        return _MonitorReader(self, slot)
 
-    def remove_reader(self, q: queue.Queue[object]) -> None:
+    def remove_reader(self, slot: _ReaderSlot) -> None:
         with self._lock:
-            if q in self._queues:
-                self._queues.remove(q)
+            if slot in self._slots:
+                self._slots.remove(slot)
 
     def close(self) -> None:
         with self._lock:
             if self._closed:
                 return
             self._closed = True
-            queues = list(self._queues)
-            self._queues.clear()
+            slots = list(self._slots)
+            self._slots.clear()
         try:
             self._source.close()
         except Exception:
             pass
-        for q in queues:
-            q.put(_MONITOR_EOF)
+        for slot in slots:
+            with slot.cv:
+                slot.eof = True
+                slot.cv.notify_all()
 
-    def _broadcast(self, payload: object) -> None:
+    def _broadcast(self, payload: bytes) -> None:
         with self._lock:
-            queues = list(self._queues)
-        for q in queues:
-            q.put(payload)
+            slots = list(self._slots)
+        for slot in slots:
+            with slot.cv:
+                if slot.closed or slot.eof or slot.overflow:
+                    continue
+                if slot.buffered + len(payload) > slot.max_bytes:
+                    # Explicit overflow: do not enqueue, do not block the pump,
+                    # do not pretend the reader is still caught up.
+                    slot.overflow = True
+                    slot.cv.notify_all()
+                    continue
+                slot.chunks.append(payload)
+                slot.buffered += len(payload)
+                slot.cv.notify()
 
     def _run(self) -> None:
         try:
@@ -179,7 +267,7 @@ def add_dictate_args(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument(
         "--commit-backend",
-        choices=["none", "auto", "auto-fallback", "wtype", "xdotool", "xdotool-clipboard", "stdout"],
+        choices=["none", "auto", "auto-fallback", "fcitx", "wtype", "xdotool", "xdotool-clipboard", "stdout"],
         default="auto",
     )
     parser.add_argument(
@@ -197,7 +285,7 @@ def add_dictate_args(parser: argparse.ArgumentParser) -> None:
 
     parser.add_argument(
         "--asr-provider",
-        choices=["qwen-asr", "http-cloud"],
+        choices=["qwen-asr", "http-cloud", "confucius-asr"],
         default="qwen-asr",
         help="ASR provider backend",
     )
@@ -214,9 +302,18 @@ def add_dictate_args(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument("--hotword", action="append", default=[])
     parser.add_argument(
+        "--hotword-replacement",
+        action="append",
+        default=[],
+        help="Explicit lexicon replacement SRC→DST (repeatable). Also accepted in --asr-context as '错词 → 正词'.",
+    )
+    parser.add_argument(
         "--qwen-language",
         default="Chinese",
-        help="Language hint for Qwen3-ASR (e.g. Chinese, English, auto). 'auto' enables automatic detection.",
+        help=(
+            "Language hint for Qwen3-ASR (e.g. Chinese, English, auto); also passed to "
+            "confucius-asr as the stream language header. 'auto' enables automatic detection."
+        ),
     )
     parser.add_argument(
         "--qwen-max-new-tokens",
@@ -242,7 +339,12 @@ def add_dictate_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--asr-api-key",
         default="",
-        help="API key for http-cloud ASR provider (sent as Bearer token)",
+        help=(
+            "API key for the ASR provider: http-cloud sends it as Bearer token, "
+            "confucius-asr reuses it as the protocol secret_key. Empty means no credential "
+            "is sent — whether that is accepted depends on the server; the packaged local "
+            "Confucius service requires a token."
+        ),
     )
     parser.add_argument(
         "--asr-timeout-s",
@@ -253,7 +355,10 @@ def add_dictate_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--asr-realtime-endpoint",
         default="",
-        help="Optional realtime ASR base URL for http-cloud provider (example: http://192.168.5.111:40002)",
+        help=(
+            "Realtime ASR endpoint. http-cloud: HTTP base URL (example: http://192.168.5.111:40002); "
+            "confucius-asr: WebSocket URL (packaged local service: ws://127.0.0.1:8321/asr_stream_api_v1)"
+        ),
     )
     add_remote_paste_args(parser)
 
@@ -280,6 +385,14 @@ def build_ffmpeg_record_cmd(
         "-hide_banner",
         "-loglevel",
         "error",
+        "-fflags",
+        "nobuffer",
+        "-flags",
+        "low_delay",
+        "-probesize",
+        "32",
+        "-analyzeduration",
+        "0",
         "-y",
         "-f",
         "pulse",
@@ -296,12 +409,22 @@ def build_ffmpeg_record_cmd(
         base.extend(
             [
                 "-filter_complex",
-                "[0:a]asplit=2[record][monitor]",
+                "[0:a]aformat=sample_fmts=flt:sample_rates=16000:channel_layouts=mono,asplit=2[record][monitor]",
                 "-map",
                 "[record]",
             ]
         )
-    monitor_output = ["-map", "[monitor]", "-f", "f32le", "-acodec", "pcm_f32le", "pipe:1"] if enable_monitor else []
+    monitor_output = [
+        "-map",
+        "[monitor]",
+        "-flush_packets",
+        "1",
+        "-f",
+        "f32le",
+        "-acodec",
+        "pcm_f32le",
+        "pipe:1",
+    ] if enable_monitor else []
     if record_format == "ogg":
         return base + ["-c:a", "libopus", "-b:a", "24k", str(output_path), *monitor_output]
     if record_format == "wav":
@@ -413,6 +536,23 @@ def create_provider(args: argparse.Namespace) -> ASRProvider:
             max_new_tokens=int(getattr(args, "qwen_max_new_tokens", 8192)),
         )
 
+    if asr_provider == "confucius-asr":
+        # Confucius4-R2T2 streaming ASR over WebSocket. Endpoint comes from
+        # asr_realtime_endpoint; asr_api_key is reused as the protocol secret_key.
+        from .providers.confucius_asr import ConfuciusASRProvider
+
+        realtime_endpoint = str(getattr(args, "asr_realtime_endpoint", "")).strip()
+        api_key = str(getattr(args, "asr_api_key", "")).strip() or None
+        timeout_s = float(getattr(args, "asr_timeout_s", 30) or 30)
+        language = str(getattr(args, "qwen_language", "")).strip()
+        return ConfuciusASRProvider(
+            endpoint=realtime_endpoint,
+            api_key=api_key,
+            timeout_s=timeout_s,
+            language=language,
+            context=asr_context,
+        )
+
     # Default to Qwen ASR provider
     # --qwen-model takes priority; fall back to --model; last resort: default
     qwen_model_override = getattr(args, "qwen_model", "")
@@ -424,13 +564,22 @@ def create_provider(args: argparse.Namespace) -> ASRProvider:
     raw_lang = cast(str, getattr(args, "qwen_language", "Chinese"))
     qwen_language: str | None = None if raw_lang == "auto" else raw_lang
 
-    return QwenASRProvider(
+    device = str(getattr(args, "device", "cuda:0") or "cuda:0")
+    if device == "cuda":
+        device = "cuda:0"
+    provider = QwenASRProvider(
         model_name=model,
-        device=getattr(args, "device", "cuda:0"),
+        device=device,
         language=qwen_language,
         max_new_tokens=getattr(args, "qwen_max_new_tokens", 1024),
         context=asr_context,
     )
+    lazy_load = getattr(provider, "_lazy_load", None)
+    if callable(lazy_load):
+        import threading
+
+        threading.Thread(target=lazy_load, name="qwen-asr-load", daemon=True).start()
+    return provider
 
 
 def create_committer(args: argparse.Namespace):
@@ -467,14 +616,29 @@ def start_record_process(
             channels=args.channels,
             input_device=str(getattr(args, "input_device", "default")),
         )
+    stderr_sink = _record_stderr_sink()
+    if stderr_sink is not None:
+        try:
+            header = f"\n=== {time.strftime('%Y-%m-%d %H:%M:%S')} {recorder_backend} {' '.join(record_cmd)} ===\n"
+            stderr_sink.write(header.encode("utf-8", errors="replace"))
+        except OSError:
+            stderr_sink = None
+    if monitor_enabled and which("stdbuf"):
+        record_cmd = ["stdbuf", "-o0", *record_cmd]
     proc = subprocess.Popen(
         record_cmd,
         stdout=subprocess.PIPE if monitor_enabled else None,
-        stderr=subprocess.DEVNULL if monitor_enabled else None,
+        # 以前这里在 monitor 模式下是 DEVNULL，录音失败（设备忙/被切走）完全无迹可查
+        stderr=stderr_sink if stderr_sink is not None else (subprocess.DEVNULL if monitor_enabled else None),
         bufsize=0 if monitor_enabled else -1,
     )
     _ACTIVE_PROCESSES.append(proc)
-    monitor_hub = _MonitorFanout(cast(BinaryIO, proc.stdout)) if monitor_enabled and proc.stdout is not None else None
+    backlog_bytes = int(MONITOR_BACKLOG_S * int(args.sample_rate) * max(1, int(args.channels)) * 4)
+    monitor_hub = (
+        _MonitorFanout(cast(BinaryIO, proc.stdout), max_backlog_bytes=backlog_bytes)
+        if monitor_enabled and proc.stdout is not None
+        else None
+    )
     return RecordProcessHandle(
         process=proc,
         monitor_stream=cast(BinaryIO | None, monitor_hub.open_reader()) if monitor_hub is not None else None,
@@ -588,12 +752,27 @@ def transcribe_and_commit(
     asr = provider.transcribe_file(audio_path, hotwords=hotwords)
     transcribe_latency_ms = (time.perf_counter() - t1) * 1000
     routing = resolve_remote_paste_routing(args)
+    from .hotword_corrector import correct_hotwords, lexicon_from_args
+
+    text = asr.text
+    _, replacements = lexicon_from_args(args)
+    if text.strip() and (hotwords or replacements) and bool(getattr(args, "enable_hotword_correction", True)):
+        try:
+            max_edits = max(0, int(getattr(args, "hotword_correction_edits", 1)))
+        except Exception:
+            max_edits = 1
+        text, _changes = correct_hotwords(
+            text,
+            hotwords,
+            max_ascii_edits=max_edits,
+            replacements=replacements,
+        )
 
     commit_info = {"backend": committer.backend_name, "committed": False, "detail": "disabled"}
-    if asr.text.strip():
+    if text.strip():
         if routing.commit_local:
             try:
-                result = committer.commit(asr.text)
+                result = committer.commit(text)
                 detail = str(result.detail)
                 if result.committed and auto_hard_enter:
                     enter_result = send_hard_enter(committer)
@@ -623,12 +802,12 @@ def transcribe_and_commit(
 
     remote_result = send_remote_paste_from_args(
         args,
-        asr.text,
+        text,
         log=lambda message: logger.info(message),
     )
     if remote_result.get("enabled"):
         commit_info["remote_paste"] = remote_result
-    if asr.text.strip() and not routing.commit_local:
+    if text.strip() and not routing.commit_local:
         commit_info.update(
             {
                 "backend": "remote-paste",
@@ -636,7 +815,7 @@ def transcribe_and_commit(
                 "detail": str(remote_result.get("detail", "")).strip() or "remote_paste_failed",
             }
         )
-    return asr.text, transcribe_latency_ms, getattr(asr, "detected_language", None), commit_info
+    return text, transcribe_latency_ms, getattr(asr, "detected_language", None), commit_info
 
 
 def run_dictate_once(
@@ -670,12 +849,14 @@ def run_dictate_once(
             raise RuntimeError(f"record command failed with exit code={code}")
         record_latency_ms = (time.perf_counter() - t0) * 1000
 
+        from .hotword_corrector import compose_effective_hotwords
+
         text, transcribe_latency_ms, detected_language, commit_info = transcribe_and_commit(
             args=args,
             provider=provider,
             committer=committer,
             audio_path=audio_path,
-            hotwords=args.hotword,
+            hotwords=compose_effective_hotwords(args),
             auto_hard_enter=bool(getattr(args, "auto_hard_enter", False)),
         )
 
