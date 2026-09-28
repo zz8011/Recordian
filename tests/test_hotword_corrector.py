@@ -119,6 +119,16 @@ def test_ascii_replacement_does_not_rewrite_inside_longer_word() -> None:
     assert changes == []
 
 
+def test_ascii_replacement_works_next_to_chinese_without_touching_longer_words() -> None:
+    corrected, changes = correct_hotwords(
+        "用clawd的CLI，别改OpenClaw、myclawd和clawd_foo",
+        ["Claude", "OpenClaw"],
+        replacements=[("clawd", "Claude")],
+    )
+    assert corrected == "用Claude的CLI，别改OpenClaw、myclawd和clawd_foo"
+    assert changes == [("clawd", "Claude")]
+
+
 def test_protected_spans_skip_number_url_code_and_negation() -> None:
     corrected, changes = correct_hotwords(
         "气温十七度，见 https://example.com/CodeX 和 `CodeX`，不是CodeX，用 CodeX",

@@ -57,6 +57,15 @@ def test_explicit_alias_and_english_normalization_are_immediate() -> None:
         corrector.close()
 
 
+def test_ascii_alias_next_to_chinese_is_corrected_in_live_preedit() -> None:
+    corrector = _corrector(["clawd→Claude", "Claude", "OpenClaw"], enabled=False)
+    try:
+        assert corrector.submit("clawd的CLI和OpenClaw") == "Claude的CLI和OpenClaw"
+        assert corrector.finish("clawd的CLI和OpenClaw") == "Claude的CLI和OpenClaw"
+    finally:
+        corrector.close()
+
+
 def test_short_pinyin_and_frequency_do_not_replace_when_disabled() -> None:
     session = _Session(lambda call: (_ for _ in ()).throw(AssertionError(call)))
     corrector = _corrector(["时期", "时期", "时期"], session=session, enabled=False)

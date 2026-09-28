@@ -60,8 +60,14 @@ def _protected_spans(text: str) -> list[tuple[int, int]]:
 
 
 def _ascii_bounded(text: str, start: int, end: int) -> bool:
-    before_ok = start == 0 or not text[start - 1].isalnum()
-    after_ok = end == len(text) or not text[end].isalnum()
+    # Chinese characters are Unicode-alphanumeric, but they are valid word
+    # neighbours in a mixed-language sentence (clawd的CLI). Only ASCII word
+    # characters should block an ASCII alias inside a longer identifier.
+    def ascii_word_char(char: str) -> bool:
+        return char.isascii() and (char.isalnum() or char == "_")
+
+    before_ok = start == 0 or not ascii_word_char(text[start - 1])
+    after_ok = end == len(text) or not ascii_word_char(text[end])
     return before_ok and after_ok
 
 
