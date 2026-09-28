@@ -1,13 +1,16 @@
 """Deterministic spoken-number and URL-dot formatting for ASR finals.
 
-Pure and idempotent. Converts only structurally unambiguous spoken forms:
+Pure and idempotent. Chinese prose quantities stay Chinese; structured
+numeric forms become ASCII digits:
 
-- cardinal with units: 我有二十五个文件 → 我有25个文件, 一百零二 → 102,
-  一万零二 → 10002 (一万二 / 两三天 / 三四个 / 五六百 stay approximate)
-- a single digit or 十 on its own, or before an explicit measure word:
-  零 → 0, 五 → 5, 十 → 10, 三个 → 3个, 十秒 → 10秒
+- prose: 我有二十五个文件 / 三个 / 第十二个 stay Chinese; an isolated
+  cardinal still formats (一百零二 → 102, 一万零二 → 10002)
+- a single digit or 十 on its own: 零 → 0, 五 → 5, 十 → 10
 - standalone positional runs: 一二三 → 123, 零零 → 00 (leading zeros kept)
 - digit sequence after an explicit marker: 编号零零一二 → 编号0012
+- eleven-digit Chinese mobile numbers, even without a marker:
+  联系幺三八零零幺三八零零零吧 → 联系13800138000吧
+- ASR-emitted Arabic prose quantities: 我有25个文件 → 我有二十五个文件
 - decimal: 三点一四 → 3.14
 - IPv4 (digit-wise, cardinal, or latin octets, optional spaces):
   一九二点一六八点五点一一一 / 192点168点五点111 /
@@ -34,12 +37,12 @@ digit-by-digit run still formats when it merely contains such a pair
 runs, marker spans, and IP octets (幺幺 → 11, 幺幺幺 → 111), not inside
 ordinary words. Explicit markers claim their digits first, in either direction
 (编号三五 → 编号35, 幺幺幺服务器 → 111服务器). Clear ordinals with a unit
-format (第十二个 → 第12个); 第 plus a single digit does not (第三方).
+stay Chinese (第十二个); 第 plus a single digit also stays (第三方).
 Clock forms format (三点半 → 3点半, 一点钟 → 1点钟). Percents format
 (百分之三十五 → 35%, 百分之三点五 → 3.5%, 百分之35 → 35%). A bare 十一
 is eleven; only the full holiday phrases stay Chinese. URLs, emails,
-code spans, and existing digit runs are protected; negation does NOT
-block number formatting (不是二十五而是三十五 → 不是25而是35).
+code spans, existing identifiers and structured numbers are protected.
+Negation is ordinary prose context (不是二十五而是三十五 stays Chinese).
 """
 
 from __future__ import annotations
@@ -91,6 +94,11 @@ _NUMRUN = _DIGIT + "十百千万亿"
 
 _DIGIT_RE = re.compile(rf"[{_DIGIT}]+")
 _POS_DIGIT_RE = re.compile(rf"[{_POS_DIGIT}]+")
+# Chinese mobile numbers are identifiers, including when surrounded by prose.
+# Claim only complete 11-digit runs with a valid 1[3-9] prefix.
+_MOBILE_RE = re.compile(
+    rf"(?<![{_NUMRUN}幺0-9])([{_POS_DIGIT}]{{11}})(?![{_NUMRUN}幺0-9])"
+)
 _OCTET = rf"(?:[0-9]{{1,3}}|[{_POS_DIGIT}]{{1,3}}|[{_DIGIT}十百]{{2,6}})"
 _IP_RE = re.compile(
     rf"(?<![{_NUMRUN}A-Za-z0-9.])({_OCTET})\s*点\s*({_OCTET})\s*点\s*({_OCTET})\s*点\s*({_OCTET})(?![{_NUMRUN}A-Za-z0-9])"
@@ -109,9 +117,12 @@ _DECIMAL_RE = re.compile(rf"(?<![{_NUMRUN}.点])([{_NUMRUN}]{{1,9}})点([{_DIGIT
 # realtime_asr's raw-tail seam, which used to carry its own shorter list and
 # therefore missed 手机号/电话/数字.
 NUMBER_MARKERS = (
-    "房间号", "座位号", "手机号", "电话号码", "序列号", "车牌号", "航班号",
-    "编号", "号码", "房号", "门牌", "分机", "工号", "学号", "车牌",
-    "电话", "端口", "服务器", "数字", "密码", "QQ", "qq", "IP", "ip",
+    "身份证号", "银行卡号", "快递单号", "电话号码", "验证码", "错误码",
+    "状态码", "订单号", "版本号", "工单号", "房间号", "座位号",
+    "手机号", "序列号", "车牌号", "航班号", "编号", "号码",
+    "房号", "门牌", "分机", "工号", "学号", "卡号", "账号",
+    "车牌", "电话", "端口", "服务器", "数字", "密码", "邮编",
+    "QQ号", "QQ", "qq", "HTTP", "IP", "ip",
 )
 _MARKER_ALT = "|".join(sorted(NUMBER_MARKERS, key=len, reverse=True))
 # Every character a spoken number can be built from, 幺 included. A marker
@@ -133,8 +144,6 @@ _SUFFIX_SEQ_RE = re.compile(
 _PERCENT_RE = re.compile(
     rf"百分之\s*(?:([0-9]+(?:\.[0-9]+)?)|([{_NUMRUN}]{{1,9}})点([{_DIGIT}]{{1,6}})|([{_NUMRUN}]{{1,9}}))"
 )
-# 第十二个 / 第十二章. A single digit (第三方) is not an explicit ordinal value.
-_ORDINAL_RE = re.compile(rf"第([{_NUMRUN}]{{2,9}})(?![{_NUMRUN}])")
 # 三点半 / 一点钟. 一点建议 has neither 半 nor 钟.
 _TIME_RE = re.compile(rf"(?<![{_NUMRUN}])([{_NUMRUN}]{{1,6}})点(半|钟)")
 # HH点MM分. A one-character minute needs an explicit daypart (下午三点五分);
@@ -157,6 +166,10 @@ _CARDINAL_RE = re.compile(rf"(?<![{_NUMRUN}第.点])([{_NUMRUN}]{{2,9}})(?![{_NU
 _POSITIONAL_RE = re.compile(
     rf"(?<![{_NUMRUN}A-Za-z0-9.点幺])([{_POS_DIGIT}]{{2,}})(?![{_NUMRUN}A-Za-z0-9.点\u4e00-\u9fff])"
 )
+# Some ASR backends already emit Arabic quantities. Rewrite only short prose
+# values after the spoken-number pass; 11-digit phones and other long IDs are
+# deliberately outside this pattern.
+_ASCII_PROSE_RE = re.compile(r"(?<![A-Za-z0-9.])([0-9]{1,4})(?![A-Za-z0-9.])")
 # Bare neighboring pair (三四), not a longer digit-by-digit run that contains one.
 _APPROX_PAIRS = frozenset({"一两", "两三", "三四", "四五", "五六", "六七", "七八", "八九"})
 
@@ -343,19 +356,6 @@ def _marker_number_text(token: str) -> str | None:
     return None if value is None else str(value)
 
 
-# Explicit measure words. 分/天/下/点 are omitted: 十分, 一两天, 一下, 一点
-# are ordinary words, and 两三天 / 三四个 must stay approximate.
-_MEASURES = (
-    "分钟", "小时", "公斤", "个", "只", "条", "本", "张", "次", "遍",
-    "件", "份", "套", "台", "辆", "页", "米", "秒", "元", "倍",
-)
-_MEASURE_ALT = "|".join(sorted(_MEASURES, key=len, reverse=True))
-_MEASURE_RE = re.compile(
-    rf"(?<![{_NUMRUN}第])([{_DIGIT}十])(?![{_NUMRUN}])({_MEASURE_ALT})"
-)
-# 定位/指代前缀: 下一个, 另一个, 每一个, 这一个, 同一个 … here 一+量词 is a
-# grammatical determiner, not the quantity 1 (我有一个文件 still converts).
-_DETERMINER_PREFIXES = frozenset("这那哪每另上下前后头某本此该唯同么")
 _STANDALONE_RE = re.compile(
     rf"(?<![{_NUMRUN}A-Za-z0-9\u4e00-\u9fff])([{_DIGIT}]|十)"
     rf"(?![{_NUMRUN}A-Za-z0-9\u4e00-\u9fff])"
@@ -371,6 +371,86 @@ def _single_number(token: str) -> str | None:
     if digit is None:
         return None
     return str(digit)
+
+
+_PROSE_MEASURES = (
+    "分钟", "小时", "公斤", "个", "只", "条", "本", "张", "次", "遍",
+    "件", "份", "套", "台", "辆", "页", "米", "秒", "元", "倍",
+)
+_PROSE_MEASURE_ALT = "|".join(sorted(_PROSE_MEASURES, key=len, reverse=True))
+_ASCII_MARKER_PREFIX_RE = re.compile(rf"(?:{_MARKER_ALT})(?:是|为|[:：])?\s*$")
+_ASCII_MARKER_SUFFIX_RE = re.compile(rf"^(?:{_MARKER_ALT})")
+
+
+def _ascii_cardinal_to_chinese(digits: str, *, classifier: bool) -> str:
+    """Render one unpadded value below 10000 in ordinary Chinese prose."""
+    value = int(digits)
+    if value == 0:
+        return "零"
+    if value == 2 and classifier:
+        return "两"
+    names = "零一二三四五六七八九"
+    units = ("千", "百", "十", "")
+    padded = f"{value:04d}"
+    pieces: list[str] = []
+    pending_zero = False
+    for index, char in enumerate(padded):
+        digit = int(char)
+        if digit == 0:
+            pending_zero = bool(pieces)
+            continue
+        if pending_zero:
+            pieces.append("零")
+            pending_zero = False
+        if not (index == 2 and digit == 1 and not pieces):
+            pieces.append(names[digit])
+        pieces.append(units[index])
+    return "".join(pieces)
+
+
+def _restore_prose_ascii_numbers(text: str) -> str:
+    """Undo an ASR backend's Arabic choice only in clear Chinese prose."""
+    protected = _formatting_protected_spans(text)
+    edits: list[tuple[int, int, str]] = []
+    for match in _ASCII_PROSE_RE.finditer(text):
+        start, end = match.span(1)
+        digits = match.group(1)
+        if digits.startswith("0") and len(digits) > 1:
+            continue  # dates with padding and identifiers keep their zeroes
+        if _overlaps(start, end, protected):
+            continue
+        if _ASCII_MARKER_PREFIX_RE.search(text[:start]) or _ASCII_MARKER_SUFFIX_RE.match(text[end:]):
+            continue
+        before = text[start - 1] if start else ""
+        after = text[end] if end < len(text) else ""
+        if (before and before in "-+~/～—") or (after and after in "-+~/～—"):
+            continue  # ranges, signs and fractions need their own notation
+        if after and after in "年月日号点":
+            continue
+        if before == "点" and after == "分":
+            continue
+        measure = re.match(_PROSE_MEASURE_ALT, text[end:])
+        between_chinese = (
+            "\u4e00" <= before <= "\u9fff" and "\u4e00" <= after <= "\u9fff"
+        )
+        prose_tail = (
+            "\u4e00" <= before <= "\u9fff" and (not after or after in "，。！？；、：")
+        )
+        if measure is None and (len(digits) > 3 or not (between_chinese or prose_tail)):
+            continue
+        edits.append((start, end, _ascii_cardinal_to_chinese(digits, classifier=measure is not None)))
+    for start, end, replacement in reversed(edits):
+        text = text[:start] + replacement + text[end:]
+    return text
+
+
+def _touches_cjk(text: str, start: int, end: int) -> bool:
+    """A cardinal beside Chinese text is prose, not a standalone number."""
+    return (
+        start > 0 and "\u4e00" <= text[start - 1] <= "\u9fff"
+    ) or (
+        end < len(text) and "\u4e00" <= text[end] <= "\u9fff"
+    )
 
 
 def _rewrite_scheme_host(url: str) -> str:
@@ -420,11 +500,10 @@ def _protected_word_spans(text: str) -> list[tuple[int, int]]:
 
 
 def format_spoken_text(text: str) -> str:
-    """Return *text* with unambiguous spoken numbers/URL dots formatted.
+    """Format structured numbers/URL dots and keep prose quantities Chinese.
 
-    Idempotent: emitted ASCII digits and URLs are protected spans on a
-    second pass, so ``format_spoken_text(format_spoken_text(x))`` equals
-    ``format_spoken_text(x)``.
+    Idempotent: the second pass preserves structured ASCII numbers and
+    Chinese prose quantities.
     """
     source = str(text)
     if not source.strip():
@@ -467,6 +546,11 @@ def format_spoken_text(text: str) -> str:
         if all(g is not None and 0 <= g <= 255 for g in groups):
             claimed.append((match.start(), match.end()))
             edits.append((match.start(), match.end(), ".".join(str(g) for g in groups)))
+
+    for match in _MOBILE_RE.finditer(source):
+        digits = _digits_to_ascii(match.group(1))
+        if digits[0] == "1" and digits[1] in "3456789":
+            claim(match.start(1), match.end(1), digits)
 
     for match in _DATE_RE.finditer(source):
         year = int(_digits_to_ascii(match.group(1)))
@@ -520,11 +604,6 @@ def format_spoken_text(text: str) -> str:
             minute = f"0{minute}"  # 九点零五分 → 9点05分
         claim(match.start(2), match.end(3), f"{hour}点{minute}")
 
-    for match in _ORDINAL_RE.finditer(source):
-        value = _parse_cardinal(match.group(1))
-        if value is not None:
-            claim(match.start(1), match.end(1), str(value))
-
     for match in _SEQ_RE.finditer(source):
         rendered = _marker_number_text(match.group(2))
         if rendered is not None:
@@ -546,6 +625,8 @@ def format_spoken_text(text: str) -> str:
         claim(match.start(), match.end(), f"{whole}.{_digits_to_ascii(match.group(2))}")
 
     for match in _CARDINAL_RE.finditer(source):
+        if _touches_cjk(source, match.start(1), match.end(1)):
+            continue
         value = _parse_cardinal(match.group(1))
         if value is None:
             continue
@@ -562,19 +643,6 @@ def format_spoken_text(text: str) -> str:
             continue
         claim(match.start(), match.end(), _digits_to_ascii(token))
 
-    for match in _MEASURE_RE.finditer(source):
-        if (
-            match.group(1) == "一"
-            and match.start(1) > 0
-            and source[match.start(1) - 1] in _DETERMINER_PREFIXES
-        ):
-            # 下一个 / 另一个 / 每一个: a determiner, not the quantity 1.
-            continue
-        measure_value = _single_number(match.group(1))
-        if measure_value is None:
-            continue
-        claim(match.start(), match.end(), measure_value + match.group(2))
-
     for match in _STANDALONE_RE.finditer(source):
         standalone_value = _single_number(match.group(1))
         if standalone_value is None:
@@ -583,4 +651,4 @@ def format_spoken_text(text: str) -> str:
 
     for start, end, replacement in sorted(edits, reverse=True):
         source = source[:start] + replacement + source[end:]
-    return source
+    return _restore_prose_ascii_numbers(source)

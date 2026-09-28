@@ -2,10 +2,10 @@ from recordian.spoken_formatting import format_spoken_text
 
 
 def test_cardinal_with_units() -> None:
-    assert format_spoken_text("我有二十五个文件") == "我有25个文件"
+    assert format_spoken_text("我有二十五个文件") == "我有二十五个文件"
     assert format_spoken_text("一百零二") == "102"
     assert format_spoken_text("一万二千") == "12000"
-    assert format_spoken_text("两百分") == "200分"
+    assert format_spoken_text("两百分") == "两百分"
 
 
 def test_approximate_and_bare_readings_stay() -> None:
@@ -42,7 +42,7 @@ def test_ipv4() -> None:
 
 def test_date_keeps_chinese_separators() -> None:
     assert format_spoken_text("二〇二六年九月二十四日") == "2026年9月24日"
-    assert format_spoken_text("二十六号下午三点半") == "26号下午3点半"
+    assert format_spoken_text("二十六号下午三点半") == "二十六号下午3点半"
     # Impossible month stays untouched.
     assert format_spoken_text("二〇二六年十三月一日") == "二〇二六年十三月一日"
 
@@ -116,7 +116,7 @@ def test_review_zero_padded_cardinal() -> None:
 
 
 def test_review_negation_does_not_block_number_formatting() -> None:
-    assert format_spoken_text("不是二十五而是三十五") == "不是25而是35"
+    assert format_spoken_text("不是二十五而是三十五") == "不是二十五而是三十五"
 
 
 def test_review_proper_nouns_and_calendar_words_stay() -> None:
@@ -133,8 +133,8 @@ def test_followup_bare_quantity_range_and_scheme_url() -> None:
     assert format_spoken_text("零") == "0"
     assert format_spoken_text("五") == "5"
     assert format_spoken_text("十") == "10"
-    assert format_spoken_text("我有三个文件") == "我有3个文件"
-    assert format_spoken_text("等待十秒") == "等待10秒"
+    assert format_spoken_text("我有三个文件") == "我有三个文件"
+    assert format_spoken_text("等待十秒") == "等待十秒"
     assert format_spoken_text("我两三天后来") == "我两三天后来"
     assert format_spoken_text("三四个") == "三四个"
     assert format_spoken_text("五六百") == "五六百"
@@ -184,9 +184,9 @@ def test_review_unmarked_positional_codes_still_format() -> None:
 
 
 def test_review_units_and_measures_still_format() -> None:
-    assert format_spoken_text("我有二十五个文件") == "我有25个文件"
-    assert format_spoken_text("我有三个文件") == "我有3个文件"
-    assert format_spoken_text("等待十秒") == "等待10秒"
+    assert format_spoken_text("我有二十五个文件") == "我有二十五个文件"
+    assert format_spoken_text("我有三个文件") == "我有三个文件"
+    assert format_spoken_text("等待十秒") == "等待十秒"
     assert format_spoken_text("零") == "0"
     assert format_spoken_text("五十") == "50"
 
@@ -235,9 +235,9 @@ def test_percent_forms() -> None:
 
 
 def test_explicit_ordinal_forms_and_lexical_first() -> None:
-    assert format_spoken_text("第十二个") == "第12个"
-    assert format_spoken_text("第十二章") == "第12章"
-    assert format_spoken_text("第二十名") == "第20名"
+    assert format_spoken_text("第十二个") == "第十二个"
+    assert format_spoken_text("第十二章") == "第十二章"
+    assert format_spoken_text("第二十名") == "第二十名"
     # A single digit after 第 is a lexical form, not an ordinal value.
     for text in ("第三方", "第一名"):
         assert format_spoken_text(text) == text
@@ -291,14 +291,65 @@ def test_marker_captures_whole_cardinal_before_its_first_digit() -> None:
     assert format_spoken_text("编号零零一二") == "编号0012"
 
 
+def test_chinese_prose_quantities_stay_chinese() -> None:
+    for text in (
+        "我有二十五个文件", "今天买了三个苹果", "等待十秒",
+        "需要一百零二份", "二十五个人", "买了二十五。",
+        "不是二十五而是三十五", "第十二个", "我有一个文件",
+    ):
+        assert format_spoken_text(text) == text
+    # Structured numerical forms remain ASCII for practical copying.
+    assert format_spoken_text("编号零零一二") == "编号0012"
+    assert format_spoken_text("下午三点半") == "下午3点半"
+    assert format_spoken_text("百分之三十五") == "35%"
+    assert format_spoken_text("三点一四") == "3.14"
+
+
+def test_arabic_asr_quantities_restore_chinese_prose() -> None:
+    samples = {
+        "我有25个文件": "我有二十五个文件",
+        "今天买了3个苹果": "今天买了三个苹果",
+        "等10秒": "等十秒",
+        "不是25而是35": "不是二十五而是三十五",
+        "第12个": "第十二个",
+        "我有2个文件": "我有两个文件",
+        "102个": "一百零二个",
+    }
+    for source, expected in samples.items():
+        assert format_spoken_text(source) == expected
+        assert format_spoken_text(expected) == expected
+
+
+def test_existing_structured_arabic_numbers_stay_arabic() -> None:
+    for text in (
+        "请联系13800138000吧", "编号0012", "端口8080",
+        "错误码404不存在", "验证码1234有效", "QQ号1234在线",
+        "要1-2个文件", "约3/4个", "温度-2度",
+        "IP地址192.168.1.1", "2026年9月24日", "下午3点15分",
+        "已经1.5了不要再改", "增长35%", "访问https://example.com/v2",
+    ):
+        assert format_spoken_text(text) == text
+
+
+def test_unmarked_mobile_number_amid_chinese_prose() -> None:
+    number = "幺三八零零幺三八零零零"
+    assert format_spoken_text(f"请联系{number}吧") == "请联系13800138000吧"
+    assert format_spoken_text(f"{number}是我的号码") == "13800138000是我的号码"
+    # Partial or invalid prefixes must not be guessed to be a phone number.
+    assert format_spoken_text(f"请联系{number[:-1]}吧") == f"请联系{number[:-1]}吧"
+    assert format_spoken_text("请联系幺二八零零幺三八零零零吧") == "请联系幺二八零零幺三八零零零吧"
+    assert format_spoken_text(format_spoken_text(f"请联系{number}吧")) == "请联系13800138000吧"
+    assert format_spoken_text("错误码四零四不存在") == "错误码404不存在"
+
+
 def test_determiner_and_locative_yi_is_not_a_quantity() -> None:
     """定位/指代前缀 + 一 + 量词 is grammatical, not the number 1."""
     for text in ("下一个", "上一个", "另一个", "每一个", "这一个", "那一个", "哪一个", "前一个"):
         assert format_spoken_text(text) == text, text
     assert format_spoken_text("下一个是端口幺二") == "下一个是端口12"
-    # An explicit quantity after a verb still converts.
-    assert format_spoken_text("我有一个文件") == "我有1个文件"
-    assert format_spoken_text("多一个文件") == "多1个文件"
+    # Ordinary prose quantities stay in Chinese, including after a verb.
+    assert format_spoken_text("我有一个文件") == "我有一个文件"
+    assert format_spoken_text("多一个文件") == "多一个文件"
 
 
 def test_clock_hour_minute_and_month_day_forms() -> None:

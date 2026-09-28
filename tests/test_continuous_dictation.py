@@ -440,7 +440,7 @@ def _short_segment_settings(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(guard, "CONTINUOUS_SILENCE_S", 0.3)
 
 
-def test_raw_chinese_numeral_tail_formats_as_one_snapshot(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_raw_chinese_numeral_tail_keeps_prose_after_join(monkeypatch: pytest.MonkeyPatch) -> None:
     _short_segment_settings(monkeypatch)
     payload = _speech(1.5) + _silence(0.4) + _speech(0.5)
     provider = _FakeProvider(["价格是一百二", "十五元"])
@@ -448,10 +448,22 @@ def test_raw_chinese_numeral_tail_formats_as_one_snapshot(monkeypatch: pytest.Mo
     worker = h.run()
 
     # The raw tail "一百二" was NOT committed at the boundary; the combined
-    # raw snapshot "一百二十五" formatted once via the REAL normaliser.
+    # raw snapshot "一百二十五元" is kept as a prose quantity by the
+    # real normaliser, without prematurely committing the incomplete value.
     assert h.session.segments == ["价格是"]
-    assert h.session.commits == ["125元"]
-    assert worker.final_text == "价格是125元"
+    assert h.session.commits == ["一百二十五元"]
+    assert worker.final_text == "价格是一百二十五元"
+    assert h.fatals == []
+
+
+def test_live_dictation_formats_quantity_and_unmarked_phone() -> None:
+    provider = _FakeProvider(["我有25个文件，联系幺三八零零幺三八零零零吧。"])
+    h = _Harness(reader=_Reader(_speech(0.5)), provider=provider)
+    worker = h.run()
+
+    expected = "我有二十五个文件，联系13800138000吧。"
+    assert h.session.commits == [expected]
+    assert worker.final_text == expected
     assert h.fatals == []
 
 

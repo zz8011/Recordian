@@ -41,7 +41,7 @@ def test_dedupe_still_collapses_non_numeric_repeats() -> None:
 
 def test_final_text_formats_spoken_numbers_without_config() -> None:
     assert _normalize_final_text("编号零零一二") == "编号0012"
-    assert _normalize_final_text("我有二十五个文件") == "我有25个文件"
+    assert _normalize_final_text("我有二十五个文件") == "我有二十五个文件"
     assert _normalize_final_text("一点建议") == "一点建议"
 
 
@@ -57,8 +57,8 @@ def test_normalize_final_text_idempotent() -> None:
 def test_normalize_final_text_followup_cases() -> None:
     assert _normalize_final_text("五") == "5"
     assert _normalize_final_text("十") == "10"
-    assert _normalize_final_text("我有三个文件") == "我有3个文件"
-    assert _normalize_final_text("等待十秒") == "等待10秒"
+    assert _normalize_final_text("我有三个文件") == "我有三个文件"
+    assert _normalize_final_text("等待十秒") == "等待十秒"
     assert _normalize_final_text("我两三天后来") == "我两三天后来"
     assert _normalize_final_text("三四个") == "三四个"
     assert _normalize_final_text("五六百") == "五六百"
@@ -94,7 +94,7 @@ def test_final_text_markers_runs_and_measures_unaffected() -> None:
     assert _normalize_final_text("零零") == "00"
     assert _normalize_final_text("八八八八") == "8888"
     assert _normalize_final_text("零零一一") == "0011"
-    assert _normalize_final_text("我有二十五个文件") == "我有25个文件"
-    assert _normalize_final_text("我有三个文件") == "我有3个文件"
-    assert _normalize_final_text("等待十秒") == "等待10秒"
+    assert _normalize_final_text("我有二十五个文件") == "我有二十五个文件"
+    assert _normalize_final_text("我有三个文件") == "我有三个文件"
+    assert _normalize_final_text("等待十秒") == "等待十秒"
     assert _normalize_final_text("五十") == "50"
