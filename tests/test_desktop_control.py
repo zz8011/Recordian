@@ -72,3 +72,29 @@ def test_status_socket_reply(tmp_path):
         worker.start()
         assert send_action("status", path=path) == "transcribing"
         worker.join(2)
+
+
+def test_agent_press_release_uses_dedicated_callbacks(tmp_path):
+    path = tmp_path / "private" / "control.sock"
+    events = []
+    with ControlServer(lambda key: events.append(("dictation", key)),
+                       lambda key: events.append(("dictation-release", key)),
+                       {"ctrl_r"}, set(), None, path=path,
+                       on_agent_press=lambda: events.append(("agent", "press")) or True,
+                       on_agent_release=lambda: events.append(("agent", "release"))) as server:
+        for action in ("agent-press", "agent-release"):
+            worker = threading.Thread(target=server.poll)
+            worker.start()
+            assert send_action(action, path=path) == "ok"
+            worker.join(2)
+    assert events == [("agent", "press"), ("agent", "release")]
+
+
+def test_agent_action_does_not_fall_back_when_unavailable(tmp_path):
+    server = ControlServer(None, None, {"ctrl_r"}, set(), None, path=tmp_path / "sock")
+    assert server.dispatch("agent-press") == "error: agent hotkey not configured"
+    assert server.dispatch("agent-release") == "error: agent hotkey not configured"
+    busy = ControlServer(None, None, {"ctrl_r"}, set(), None, path=tmp_path / "busy.sock",
+                         on_agent_press=lambda: False, on_agent_release=lambda: None)
+    assert busy.dispatch("agent-press") == "error: agent capture not started"
+    assert busy.dispatch("agent-release") == "ok"

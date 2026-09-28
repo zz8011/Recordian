@@ -349,7 +349,7 @@ def test_overlay_sigusr1_then_processing_then_fresh_alt_starts(monkeypatch: pyte
         session.close()
 
 
-def test_noop_keyup_does_not_poison_next_async_stop(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_rejected_ptt_keyup_does_not_stop_another_capture(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     session = _drive(
         monkeypatch,
         tmp_path,
@@ -364,11 +364,11 @@ def test_noop_keyup_does_not_poison_next_async_stop(monkeypatch: pytest.MonkeyPa
 
         _tap(session.captured, alt)
         _call(session.captured, "emit_duration_limit")
-        # PTT keyup after the limit: recording is already gone, stop returns false.
+        # PTT cannot start during processing; its keyup must not request a stop.
         on_press(shift)
         on_release(shift)
         _join_stop_threads()
-        assert session.calls["noop_stop"] == 1
+        assert session.calls["noop_stop"] == 0
         assert session.calls["accepted"] == 1
 
         _call(session.captured, "complete_processing")
@@ -378,11 +378,11 @@ def test_noop_keyup_does_not_poison_next_async_stop(monkeypatch: pytest.MonkeyPa
         _call(session.captured, "emit_duration_limit")
         _tap(session.captured, alt)
         assert session.calls["accepted"] == 2
-        assert session.calls["stop"] == 1
+        assert session.calls["stop"] == 0
         _call(session.captured, "complete_processing")
         _tap(session.captured, alt)
         assert session.calls["accepted"] == 3
-        assert session.calls["noop_stop"] == 1
+        assert session.calls["noop_stop"] == 0
     finally:
         session.close()
 

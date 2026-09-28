@@ -281,7 +281,8 @@ def _main_impl() -> None:
         # awaiting_handoff covers only the gap from recording_duration_limit to
         # processing_started (or error). A held key stays latched and does not
         # restart when that handoff completes.
-        trigger_pressed = {"active": False}
+        trigger_pressed = {"active": False, "started": False}
+        agent_pressed = {"active": False, "started": False}
         toggle_recording = {"active": False}
         recording = {"active": False}
         session = {"awaiting_handoff": False}
@@ -289,6 +290,8 @@ def _main_impl() -> None:
         def _clear_local_recording() -> None:
             toggle_recording["active"] = False
             recording["active"] = False
+            trigger_pressed["started"] = False
+            agent_pressed["started"] = False
 
         def _on_state(payload: dict[str, object]) -> None:
             event = str(payload.get("event", ""))
@@ -333,6 +336,31 @@ def _main_impl() -> None:
             if session["awaiting_handoff"]:
                 return False
             return bool(start_recording())
+
+        def _agent_press() -> bool:
+            # F10 is its own capture source. Never fall back to ordinary
+            # dictation when Agent is disabled or unavailable.
+            if agent_pressed["active"]:
+                return True
+            agent_pressed["active"] = True
+            agent_pressed["started"] = False
+            if agent_hub is None or session["awaiting_handoff"]:
+                _emit({"event": "error", "error": "Agent 语音入口暂不可用"})
+                return False
+            try:
+                agent_pressed["started"] = bool(start_recording("agent_hotkey"))
+            except Exception as exc:  # noqa: BLE001
+                _emit({"event": "error", "error": f"Agent 录音启动失败: {exc}"})
+            return agent_pressed["started"]
+
+        def _agent_release() -> None:
+            if not agent_pressed["active"]:
+                return
+            agent_pressed["active"] = False
+            started = agent_pressed["started"]
+            agent_pressed["started"] = False
+            if started:
+                _request_stop_recording()
 
         def _on_overlay_stop_signal(signum: int, frame: object) -> None:
             # overlay 点击停止：走与松开热键相同的停止流程
@@ -413,9 +441,10 @@ def _main_impl() -> None:
                 # duration handoff so the held key cannot restart.
                 if trigger_keys.issubset(pressed) and not trigger_pressed["active"] and not toggle_recording["active"]:
                     trigger_pressed["active"] = True
+                    trigger_pressed["started"] = False
                     if not session["awaiting_handoff"]:
                         try:
-                            start_recording()
+                            trigger_pressed["started"] = bool(start_recording())
                         except Exception as exc:  # noqa: BLE001
                             _emit({"event": "error", "error": f"{type(exc).__name__}: {exc}"})
                 return True
@@ -432,7 +461,9 @@ def _main_impl() -> None:
                 # PTT release: stop only if PTT was active (not toggle)
                 if trigger_pressed["active"] and not trigger_keys.issubset(pressed):
                     trigger_pressed["active"] = False
-                    if not toggle_recording["active"]:
+                    started = trigger_pressed["started"]
+                    trigger_pressed["started"] = False
+                    if started and not toggle_recording["active"]:
                         _request_stop_recording()
                 if stop_event.is_set():
                     return False
@@ -537,7 +568,9 @@ def _main_impl() -> None:
         from recordian.desktop_control import ControlServer
 
         with ControlServer(_on_press, _on_release, trigger_keys, toggle_keys, exit_daemon,
-                           get_status=lambda: desktop_status["value"]) as control:
+                           get_status=lambda: desktop_status["value"],
+                           on_agent_press=_agent_press if args.trigger_mode in {"ptt", "toggle"} else None,
+                           on_agent_release=_agent_release if args.trigger_mode in {"ptt", "toggle"} else None) as control:
             while not stop_event.is_set():
                 control.poll()
     else:

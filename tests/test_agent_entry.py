@@ -207,7 +207,8 @@ def test_cancel_unblocks_full_stdin_and_terminates_group(tmp_path):
 @pytest.mark.parametrize('panel_mode', ['agent', 'dictation'])
 def test_wake_and_keyboard_route_independently_of_panel(hub, panel_mode):
     hub.select(panel_mode, 'hermes')
-    for source, mode in [('voice_wake', 'agent'), ('hotkey', 'dictation'), ('agent_panel', 'agent')]:
+    for source, mode in [('voice_wake', 'agent'), ('hotkey', 'dictation'),
+                         ('agent_hotkey', 'agent'), ('agent_panel', 'agent')]:
         capture = hub.begin_capture(source)
         assert capture.mode == mode
         with pytest.raises(ValueError):
@@ -215,7 +216,7 @@ def test_wake_and_keyboard_route_independently_of_panel(hub, panel_mode):
         hub.accept_transcript(capture, {'result': {'text': source, 'commit': {'outcome': 'committed'}}})
         hub.end_capture(capture)
         wait_done(hub)
-    assert [c[1] for c in FakeAdapter.calls] == ['voice_wake', 'agent_panel']
+    assert [c[1] for c in FakeAdapter.calls] == ['voice_wake', 'agent_hotkey', 'agent_panel']
 
 
 def test_busy_agent_does_not_block_keyboard_dictation(hub):
@@ -240,6 +241,8 @@ def test_live_disable_blocks_new_and_pending_tasks_but_preserves_dictation(hub):
         hub.submit('不能发送', 'hermes')
     with pytest.raises(RuntimeError, match='Agent 已关闭'):
         hub.begin_capture('agent_panel')
+    with pytest.raises(RuntimeError, match='Agent 已关闭'):
+        hub.begin_capture('agent_hotkey')
     ordinary = hub.begin_capture('hotkey')
     assert ordinary.mode == 'dictation'
     hub.end_capture(ordinary)
@@ -259,6 +262,7 @@ def test_native_settings_change_wake_route_without_restart_or_mid_capture_rerout
     capture = hub.begin_capture('voice_wake')
     hub.settings_path.write_text(json.dumps({'enable_agent': True, 'wake_to_agent': False}))
     assert hub.snapshot()['trigger_routes']['voice_wake'] == 'dictation'
+    assert hub.snapshot()['trigger_routes']['agent_hotkey'] == 'agent'
     assert capture.mode == 'agent'
     hub.end_capture(capture)
     capture = hub.begin_capture('voice_wake')

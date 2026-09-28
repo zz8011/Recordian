@@ -345,7 +345,8 @@ class AgentHub:
                 'preview': self.preview, 'notice': self.notice, 'capturing': self.capture is not None,
                 'capture_mode': self.capture.mode if self.capture else None,
                 'trigger_routes': {'voice_wake': ('agent' if self.enabled else 'disabled') if self.wake_to_agent else 'dictation',
-                                   'hotkey': 'dictation', 'agent_panel': 'agent' if self.enabled else 'disabled'},
+                                   'hotkey': 'dictation', 'agent_hotkey': 'agent' if self.enabled else 'disabled',
+                                   'agent_panel': 'agent' if self.enabled else 'disabled'},
                 'instances': [asdict(a) for a in self.instances.values()], 'sessions': self.sessions,
                 'tasks': self.tasks[-100:]}, ensure_ascii=False))
 
@@ -365,7 +366,8 @@ class AgentHub:
             if self.closed or self.capture is not None:
                 raise RuntimeError('语音入口正在处理上一段录音')
             modes = {'voice_wake': 'agent' if self.wake_to_agent else 'dictation',
-                     'agent_panel': 'agent', 'hotkey': 'dictation', 'panel': self.mode}
+                     'agent_panel': 'agent', 'agent_hotkey': 'agent',
+                     'hotkey': 'dictation', 'panel': self.mode}
             if trigger_source not in modes:
                 raise ValueError('未知录音来源')
             mode = modes[trigger_source]
