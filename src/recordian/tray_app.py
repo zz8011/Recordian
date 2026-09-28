@@ -410,9 +410,10 @@ class TrayApp:
             detail = "Stopped"
             self.overlay.set_state("idle", detail)
             self._schedule_off_cue_from_overlay("idle", detail)
-            if not alive and self.agent_overlay is not None and self.agent_overlay.current_status == 'running':
-                self.agent_overlay.show_task({
-                    'id': self.agent_overlay.task_id, 'status': 'interrupted',
+            agent_overlay = getattr(self, 'agent_overlay', None)
+            if not alive and agent_overlay is not None and agent_overlay.current_status == 'running':
+                agent_overlay.show_task({
+                    'id': agent_overlay.task_id, 'status': 'interrupted',
                     'error': 'Recordian 后端已停止，任务结果不确定；不会自动重发。',
                 }, 'Agent')
             if et == "backend_exited" and not intentional and not alive:
