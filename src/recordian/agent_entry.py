@@ -474,19 +474,29 @@ class AgentHub:
     def _run(self, task, cancel):
         agent_id = task['agent_id']
         instance = self.instances[agent_id]
-        self._emit_task(task)
+        self._emit_task(task, 'started')
+        last_stream_emit = 0.0
 
         def update(event):
+            nonlocal last_stream_emit
+            emit_type = ''
             with self.lock:
                 kind = event.get('type')
                 if kind == 'text':
                     task['reply'] = (task['reply'] + str(event.get('text', '')))[:MAX_TEXT]
+                    now = time.monotonic()
+                    if now - last_stream_emit >= .08:
+                        last_stream_emit = now
+                        emit_type = 'stream'
                 elif kind == 'tool_use':
                     task['activity'] = '正在使用：' + str(event.get('name', '工具'))[:100]
+                    emit_type = 'activity'
                 elif kind in {'system', 'result'} and event.get('session_id'):
                     task['session_id'] = str(event['session_id'])
                     self.sessions[agent_id] = task['session_id']
                     self._save()
+            if emit_type:
+                self._emit_task(task, emit_type)
         try:
             result = self.adapters[instance.kind]().run(instance, task['prompt'], task['session_id'], cancel, update)
             with self.lock:
@@ -502,13 +512,14 @@ class AgentHub:
                 self.cancels.pop(agent_id, None)
                 task['finished'] = time.time()
                 self._save()
-            self._emit_task(task)
+            self._emit_task(task, 'finished')
 
-    def _emit_task(self, task):
+    def _emit_task(self, task, event_type):
         if self.on_task_event is None:
             return
         with self.lock:
             snapshot = dict(task)
+            snapshot['event_type'] = event_type
             agent_name = self.instances[task['agent_id']].name
         try:
             self.on_task_event(snapshot, agent_name)

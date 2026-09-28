@@ -255,9 +255,16 @@ def _main_impl() -> None:
             from .agent_feedback import notify_agent_task
             from .agent_panel import AgentPanel, open_panel
 
+            def _agent_task_feedback(task: dict, name: str) -> None:
+                visible = {key: task.get(key, '') for key in
+                           ('id', 'status', 'reply', 'error', 'activity', 'event_type')}
+                _print_json({'event': 'agent_task', 'task': visible, 'agent_name': name})
+                if notifier.backend_name != 'none' and task['event_type'] in {'started', 'finished'}:
+                    notify_agent_task(task, name, open_panel)
+
             agent_hub = AgentHub(
                 agents_path, agents_path.parent / "agent-tasks.json", settings_path=args.config_path,
-                on_task_event=lambda task, name: notify_agent_task(task, name, open_panel),
+                on_task_event=_agent_task_feedback,
             )
             agent_panel = AgentPanel(agent_hub)
             args._agent_hub = agent_hub

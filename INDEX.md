@@ -48,6 +48,7 @@
 | `backend_manager.py` | Backend lifecycle management |
 | `output_mute.py` | Desktop recording output mute and crash recovery; enabled by RECORDIAN_MUTE_OUTPUT |
 | `agent_entry.py` / `agent_panel.py` / `agent_panel.html` | Agent voice routing, Hermes CLI sessions, and local task panel |
+| `agent_response_overlay.py` | Floating stream of Agent replies; click or timeout dismisses without taking focus |
 | `desktop_control.py` | Compositor control socket, recording toggle and status stream |
 | `pyproject.toml` | Python package config (uv/pip) |
 

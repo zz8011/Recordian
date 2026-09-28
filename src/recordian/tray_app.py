@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, cast
 
+from recordian.agent_response_overlay import AgentResponseOverlay
 from recordian.audio_feedback import play_sound
 from recordian.backend_manager import BackendManager
 from recordian.config import ConfigManager
@@ -150,6 +151,7 @@ class TrayApp:
         self.root.title("Recordian Tray")
 
         self.overlay = WaveformRenderer(self.root)
+        self.agent_overlay: AgentResponseOverlay | None = None
         self.indicator = None
 
         self.backend = BackendManager(
@@ -229,6 +231,9 @@ class TrayApp:
 
     def _handle_event(self, event: dict[str, object]) -> None:
         et = str(event.get("event", ""))
+        if et == 'agent_task':
+            self._show_agent_task(event)
+            return
         if et == "ready":
             self.state.backend_running = True
             self.state.status = "idle"
@@ -405,6 +410,11 @@ class TrayApp:
             detail = "Stopped"
             self.overlay.set_state("idle", detail)
             self._schedule_off_cue_from_overlay("idle", detail)
+            if not alive and self.agent_overlay is not None and self.agent_overlay.current_status == 'running':
+                self.agent_overlay.show_task({
+                    'id': self.agent_overlay.task_id, 'status': 'interrupted',
+                    'error': 'Recordian 后端已停止，任务结果不确定；不会自动重发。',
+                }, 'Agent')
             if et == "backend_exited" and not intentional and not alive:
                 self._schedule_backend_restart(f"exit_code={code}")
         elif et == "log":
@@ -413,6 +423,23 @@ class TrayApp:
                 self.state.detail = truncate(msg, 48)
                 self._log_runtime(f"log: {msg}")
         self._update_tray_menu()
+
+    def _show_agent_task(self, event: dict[str, object]) -> None:
+        task = event.get('task')
+        if not isinstance(task, dict):
+            return
+        name = str(event.get('agent_name') or 'Agent')
+        try:
+            if self.agent_overlay is None:
+                self.agent_overlay = AgentResponseOverlay(self.root)
+            self.agent_overlay.show_task(task, name)
+        except Exception as exc:
+            self._log_runtime(f'agent_overlay_unavailable: {exc}')
+            if task.get('event_type') == 'finished':
+                from recordian.agent_feedback import feedback_message
+
+                title, body, urgency = feedback_message(task, name)
+                notify_desktop(title, body, urgency=urgency)
 
     @staticmethod
     def _extract_recent_run_observation(result: object) -> tuple[RecentRunObservation, dict[str, object]]:
@@ -922,6 +949,8 @@ class TrayApp:
         self._log_runtime("tray quitting")
         self.backend.stop()
         self.overlay.shutdown()
+        if self.agent_overlay is not None:
+            self.agent_overlay.close()
 
         if hasattr(self, '_glib'):
             def _gtk_cleanup():

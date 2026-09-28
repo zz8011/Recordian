@@ -120,7 +120,9 @@ def test_task_feedback_reports_start_and_final_reply(hub):
     hub.on_task_event = on_task
     hub.submit('请画一张图', 'hermes')
     assert finished.wait(3)
-    assert [task['status'] for task, _ in events] == ['running', 'completed']
+    assert [task['event_type'] for task, _ in events] == ['started', 'stream', 'finished']
+    assert [task['status'] for task, _ in events] == ['running', 'running', 'completed']
+    assert events[1][0]['reply'] == '答复'
     assert events[-1][0]['reply'] == '完成：请画一张图'
     assert all(name == 'hermes' for _, name in events)
     assert feedback_message(events[-1][0], 'Hermes')[1] == '完成：请画一张图'
@@ -142,6 +144,30 @@ def test_task_feedback_failure_cannot_change_task_status(hub):
     assert hub.tasks[-1]['status'] == 'failed'
     assert hub.tasks[-1]['error'] == 'Hermes 不可用'
     assert 'Hermes 不可用' in feedback_message(hub.tasks[-1], 'Hermes')[1]
+
+
+def test_stream_feedback_is_bounded_and_final_contains_all_text(hub):
+    class Burst:
+        def run(self, instance, text, session_id, cancel, on_event):
+            for _ in range(100):
+                on_event({'type': 'text', 'text': '字'})
+            return {'type': 'result', 'exit_code': 0, 'text': '字' * 100}
+
+    hub.adapters = {'hermes': Burst}
+    events = []
+    finished = threading.Event()
+
+    def on_task(task, name):
+        events.append(task)
+        if task['event_type'] == 'finished':
+            finished.set()
+
+    hub.on_task_event = on_task
+    hub.submit('任务', 'hermes')
+    assert finished.wait(3)
+    assert 1 <= sum(e['event_type'] == 'stream' for e in events) <= 2
+    assert events[-1]['status'] == 'completed'
+    assert events[-1]['reply'] == '字' * 100
 
 
 def test_restart_never_replays_and_does_not_reuse_changed_workspace(hub, tmp_path):
