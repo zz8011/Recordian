@@ -765,21 +765,21 @@ def open_settings_gtk(
             value=current.get("correction_provider", "semif"),
             kind="mapped",
             choices=CORRECTION_PROVIDER_CHOICES,
-            hint="默认使用本机或内网部署的 SemIf。官方 Jev 复用 jev 的登录，密钥由 jev 管理；选择官方 Jev 无需填写地址。",
+            hint="使用本机或内网的候选决策服务。官方 Jev 复用 jev 的登录，密钥由 jev 管理；选择 Jev 无需填写地址。",
         )
         row = _add_field(
             sec_asr,
             row,
             key="semif_endpoint",
-            label="SemIf 服务地址",
+            label="决策模型服务地址",
             value=current.get("semif_endpoint", ""),
-            hint="选择本地 SemIf 时使用；切换到官方 Jev 后仍保留此地址。",
+            hint="选择内网决策模型时使用；切换到官方 Jev 后仍保留此地址。",
         )
         row = _add_field(
             sec_asr,
             row,
             key="semif_timeout_s",
-            label="SemIf 等待 (秒)",
+            label="决策模型等待 (秒)",
             value=current.get("semif_timeout_s", DEFAULT_SEMIF_TIMEOUT_S),
             hint="默认 0.12 秒，必须大于 0 且不超过 0.35 秒。",
         )

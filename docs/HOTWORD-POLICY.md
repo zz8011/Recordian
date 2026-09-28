@@ -14,7 +14,7 @@ SemIf 只在调用方给出的有限候选里选择，候选里始终有保留�
 
 自动词库按条数上限删除低确认词时，同一事务会删掉对应的来源行，不留下孤儿记录，也不为了清理而清空仍在上限内的词。
 
-服务只确认了 `GET /health`：`readout` 为 `semif-direct-options-v1`，模型 `semif-qwen35-4b`。`/openapi.json`、`/docs` 和裸的 `/v1/systemone` GET 都是 404。仓库里没有另一份协议。调用形状仍是现有的 `state` + `questions.pick.criteria`，不是别的分类接口。
+旧服务的检查记录：`GET /health` 曾报告 `semif-direct-options-v1` 和 `semif-qwen35-4b`。2026-09-29，111 服务器的当前接口 `http://192.168.5.111:42171/v1/systemone` 报告 `plumb-direct-options-v1`、`plumb-4b-v5-q8`（`crh225/plumb-4b-GGUF Q8_0`）；实际 POST 仍接受 `state` + `questions.pick.criteria` 并返回同形的候选概率。模型由服务器管理，以实时健康检查为准。当前本机打开了上下文纠词；普通安装仍默认关闭。Plumb 的几句连通性和语境试例只验证接入，不代表完整准确率，旧 SemIf 的质量数据也不能直接外推给它。
 
 同一组 12 句里，裸词 criteria（`keep=试气` 这种）应改 5 句修对 0，应留 7 句误改 0。改成判定句加完整候选句后，修对 2（登陆页→登录，在坐的各位→在座），误改仍是 0。两句「试气」仍然留错；「你必需今天交报告」虽然选了替换，概率只有约 0.53，门槛拒绝。因此 `_judge` 采用这种完整候选句，但替换仍只发生在原跨度，不按流畅性删字。2/5 不能当生产质量，默认继续关闭，门槛也不下调。
 

@@ -64,7 +64,7 @@ def require_requests() -> Any:
         import requests
     except ImportError as exc:
         raise ImportError(
-            "启用 SemIf 需要可选依赖 requests。请安装 correction extra 后再打开端点。"
+            "启用内网决策模型需要可选依赖 requests。请安装 correction extra 后再打开端点。"
         ) from exc
     return requests
 

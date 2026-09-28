@@ -83,7 +83,7 @@ PROVIDER_CHOICES: tuple[tuple[str, str], ...] = (
 )
 
 CORRECTION_PROVIDER_CHOICES: tuple[tuple[str, str], ...] = (
-    ("semif", "本地 SemIf（默认）"),
+    ("semif", "内网决策模型"),
     ("jev", "官方Jev（沿用本机登录）"),
 )
 
