@@ -82,6 +82,7 @@ class HermesAdapter:
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
         events = queue.Queue(maxsize=128)
         errors = bytearray()
+        diagnostics = bytearray()
         faults = []
         finished = threading.Event()
 
@@ -100,6 +101,8 @@ class HermesAdapter:
                     try:
                         value = json.loads(line)
                     except (ValueError, UnicodeError):
+                        diagnostics.extend(line)
+                        del diagnostics[:-8192]
                         continue  # package diagnostics may precede JSONL
                     if isinstance(value, dict):
                         while not finished.is_set():
@@ -155,6 +158,13 @@ class HermesAdapter:
             if faults:
                 raise RuntimeError(faults[0])
             if terminal is None:
+                err_thread.join(timeout=.5)
+                detail = (bytes(errors) + bytes(diagnostics)).decode('utf-8', errors='replace').lower()
+                if ('hermes-refusal-reason: session_not_owned' in detail
+                        or 'this chat is open in another hermes window/terminal' in detail
+                        or 'refused active session' in detail
+                        or ('session' in detail and 'already held' in detail)):
+                    raise RuntimeError('Hermes 对话正在桌面端使用。请在 Recordian Agent 面板点击“开始新会话”，再决定是否重发；本次不会自动重试')
                 raise RuntimeError(f'Hermes 未返回最终结果（退出码 {code}），请检查 Hermes 配置或审批要求')
             if code != 0 or terminal.get('exit_code') != 0:
                 raise RuntimeError(str(terminal.get('error') or f'Hermes 执行未完成（退出码 {code}）')[:1500])
@@ -254,7 +264,7 @@ class Capture:
 
 
 class AgentHub:
-    def __init__(self, config_path: Path, state_path: Path, *, adapters=None, settings_path=None):
+    def __init__(self, config_path: Path, state_path: Path, *, adapters=None, settings_path=None, on_task_event=None):
         self.config_path, self.state_path = config_path, state_path
         self.settings_path = Path(settings_path) if settings_path else config_path.with_name('hotkey.json')
         self.enabled = True
@@ -276,6 +286,7 @@ class AgentHub:
         self.cancels = {}
         self.threads = {}
         self.adapters = adapters or ADAPTERS
+        self.on_task_event = on_task_event
         self.sessions = {}
         self.tasks = []
         if state_path.exists():
@@ -463,6 +474,7 @@ class AgentHub:
     def _run(self, task, cancel):
         agent_id = task['agent_id']
         instance = self.instances[agent_id]
+        self._emit_task(task)
 
         def update(event):
             with self.lock:
@@ -490,6 +502,19 @@ class AgentHub:
                 self.cancels.pop(agent_id, None)
                 task['finished'] = time.time()
                 self._save()
+            self._emit_task(task)
+
+    def _emit_task(self, task):
+        if self.on_task_event is None:
+            return
+        with self.lock:
+            snapshot = dict(task)
+            agent_name = self.instances[task['agent_id']].name
+        try:
+            self.on_task_event(snapshot, agent_name)
+        except Exception:
+            # Notification failures must not change task delivery or execution.
+            pass
 
     def cancel(self, agent_id):
         with self.lock:

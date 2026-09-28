@@ -9,6 +9,7 @@ import time
 import pytest
 
 from recordian.agent_entry import AgentHub, AgentInstance, HermesAdapter
+from recordian.agent_feedback import feedback_message
 from recordian.agent_panel import AgentPanel
 from recordian.postprocess_pipeline import _resolve_auto_hard_enter
 
@@ -107,6 +108,42 @@ def test_instances_resume_only_their_own_session_and_deduplicate(hub):
     assert 'hermes' not in hub.sessions
 
 
+def test_task_feedback_reports_start_and_final_reply(hub):
+    events = []
+    finished = threading.Event()
+
+    def on_task(task, name):
+        events.append((task, name))
+        if task['status'] == 'completed':
+            finished.set()
+
+    hub.on_task_event = on_task
+    hub.submit('请画一张图', 'hermes')
+    assert finished.wait(3)
+    assert [task['status'] for task, _ in events] == ['running', 'completed']
+    assert events[-1][0]['reply'] == '完成：请画一张图'
+    assert all(name == 'hermes' for _, name in events)
+    assert feedback_message(events[-1][0], 'Hermes')[1] == '完成：请画一张图'
+
+
+def test_task_feedback_failure_cannot_change_task_status(hub):
+    class Failing:
+        def run(self, instance, text, session_id, cancel, on_event):
+            raise RuntimeError('Hermes 不可用')
+
+    hub.adapters = {'hermes': Failing}
+
+    def broken_feedback(task, name):
+        raise OSError('通知服务不可用')
+
+    hub.on_task_event = broken_feedback
+    hub.submit('任务', 'hermes')
+    wait_done(hub)
+    assert hub.tasks[-1]['status'] == 'failed'
+    assert hub.tasks[-1]['error'] == 'Hermes 不可用'
+    assert 'Hermes 不可用' in feedback_message(hub.tasks[-1], 'Hermes')[1]
+
+
 def test_restart_never_replays_and_does_not_reuse_changed_workspace(hub, tmp_path):
     hub.submit('任务', 'hermes')
     wait_done(hub)
@@ -156,6 +193,15 @@ def test_real_subprocess_preserves_literal_prompt_and_requires_terminal(tmp_path
     executable.write_text('#!'+sys.executable+'\nprint("no terminal record")\n')
     with pytest.raises(RuntimeError, match='未返回最终结果'):
         HermesAdapter().run(instance, 'test', '', threading.Event(), lambda e: None)
+
+
+def test_active_hermes_session_has_actionable_error_and_no_retry(tmp_path):
+    executable = tmp_path/'hermes'
+    executable.write_text('#!'+sys.executable+'\nimport sys\nsys.stdin.read()\nprint("hermes-refusal-reason: SESSION_NOT_OWNED", file=sys.stderr)\nsys.exit(1)\n')
+    executable.chmod(0o700)
+    instance = AgentInstance('test', 'Test', 'hermes', str(executable), str(tmp_path), timeout_s=30)
+    with pytest.raises(RuntimeError, match='开始新会话.*不会自动重试'):
+        HermesAdapter().run(instance, 'test', 'busy-session', threading.Event(), lambda e: None)
 
 
 def test_panel_requires_token_and_rejects_cross_origin(hub, tmp_path):

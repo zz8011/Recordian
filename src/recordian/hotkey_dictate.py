@@ -252,9 +252,13 @@ def _main_impl() -> None:
     if agents_path.exists() and args.trigger_mode in {"ptt", "toggle"}:
         try:
             from .agent_entry import AgentHub
-            from .agent_panel import AgentPanel
+            from .agent_feedback import notify_agent_task
+            from .agent_panel import AgentPanel, open_panel
 
-            agent_hub = AgentHub(agents_path, agents_path.parent / "agent-tasks.json", settings_path=args.config_path)
+            agent_hub = AgentHub(
+                agents_path, agents_path.parent / "agent-tasks.json", settings_path=args.config_path,
+                on_task_event=lambda task, name: notify_agent_task(task, name, open_panel),
+            )
             agent_panel = AgentPanel(agent_hub)
             args._agent_hub = agent_hub
         except Exception as exc:
