@@ -108,6 +108,36 @@ def test_instances_resume_only_their_own_session_and_deduplicate(hub):
     assert 'hermes' not in hub.sessions
 
 
+def test_gateway_transport_uses_own_session_and_rejects_remote_url(hub, tmp_path):
+    profile = tmp_path / 'profile'
+    profile.mkdir()
+    (profile / '.env').write_text('API_SERVER_KEY=private\n')
+    config = json.loads(hub.config_path.read_text())
+    config['instances'][0].update(transport='gateway', api_url='http://127.0.0.1:8652', home=str(profile))
+    with pytest.raises(ValueError, match='本机 HTTP'):
+        AgentInstance.parse(dict(config['instances'][0], api_url='http://example.com:8652'))
+
+    class FakeGateway:
+        calls = []
+
+        def run(self, instance, text, session_id, cancel, on_event, *, request_id):
+            self.calls.append((text, session_id, request_id))
+            on_event({'type': 'system', 'session_id': 'gateway-session'})
+            on_event({'type': 'text', 'text': '流式'})
+            return {'text': '完成', 'session_id': 'gateway-session'}
+
+    hub.adapters['hermes-gateway'] = FakeGateway
+    hub.configure_instance(config['instances'][0])
+    hub.submit('第一次', 'hermes')
+    wait_done(hub)
+    hub.submit('第二次', 'hermes')
+    wait_done(hub)
+    assert FakeGateway.calls[0][1] == ''
+    assert FakeGateway.calls[1][1] == 'gateway-session'
+    assert FakeGateway.calls[0][2] != FakeGateway.calls[1][2]
+    assert hub.tasks[-1]['reply'] == '完成'
+
+
 def test_task_feedback_reports_start_and_final_reply(hub):
     events = []
     finished = threading.Event()

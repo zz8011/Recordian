@@ -528,7 +528,7 @@ def open_settings_gtk(
             value=current.get("wake_to_agent", True), default_bool=True,
             hint="开启：hey 小二交给 Agent；关闭：唤醒后普通语音输入。Agent 总开关关闭时，不响应发任务的唤醒。",
         )
-        agent_transport = Gtk.Label(label="调用方式：本机 Hermes CLI · F9 始终用于普通语音输入")
+        agent_transport = Gtk.Label(label="Hermes 连接方式可在 Agent 面板的实例设置中切换 · F9 始终用于普通语音输入")
         agent_transport.set_xalign(0.0)
         agent_transport.set_line_wrap(True)
         sec_agent.attach(agent_transport, 0, agent_row, 2, 1)

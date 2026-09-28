@@ -1,7 +1,7 @@
 """Voice task routing independent of an agent's model/provider.
 
-The only implemented adapter is Hermes' JSONL CLI. No UI keystrokes or shell
-interpolation are used. A recording pins its destination until finalization.
+Hermes can use its JSONL CLI or a persistent local Gateway. No UI keystrokes or
+shell interpolation are used. A recording pins its destination until finalization.
 """
 from __future__ import annotations
 
@@ -14,6 +14,9 @@ import signal
 import subprocess
 import threading
 import time
+import urllib.error
+import urllib.parse
+import urllib.request
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -44,6 +47,8 @@ class AgentInstance:
     workspace: str
     home: str = ''
     timeout_s: int = 1800
+    transport: str = 'cli'
+    api_url: str = ''
 
     @classmethod
     def parse(cls, data: dict) -> AgentInstance:
@@ -52,6 +57,14 @@ class AgentInstance:
             raise ValueError('Agent 标识需为小写英文、数字、横线或下划线')
         if data.get('kind', 'hermes') != 'hermes':
             raise ValueError('当前版本已接通 Hermes，其他适配器尚未安装')
+        transport = str(data.get('transport', 'cli'))
+        if transport not in {'cli', 'gateway'}:
+            raise ValueError('Hermes 连接方式无效')
+        api_url = str(data.get('api_url', '')).rstrip('/')
+        if transport == 'gateway':
+            parsed = urllib.parse.urlparse(api_url)
+            if parsed.scheme != 'http' or parsed.hostname not in {'127.0.0.1', 'localhost'} or not parsed.port or parsed.username or parsed.password or parsed.path or parsed.query or parsed.fragment:
+                raise ValueError('Gateway 地址必须是本机 HTTP 地址和端口')
         workspace = Path(str(data.get('workspace', ''))).expanduser()
         executable = Path(str(data.get('executable', ''))).expanduser()
         if not workspace.is_absolute() or not workspace.is_dir():
@@ -64,8 +77,11 @@ class AgentInstance:
             if not hp.is_absolute() or not hp.is_dir():
                 raise ValueError('Hermes 配置目录不存在')
             home = str(hp.resolve())
+        if transport == 'gateway' and (not home or not (Path(home) / '.env').is_file()):
+            raise ValueError('Gateway 需要包含 .env 的 Hermes profile 目录')
         return cls(ident, str(data.get('name', ident))[:80], 'hermes', str(executable.resolve()),
-                   str(workspace.resolve()), home, max(30, min(7200, int(data.get('timeout_s', 1800)))))
+                   str(workspace.resolve()), home, max(30, min(7200, int(data.get('timeout_s', 1800)))),
+                   transport, api_url)
 
 
 class HermesAdapter:
@@ -195,7 +211,128 @@ class HermesAdapter:
                     stream.close()
 
 
-ADAPTERS = {'hermes': HermesAdapter}
+class HermesGatewayAdapter:
+    """Use a persistent local Gateway; never resubmit an uncertain instruction."""
+
+    @staticmethod
+    def _key(home):
+        for line in (Path(home) / '.env').read_text().splitlines():
+            if line.startswith('API_SERVER_KEY='):
+                key = line.partition('=')[2].strip().strip('"\'')
+                if key:
+                    return key
+        raise RuntimeError('Hermes Gateway profile 未设置 API_SERVER_KEY')
+
+    def run(self, instance, text, session_id, cancel, on_event, *, request_id=None):
+        base = instance.api_url
+        key = self._key(instance.home)
+        headers = {'Authorization': 'Bearer ' + key, 'Content-Type': 'application/json'}
+
+        def request(method, path, data=None, timeout=5):
+            payload = None if data is None else json.dumps(data, ensure_ascii=False).encode()
+            req = urllib.request.Request(base + path, data=payload, method=method, headers=headers)
+            try:
+                with urllib.request.urlopen(req, timeout=timeout) as response:
+                    return json.load(response)
+            except urllib.error.HTTPError as exc:
+                detail = exc.read(1024).decode(errors='replace')
+                raise RuntimeError(f'Hermes Gateway 返回 {exc.code}: {detail}') from exc
+
+        if cancel.is_set():
+            raise InterruptedError('任务已停止，指令尚未发送')
+        body = {'input': text}
+        if session_id:
+            body['session_id'] = session_id
+        # A POST may have reached Hermes even if the reply is lost. Never retry it here.
+        create_headers = dict(headers)
+        create_headers['Idempotency-Key'] = request_id or uuid.uuid4().hex
+        create = urllib.request.Request(base + '/v1/runs', data=json.dumps(body, ensure_ascii=False).encode(),
+                                        method='POST', headers=create_headers)
+        try:
+            with urllib.request.urlopen(create, timeout=10) as response:
+                started = json.load(response)
+        except Exception as exc:
+            raise RuntimeError('Hermes Gateway 提交状态不明，请检查任务记录；不会自动重发') from exc
+        run_id = started.get('run_id')
+        if not isinstance(run_id, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,120}', run_id):
+            raise RuntimeError('Hermes Gateway 未返回有效任务编号；不会自动重发')
+        path = '/v1/runs/' + run_id
+        stream_events = queue.Queue(maxsize=256)
+        stop_stream = threading.Event()
+
+        def stream():
+            req = urllib.request.Request(base + path + '/events', headers=headers)
+            try:
+                with urllib.request.urlopen(req, timeout=15) as response:
+                    for line in response:
+                        if stop_stream.is_set():
+                            return
+                        if not line.startswith(b'data: '):
+                            continue
+                        try:
+                            event = json.loads(line[6:])
+                        except (ValueError, UnicodeError):
+                            continue
+                        if isinstance(event, dict):
+                            try:
+                                stream_events.put_nowait(event)
+                            except queue.Full:
+                                pass  # Polling supplies the authoritative final state.
+            except (OSError, urllib.error.URLError):
+                pass  # Polling continues even when the optional stream disconnects.
+
+        thread = threading.Thread(target=stream, daemon=True)
+        thread.start()
+        deadline = time.monotonic() + instance.timeout_s + 15
+        next_poll = 0.0
+        status = None
+        seen_session = ''
+        try:
+            while True:
+                if cancel.is_set():
+                    try:
+                        request('POST', path + '/stop', {}, timeout=3)
+                    except (OSError, RuntimeError) as exc:
+                        raise RuntimeError('Hermes 停止请求未确认，请检查任务状态；不会自动重发') from exc
+                    stop_deadline = time.monotonic() + 15
+                    while time.monotonic() < stop_deadline:
+                        stopped = request('GET', path, timeout=3)
+                        if stopped.get('status') in {'cancelled', 'interrupted'}:
+                            raise InterruptedError('Hermes 任务已停止；已经执行的操作不会自动撤销')
+                        if stopped.get('status') in {'completed', 'failed'}:
+                            raise RuntimeError('Hermes 在停止请求后结束，请检查任务记录确认已执行的操作')
+                        time.sleep(.25)
+                    raise RuntimeError('Hermes 已收到停止请求，但尚未确认停止；请检查任务状态')
+                if time.monotonic() >= deadline:
+                    raise TimeoutError('Hermes 任务超时；请检查任务记录后决定是否继续')
+                try:
+                    event = stream_events.get(timeout=.1)
+                except queue.Empty:
+                    event = None
+                if event:
+                    kind = event.get('event')
+                    if kind == 'message.delta':
+                        on_event({'type': 'text', 'text': str(event.get('delta', ''))})
+                    elif kind == 'tool.started':
+                        on_event({'type': 'tool_use', 'name': str(event.get('tool', '工具'))})
+                if time.monotonic() >= next_poll:
+                    status = request('GET', path)
+                    sid = status.get('session_id')
+                    if isinstance(sid, str) and sid and sid != seen_session:
+                        seen_session = sid
+                        on_event({'type': 'system', 'session_id': sid})
+                    if status.get('status') in {'completed', 'failed', 'cancelled', 'interrupted'}:
+                        break
+                    next_poll = time.monotonic() + .5
+            if status.get('status') != 'completed':
+                raise RuntimeError(str(status.get('error') or f"Hermes 任务{status.get('status')}")[:1500])
+            return {'type': 'result', 'exit_code': 0, 'session_id': seen_session,
+                    'text': str(status.get('output', ''))}
+        finally:
+            stop_stream.set()
+
+
+ADAPTERS = {'hermes': HermesAdapter, 'hermes-gateway': HermesGatewayAdapter}
 
 
 class AgentTranscript:
@@ -305,7 +442,11 @@ class AgentHub:
 
     def _scope(self, key):
         instance = self.instances.get(key)
-        return [instance.executable, instance.workspace, instance.home] if instance else None
+        if instance is None:
+            return None
+        scope = [instance.executable, instance.workspace, instance.home]
+        # Preserve existing CLI session associations across this upgrade.
+        return scope if instance.transport == 'cli' else scope + [instance.transport, instance.api_url]
 
     def _refresh_preferences(self):
         # Read at capture/submission boundaries and when showing settings.
@@ -498,7 +639,11 @@ class AgentHub:
             if emit_type:
                 self._emit_task(task, emit_type)
         try:
-            result = self.adapters[instance.kind]().run(instance, task['prompt'], task['session_id'], cancel, update)
+            if instance.transport == 'gateway':
+                result = self.adapters['hermes-gateway']().run(instance, task['prompt'], task['session_id'], cancel, update,
+                                                               request_id=task['id'])
+            else:
+                result = self.adapters[instance.kind]().run(instance, task['prompt'], task['session_id'], cancel, update)
             with self.lock:
                 task.update(status='completed', reply=str(result.get('text', ''))[:MAX_TEXT], activity='已完成')
         except InterruptedError as exc:
