@@ -858,12 +858,12 @@ def open_settings_gtk(
         sec_refine.attach(current_preset_box, 1, row, 1, 1)
         row += 1
 
-        # Cloud provider fields: API base, key, and model dropdown
-        row = _add_field(sec_refine, row, key="refine_api_base", label="云端 API Base", value=current.get("refine_api_base", ""))
-        row = _add_field(sec_refine, row, key="refine_api_key", label="云端 API Key", value=current.get("refine_api_key", ""), secret=True)
+        # OpenAI-compatible endpoints can run on the LAN without an API key.
+        row = _add_field(sec_refine, row, key="refine_api_base", label="模型 API 地址", value=current.get("refine_api_base", ""))
+        row = _add_field(sec_refine, row, key="refine_api_key", label="API 密钥（可留空）", value=current.get("refine_api_key", ""), secret=True)
 
         # Cloud model selection: combo + refresh button
-        model_label = Gtk.Label(label="云端 API 模型")
+        model_label = Gtk.Label(label="模型名称")
         model_label.set_xalign(0.0)
         model_label.set_yalign(0.0)
         sec_refine.attach(model_label, 0, row, 1, 1)

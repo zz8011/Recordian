@@ -265,10 +265,10 @@ class CloudLLMRefiner(BaseTextRefiner):
 
     def _build_openai_headers(self) -> dict:
         """OpenAI-compatible API 请求头（Groq, DeepSeek 等）"""
-        return {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {self.api_key}",
-        }
+        headers = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+        return headers
 
     def _build_openai_payload(
         self, messages: list[dict[str, str]], *, stream: bool = False, source_text: str = ""

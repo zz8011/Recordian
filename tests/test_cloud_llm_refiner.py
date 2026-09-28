@@ -197,7 +197,39 @@ class TestCloudLLMRefinerInit:
 
         assert result == "整理完成"
         assert captured["url"] == "http://192.168.5.111/v1/chat/completions"
+        assert captured["headers"]["Authorization"] == "Bearer test-key"
         assert captured["json"]["chat_template_kwargs"] == {"enable_thinking": False}
+
+    def test_openai_local_endpoint_omits_authorization_without_key(self, monkeypatch) -> None:
+        """Direct local inference should not receive an unrelated gateway key."""
+        from recordian.providers.cloud_llm_refiner import CloudLLMRefiner
+
+        captured: dict[str, object] = {}
+
+        class _Response:
+            status_code = 200
+
+            def json(self) -> dict[str, object]:
+                return {"choices": [{"message": {"content": "整理完成"}}]}
+
+        def _fake_post(url: str, *, headers: dict[str, str], json: dict[str, object], timeout: float) -> _Response:
+            captured["url"] = url
+            captured["headers"] = headers
+            return _Response()
+
+        import requests
+
+        monkeypatch.setattr(requests, "post", _fake_post)
+        refiner = CloudLLMRefiner(
+            api_base="http://192.168.5.111:42102/v1",
+            api_key="",
+            model="qwen38-mtp",
+            api_format="openai",
+        )
+
+        assert refiner.refine("嗯，测试一下") == "整理完成"
+        assert captured["url"] == "http://192.168.5.111:42102/v1/chat/completions"
+        assert captured["headers"] == {"Content-Type": "application/json"}
 
     def test_openai_payload_can_enable_thinking_when_requested(self, monkeypatch) -> None:
         """测试显式开启 thinking 时会透传到 OpenAI 兼容接口"""

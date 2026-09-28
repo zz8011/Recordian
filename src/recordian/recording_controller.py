@@ -245,8 +245,6 @@ def build_ptt_hotkey_handlers(
         if refine_provider == "cloud":
             from .providers import CloudLLMRefiner
             api_key = str(getattr(args, "refine_api_key", "")).strip()
-            if not api_key:
-                raise RuntimeError("使用 cloud provider 需要设置 --refine-api-key")
             api_model = str(getattr(args, "refine_api_model", "")).strip()
             if not api_model:
                 raise RuntimeError("使用 cloud provider 需要设置 --refine-api-model")
