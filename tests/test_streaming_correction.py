@@ -58,10 +58,11 @@ def test_explicit_alias_and_english_normalization_are_immediate() -> None:
 
 
 def test_ascii_alias_next_to_chinese_is_corrected_in_live_preedit() -> None:
-    corrector = _corrector(["clawd→Claude", "Claude", "OpenClaw"], enabled=False)
+    corrector = _corrector(["clawd→Claude", "claw的c→Claude", "Claude", "OpenClaw"], enabled=False)
     try:
         assert corrector.submit("clawd的CLI和OpenClaw") == "Claude的CLI和OpenClaw"
         assert corrector.finish("clawd的CLI和OpenClaw") == "Claude的CLI和OpenClaw"
+        assert corrector.submit("claw的c和claw的cli") == "Claude和claw的cli"
     finally:
         corrector.close()
 

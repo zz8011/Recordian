@@ -129,6 +129,22 @@ def test_ascii_replacement_works_next_to_chinese_without_touching_longer_words()
     assert changes == [("clawd", "Claude")]
 
 
+def test_mixed_script_alias_requires_complete_ascii_suffix() -> None:
+    corrected, changes = correct_hotwords(
+        "claw的c说错了，claw的cli和claw的code暂不替换",
+        ["Claude", "OpenClaw"],
+        replacements=[("claw的c", "Claude")],
+    )
+    assert corrected == "Claude说错了，claw的cli和claw的code暂不替换"
+    assert changes == [("claw的c", "Claude")]
+    versioned, _ = correct_hotwords(
+        "claw的opus5.5很好",
+        ["Claude"],
+        replacements=[("claw的opus", "Claude的Opus"), ("claw的c", "Claude")],
+    )
+    assert versioned == "Claude的Opus5.5很好"
+
+
 def test_protected_spans_skip_number_url_code_and_negation() -> None:
     corrected, changes = correct_hotwords(
         "气温十七度，见 https://example.com/CodeX 和 `CodeX`，不是CodeX，用 CodeX",

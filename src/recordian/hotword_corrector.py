@@ -59,15 +59,16 @@ def _protected_spans(text: str) -> list[tuple[int, int]]:
     return spans
 
 
+def _ascii_word_char(char: str) -> bool:
+    return char.isascii() and (char.isalnum() or char == "_")
+
+
 def _ascii_bounded(text: str, start: int, end: int) -> bool:
     # Chinese characters are Unicode-alphanumeric, but they are valid word
     # neighbours in a mixed-language sentence (clawd的CLI). Only ASCII word
     # characters should block an ASCII alias inside a longer identifier.
-    def ascii_word_char(char: str) -> bool:
-        return char.isascii() and (char.isalnum() or char == "_")
-
-    before_ok = start == 0 or not ascii_word_char(text[start - 1])
-    after_ok = end == len(text) or not ascii_word_char(text[end])
+    before_ok = start == 0 or not _ascii_word_char(text[start - 1])
+    after_ok = end == len(text) or not _ascii_word_char(text[end])
     return before_ok and after_ok
 
 
@@ -404,6 +405,21 @@ def _replace_outside_protected(
             end = index + len(src)
             blocked = _overlaps(index, end, _protected_spans(updated))
             if src.isascii() and not _ascii_bounded(updated, index, end):
+                blocked = True
+            # A mixed-script alias such as claw的c must not consume only the
+            # first ASCII letter of claw的cli or claw的code.
+            if _ascii_word_char(src[0]) and index > 0 and _ascii_word_char(updated[index - 1]):
+                blocked = True
+            # Model names may carry a version immediately after the alias
+            # (claw的opus5.5); only another ASCII letter or underscore means
+            # this was a truncated word (claw的c within claw的cli).
+            if (
+                not src.isascii()
+                and _ascii_word_char(src[-1])
+                and end < len(updated)
+                and updated[end].isascii()
+                and (updated[end].isalpha() or updated[end] == "_")
+            ):
                 blocked = True
             if blocked:
                 search_from = index + 1
