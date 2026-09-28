@@ -97,7 +97,7 @@ Chromium 编辑器还可能将当前预编辑包含在周围文本中；插件�
 | 方法 | 签名 | 说明 |
 |------|------|------|
 | `Ping` | `() → s` | 存活探测，返回 `ok` |
-| `BeginSession` | `(s) → s` | 把流式会话绑定到**当前焦点**且非 dummy、非密码的 IC；返回 `<token> preedit=<0/1> frontend=<f> program=<p> segments=1`。`segments=1` 表示本桥支持 `CommitSegment`；旧桥没有该标记 |
+| `BeginSession` | `(s) → s` | 把流式会话绑定到**当前焦点**且非 dummy、非密码的 IC；返回 `<token> preedit=<0/1> frontend=<f> program=<p> segments=<0/1>`。开始时周围文本有效才返回 `segments=1` 并允许 `CommitSegment`；未知时返回 `segments=0`，客户端继续预编辑、最终一次提交；旧桥没有该标记 |
 | `UpdatePreedit` | `(ss) → s` | 只替换绑定 IC 的 client preedit，不提交、不抢焦点 |
 | `CommitSegment` | `(sus) → s` | 在**同一 token** 上提交一段。`sequence` 从 1 起，每次接受后恰好 +1。重复或跳号拒绝且不写入、不推进、不消费 token。成功返回 `segment <n> <frontend> <program>`（空文本为 `segment <n> cleared`）。失焦、按键、reset、敏感能力、TTL、外来 preedit 与 `CommitSession` 相同，命中则本段不写 |
 | `CommitSession` | `(ss) → s` | 在预输入仍活跃时把最终文本**提交一次**，随后清空 preedit，token 随即失效。分段成功之后仍用开始时的同一个 token |
@@ -142,6 +142,7 @@ Chromium 编辑器还可能将当前预编辑包含在周围文本中；插件�
 - **preedit 能力协商**：`preedit=0` 的 client（未声明
   `CapabilityFlag::Preedit`）上 UpdatePreedit 是 no-op（仍刷新 TTL 活动时
   钟），Python 端退化为“流式只预览、最终一次提交”。
+- **周围文本能力协商**：开始时没有有效周围文本的输入框不能安全预测分段提交回执，返回 `segments=0`。其自身预编辑造成的重复未知快照不使会话失效；失焦、按键、Reset 和外来预编辑仍使会话失效。此模式跨识别连接保留有界文字，结束时才在原会话提交一次。
 - **preedit 不是可回滚保证，CommitSession 也不是唯一的上屏来源**：
   native GTK 实测 toolkit 会在 focus-out / 点击时自行把 client preedit
   commit 掉，`set_text` 也可能不经 IM Reset 落进输入框。inline preedit

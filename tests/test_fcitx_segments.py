@@ -54,6 +54,18 @@ def test_begin_exposes_segments_marker(monkeypatch) -> None:
     assert session.active
 
 
+def test_unknown_surrounding_uses_buffered_continuous_mode(monkeypatch) -> None:
+    from recordian.linux_commit import FcitxCommitter
+
+    def _run(cmd, **kwargs):
+        return _ok('s "abc123 preedit=1 frontend=dbus program=Telegram segments=0"')
+
+    _install(monkeypatch, _run)
+    session = FcitxCommitter().begin_composition("")
+    assert session.supports_segments is False
+    assert session.supports_buffered_continuous is True
+
+
 def test_old_bridge_without_marker_keeps_short_session(monkeypatch) -> None:
     """No segments=1 means commit_segment does not touch the bus."""
     from recordian.linux_commit import FcitxCommitter

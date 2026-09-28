@@ -40,6 +40,15 @@ int main() {
     initializeSurroundingBaseline(gtk, initial);
     assert(acceptPreeditSurrounding(gtk, initial));
 
+    // Qt/DBus editors may never report surrounding text. Their own preedit
+    // refreshes keep the bound token alive, but no segment can be proved.
+    StreamingSession unknownDbus;
+    unknownDbus.frontend = "dbus";
+    unknownDbus.lastPreedit = "正在说话";
+    assert(acceptPreeditSurrounding(unknownDbus, unknown));
+    assert(acceptPreeditSurrounding(unknownDbus, unknown));
+    assert(!acceptPreeditSurrounding(unknownDbus, initial));
+
     // Chromium's empty contenteditable may change its layout newlines
     // between utterances. The first fresh event wins over the old cache.
     StreamingSession emptyEditor;

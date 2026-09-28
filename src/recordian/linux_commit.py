@@ -201,6 +201,7 @@ class FcitxStreamingSession:
         preedit_capable: bool,
         info: str = "",
         supports_segments: bool = False,
+        supports_buffered_continuous: bool = False,
     ) -> None:
         self.committer = committer
         self.token = token
@@ -209,6 +210,7 @@ class FcitxStreamingSession:
         # True only when BeginSession's descriptor carried segments=1.
         # Older bridges omit the marker and keep the short-session API.
         self.supports_segments = bool(supports_segments)
+        self.supports_buffered_continuous = bool(supports_buffered_continuous)
         self.stale_reason = ""
         self._closed = False
         self._next_segment = 1
@@ -489,11 +491,13 @@ class FcitxCommitter(TextCommitter):
         preedit_capable = "preedit=1" in parts[1:]
         # Exact field. Older bridges omit it; "segments=10" must not match.
         supports_segments = "segments=1" in parts[1:]
+        supports_buffered_continuous = "segments=0" in parts[1:] and preedit_capable
         return FcitxStreamingSession(
             self,
             token,
             preedit_capable=preedit_capable,
             supports_segments=supports_segments,
+            supports_buffered_continuous=supports_buffered_continuous,
             info=descriptor,
         )
 

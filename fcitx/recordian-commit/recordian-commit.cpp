@@ -283,6 +283,7 @@ struct StreamingSession {
     // Next CommitSegment sequence. Starts at 1; only an accepted segment
     // advances it by one. The token stays live across those commits.
     uint32_t nextSegment = 1;
+    bool segmentSafe = false;
     SegmentAck ack{};
     // Last preedit text this session wrote into the context ("" once
     // cleared). Used to only ever remove preedit that is still ours.
@@ -414,6 +415,12 @@ bool acceptPreeditSurrounding(StreamingSession &session,
             }
         }
         return false;
+    }
+    // A client that never supplies surrounding text can repeat an unknown
+    // snapshot while our own preedit changes. Focus, key and reset guards
+    // still apply; such a session cannot safely commit intermediate segments.
+    if (session.nextSegment == 1 && !observed.valid && !ack.hasAccepted) {
+        return true;
     }
     if (session.nextSegment != 1 || session.frontend != "wayland_v2") {
         return false;
@@ -555,7 +562,9 @@ public:
         session.preeditCapable =
             ic->capabilityFlags().test(fcitx::CapabilityFlag::Preedit);
         session.lastActive = std::chrono::steady_clock::now();
-        initializeSurroundingBaseline(session, readSurround(ic));
+        const SurroundSnap initialSurround = readSurround(ic);
+        session.segmentSafe = initialSurround.valid;
+        initializeSurroundingBaseline(session, initialSurround);
         const std::string token = session.token;
         const bool preeditCapable = session.preeditCapable;
         const std::string frontend = session.frontend;
@@ -575,7 +584,8 @@ public:
             setClientPreedit(ic, initialPreedit);
         }
         return token + " preedit=" + (preeditCapable ? "1" : "0") +
-               " frontend=" + frontend + " program=" + program + " segments=1";
+               " frontend=" + frontend + " program=" + program +
+               (initialSurround.valid ? " segments=1" : " segments=0");
     }
 
     std::string CommitSegment(const std::string &token, uint32_t sequence,
@@ -594,6 +604,11 @@ public:
                 throw fcitx::dbus::MethodCallError(
                     kErrorStale,
                     "session already committed or cancelled (org.fcitx.Fcitx.Recordian.Error.StaleSession)");
+            }
+            if (!entry->segmentSafe) {
+                throw fcitx::dbus::MethodCallError(
+                    kErrorSequence,
+                    "surrounding text is unavailable for segment commits (org.fcitx.Fcitx.Recordian.Error.BadSequence)");
             }
             // Reject before any write and before consuming the token.
             // Duplicate (sequence already accepted) and skip (sequence

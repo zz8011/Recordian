@@ -383,6 +383,36 @@ def test_ninety_seconds_rotate_exact_samples_and_single_capture() -> None:
     assert h.fatals == []
 
 
+def test_unknown_surrounding_rotates_audio_but_commits_only_once() -> None:
+    session = _FakeCompositionSession()
+    session.supports_segments = False
+    session.supports_buffered_continuous = True
+    provider = _FakeProvider(["第一段。", "第二段。"])
+    h = _Harness(reader=_Reader(_speech(25.0)), provider=provider, session=session)
+    worker = h.run()
+
+    assert len(provider.sessions) == 2
+    assert session.segments == []
+    assert session.commits == ["第一段。第二段。"]
+    assert "第一段。" in session.preedits
+    assert worker.final_text == "第一段。第二段。"
+    assert worker.segments_committed == 0
+    assert worker.outcome == "committed"
+
+
+def test_unknown_surrounding_stale_preedit_never_commits() -> None:
+    session = _FakeCompositionSession()
+    session.supports_segments = False
+    session.supports_buffered_continuous = True
+    session.preedit_result = _Result(False, outcome="stale")
+    h = _Harness(reader=_Reader(_speech(1.0)), provider=_FakeProvider(["文字"]), session=session)
+    worker = h.run()
+
+    assert session.segments == []
+    assert session.commits == []
+    assert worker.outcome == "stale"
+
+
 # ---------------------------------------------------------------------------
 # Raw held tail across a boundary, through the REAL formatting chain
 # ---------------------------------------------------------------------------

@@ -603,7 +603,10 @@ def _start_realtime_asr_worker(
 
             if (
                 session is not None
-                and bool(getattr(session, "supports_segments", False))
+                and (
+                    bool(getattr(session, "supports_segments", False))
+                    or bool(getattr(session, "supports_buffered_continuous", False))
+                )
                 and callable(getattr(session, "commit_segment", None))
                 and getattr(provider, "provider_name", "") == "confucius-asr"
             ):

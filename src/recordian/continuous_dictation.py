@@ -93,6 +93,8 @@ def run_continuous_dictation(
     corrector: Any = None
     segment_index = 0
     committed_chars_total = 0
+    buffered_canonical = ""
+    commit_segments = bool(getattr(session, "supports_segments", False))
     failed = False
     live = {"asr": None}
     # Audio-counted IME inactivity: the composition token dies after 120 s
@@ -295,6 +297,7 @@ def run_continuous_dictation(
 
     def _commit_piece(prefix_raw: str) -> bool:
         nonlocal context_tail, committed_chars_total, ime_idle_samples, last_display
+        nonlocal buffered_canonical
         nonlocal last_partial_snapshot
         if not prefix_raw:
             return True
@@ -309,6 +312,17 @@ def run_continuous_dictation(
         if cancel_event.is_set():
             _fail("realtime_cancelled", outcome="cancelled")
             return False
+        if not commit_segments:
+            if len(buffered_canonical) + len(canonical) > _HISTORY_CHARS:
+                _fail("buffered_text_limit", outcome="uncertain")
+                return False
+            buffered_canonical += canonical
+            if not _preedit(buffered_canonical):
+                return False
+            last_partial_snapshot = None
+            context_tail = (context_tail + canonical)[-guard.CONTINUOUS_CONTEXT_CHARS :]
+            _note(canonical)
+            return True
         if not _preedit(canonical):
             return False
         if cancel_event.is_set():
@@ -402,12 +416,13 @@ def run_continuous_dictation(
             formatter.close()
         except Exception:  # noqa: BLE001
             pass
-        worker.semif_applied = bool(snapshot)
+        worker.semif_applied = bool(snapshot or buffered_canonical)
         held_raw = ""
+        final_text = buffered_canonical + canonical
         if cancel_event.is_set():
             _fail("realtime_cancelled", outcome="cancelled")
             return False
-        if refine_enabled and int(worker.segments_committed) == 0 and canonical.strip():
+        if refine_enabled and int(worker.segments_committed) == 0 and final_text.strip():
             _note(canonical)
             worker.composition_session = session
             worker.outcome = "released_for_refine"
@@ -419,7 +434,7 @@ def run_continuous_dictation(
             }
             _emit(segment_index, samples, 0)
             return True
-        if not canonical.strip():
+        if not final_text.strip():
             try:
                 session.cancel()
             except Exception:  # noqa: BLE001
@@ -448,12 +463,12 @@ def run_continuous_dictation(
         if cancel_event.is_set():
             _fail("realtime_cancelled_before_commit", outcome="cancelled")
             return False
-        if not _preedit(canonical):
+        if not _preedit(final_text):
             return False
         if cancel_event.is_set():
             _fail("realtime_cancelled_before_commit", outcome="cancelled")
             return False
-        result = session.commit(canonical)
+        result = session.commit(final_text)
         committed = bool(getattr(result, "committed", False))
         outcome = str(getattr(result, "outcome", "") or ("committed" if committed else "uncertain"))
         if not committed:
@@ -485,7 +500,7 @@ def run_continuous_dictation(
                 send_hard_enter(streaming_committer)
             except Exception:  # noqa: BLE001
                 pass
-        _emit(segment_index, samples, committed_chars_total + len(canonical))
+        _emit(segment_index, samples, committed_chars_total + len(final_text))
         return True
 
     try:
@@ -576,7 +591,7 @@ def run_continuous_dictation(
                 except Exception:  # noqa: BLE001
                     pass
                 # Normalise for DISPLAY only; held_raw stays raw.
-                if not _preedit(normalize_final_text(display)):
+                if not _preedit(buffered_canonical + normalize_final_text(display)):
                     return
             # TTL keepalive: the composition token expires after 120 s of
             # IME inactivity. Long silence commits nothing, so re-touch the
