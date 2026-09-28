@@ -4,7 +4,7 @@ import pytest
 
 from recordian import wayland_desktop as desktop
 from recordian.exceptions import CommitError
-from recordian.linux_commit import FcitxCommitter, NoopCommitter
+from recordian.linux_commit import FcitxCommitter, NoopCommitter, resolve_streaming_committer
 
 
 def test_codex_compatibility_selected_before_fcitx_session(monkeypatch):
@@ -17,6 +17,11 @@ def test_codex_compatibility_selected_before_fcitx_session(monkeypatch):
     assert selected.address == "0x123"
     active["class"] = "gtk-editor"
     assert desktop.select_desktop_committer(original) is original
+    assert original.target_window_address == "0x123"
+    assert original.target_xwayland is False
+    streaming = resolve_streaming_committer(original)
+    assert streaming.target_window_address == "0x123"
+    assert streaming.target_xwayland is False
     noop = NoopCommitter()
     assert desktop.select_desktop_committer(noop) is noop
 

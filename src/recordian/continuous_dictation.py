@@ -497,9 +497,10 @@ def run_continuous_dictation(
                 delay = paste_to_enter_delay_seconds(result)
                 if delay > 0:
                     time.sleep(delay)
-                send_hard_enter(streaming_committer)
-            except Exception:  # noqa: BLE001
-                pass
+                enter_result = send_hard_enter(streaming_committer)
+                worker.commit_info["detail"] = f"{detail};{enter_result.detail}"
+            except Exception as exc:  # noqa: BLE001
+                worker.commit_info["detail"] = f"{detail};hard_enter_failed:{type(exc).__name__}"
         _emit(segment_index, samples, committed_chars_total + len(final_text))
         return True
 

@@ -230,6 +230,35 @@ def test_send_hard_enter_xdotool_clipboard(monkeypatch) -> None:
     assert "focus_before:12345" in result.detail
 
 
+def test_fcitx_native_wayland_enter_uses_wtype_after_focus_check(monkeypatch) -> None:
+    from recordian.linux_commit import FcitxCommitter, send_hard_enter
+
+    calls = []
+    monkeypatch.setattr("recordian.wayland_desktop.desktop_query", lambda _: {
+        "address": "0xtarget", "xwayland": False,
+    })
+    monkeypatch.setattr("recordian.linux_commit.which", lambda name: "/usr/bin/" + name)
+    monkeypatch.setattr("recordian.linux_commit.time.sleep", lambda seconds: calls.append(("wait", seconds)))
+    monkeypatch.setattr("recordian.linux_commit._run_command", lambda cmd: calls.append(("key", cmd)))
+    monkeypatch.setattr("recordian.linux_commit._xdotool_hard_return", lambda **kw: (_ for _ in ()).throw(AssertionError("X11 Enter")))
+
+    result = send_hard_enter(FcitxCommitter(target_window_address="0xtarget", target_xwayland=False))
+    assert result.committed
+    assert calls == [("wait", 0.12), ("key", ["wtype", "-k", "Return"])]
+
+
+def test_fcitx_enter_refuses_changed_window(monkeypatch) -> None:
+    from recordian.linux_commit import FcitxCommitter, send_hard_enter
+
+    monkeypatch.setattr("recordian.wayland_desktop.desktop_query", lambda _: {
+        "address": "0xother", "xwayland": False,
+    })
+    monkeypatch.setattr("recordian.linux_commit._run_command", lambda cmd: (_ for _ in ()).throw(AssertionError("unexpected key")))
+    result = send_hard_enter(FcitxCommitter(target_window_address="0xtarget", target_xwayland=False))
+    assert not result.committed
+    assert result.detail == "hard_enter_failed:focus_changed"
+
+
 def test_send_hard_enter_unsupported_backend() -> None:
     from recordian.linux_commit import NoopCommitter, send_hard_enter
 

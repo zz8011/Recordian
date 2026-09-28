@@ -221,6 +221,7 @@ class _Harness:
         provider: _FakeProvider,
         session: _FakeCompositionSession | None = None,
         refine_enabled: bool = False,
+        auto_hard_enter: bool = False,
         hotwords: list[str] | None = None,
         build_corrector: object = None,
     ) -> None:
@@ -231,6 +232,7 @@ class _Harness:
         self.fatals: list[str] = []
         self.corrector_contexts: list[str] = []
         self.refine_enabled = refine_enabled
+        self.auto_hard_enter = auto_hard_enter
         self.hotwords = list(hotwords or [])
         self.cancel_event = threading.Event()
         self.worker = _RealtimeASRWorkerHandle(thread=threading.Thread(target=lambda: None))
@@ -260,7 +262,7 @@ class _Harness:
             on_state=self.events.append,
             on_capture_fatal=self.fatals.append,
             refine_enabled=self.refine_enabled,
-            auto_hard_enter=False,
+            auto_hard_enter=self.auto_hard_enter,
             streaming_committer=SimpleNamespace(backend_name="fcitx"),
         )
         return self.worker
@@ -411,6 +413,21 @@ def test_unknown_surrounding_stale_preedit_never_commits() -> None:
     assert session.segments == []
     assert session.commits == []
     assert worker.outcome == "stale"
+
+
+def test_auto_enter_failure_is_visible_after_successful_text_commit(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "recordian.linux_commit.send_hard_enter",
+        lambda _: _Result(False, detail="hard_enter_failed:focus_changed"),
+    )
+    h = _Harness(
+        reader=_Reader(_speech(1.0)), provider=_FakeProvider(["文字"]),
+        auto_hard_enter=True,
+    )
+    worker = h.run()
+    assert h.session.commits == ["文字"]
+    assert worker.outcome == "committed"
+    assert "hard_enter_failed:focus_changed" in worker.commit_info["detail"]
 
 
 # ---------------------------------------------------------------------------

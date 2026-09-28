@@ -59,6 +59,9 @@ def select_desktop_committer(committer: TextCommitter) -> TextCommitter:
         active = desktop_query("activewindow")
     except (OSError, ValueError, subprocess.SubprocessError):
         return committer
+    address = active.get("address")
+    committer.target_window_address = address if isinstance(address, str) else ""
+    committer.target_xwayland = bool(active.get("xwayland", True))
     if active.get("class", "").lower() in {"chatgpt", "codex"} and not active.get("xwayland", True):
         if _wayland_ime_enabled(active.get("pid")):
             return committer

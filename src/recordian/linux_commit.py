@@ -462,9 +462,14 @@ class FcitxCommitter(TextCommitter):
 
     backend_name = "fcitx"
 
-    def __init__(self, target_window_id: int | None = None, *, streaming: bool = False) -> None:
+    def __init__(
+        self, target_window_id: int | None = None, *, streaming: bool = False,
+        target_window_address: str = "", target_xwayland: bool | None = None,
+    ) -> None:
         self.target_window_id = target_window_id
         self.streaming = bool(streaming)
+        self.target_window_address = target_window_address
+        self.target_xwayland = target_xwayland
         self._focused_once = False
 
     def begin_composition(self, initial_preview: str = "") -> FcitxStreamingSession:
@@ -610,6 +615,29 @@ def send_hard_enter(committer: TextCommitter) -> CommitResult:
 
         if target_backend in {"none", "stdout"}:
             return CommitResult(backend=backend, committed=False, detail="hard_enter_unsupported_backend")
+
+        address = getattr(target_committer, "target_window_address", "")
+        if not address and target_backend == "wayland-clipboard":
+            address = getattr(target_committer, "address", "")
+        if isinstance(address, str) and address:
+            from .wayland_desktop import desktop_query
+
+            active = desktop_query("activewindow")
+            if active.get("address") != address:
+                return CommitResult(backend=backend, committed=False, detail="hard_enter_failed:focus_changed")
+            if target_backend in {"fcitx", "wayland-clipboard"}:
+                # Rich editors finish composition asynchronously after the
+                # Fcitx commit call. Enter during that interval selects an
+                # IME candidate or inserts a line break instead of submitting.
+                time.sleep(0.12)
+                active = desktop_query("activewindow")
+                if active.get("address") != address:
+                    return CommitResult(backend=backend, committed=False, detail="hard_enter_failed:focus_changed")
+            if not active.get("xwayland", True):
+                if not which("wtype"):
+                    raise CommitError("wtype not found in PATH")
+                _run_command(["wtype", "-k", "Return"])
+                return CommitResult(backend=backend, committed=True, detail="hard_enter_sent:wayland")
 
         if target_backend == "wtype":
             if not which("wtype"):
@@ -920,6 +948,8 @@ def resolve_streaming_committer(committer: TextCommitter) -> TextCommitter:
             if isinstance(fcitx_committer.target_window_id, int)
             else None,
             streaming=True,
+            target_window_address=fcitx_committer.target_window_address,
+            target_xwayland=fcitx_committer.target_xwayland,
         )
     return committer
 
