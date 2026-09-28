@@ -14,7 +14,7 @@ def _preview(value: str, limit: int = 180) -> str:
 def feedback_message(task: dict, agent_name: str) -> tuple[str, str, str]:
     status = task['status']
     if status == 'running':
-        return f'{agent_name} 已收到语音任务', '正在执行。完成后会再次提醒；可在 Recordian Agent 面板查看进度。', 'low'
+        return f'正在交给 {agent_name}', '语音指令已识别，正在提交和执行。完成后会再次提醒。', 'low'
     if status == 'completed':
         reply = _preview(str(task.get('reply') or '任务已完成，Hermes 没有返回文字。'))
         return f'{agent_name} 已完成', reply, 'normal'
