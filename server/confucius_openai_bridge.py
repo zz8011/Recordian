@@ -52,12 +52,10 @@ async def _transcribe(pcm: bytes, language: str) -> str:
     async with connect(WS_URL, max_size=2**22) as ws:
         await ws.send(json.dumps(header))
         await ws.recv()  # {"status":"connected",...}
+        # ponytail: server queue is 512 frames (covers the 30s session budget);
+        # inference p50 ~3ms/frame drains it instantly — blast, no pacing.
         for i in range(0, len(pcm), FRAME_BYTES):
             await ws.send(pcm[i:i + FRAME_BYTES])
-            # ponytail: server queue is 32 frames (5.1s) and the official client
-            # paces at realtime; blasting fast = 1008 backpressure. Ceiling: if
-            # server ever grows a credit/budget feedback msg, drop this sleep.
-            await asyncio.sleep(FRAME_BYTES / (SAMPLE_RATE * 2))
         await ws.send(EOS)
         while True:
             msg = json.loads(await ws.recv())
