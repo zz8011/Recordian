@@ -40,6 +40,8 @@ class CommitResult:
     # "uncertain"  - transport failure after a possibly-applied write
     #                (timeout, lost reply); the write state is unknown
     # "cancelled"  - preedit cleared without committing (our own choice)
+    # "buffered"   - segment write was refused before any write; the bound
+    #                composition remains live for one final CommitSession
     outcome: str = ""
 
 
@@ -267,6 +269,12 @@ class FcitxStreamingSession:
                 detail=f"preedit_stale:{reason}:{message}",
                 outcome="stale",
             )
+        if "segments=0" in detail.split():
+            # The Wayland client revealed a composition echo that cannot
+            # prove intermediate writes. This is a one-way capability change.
+            with self._lock:
+                self.supports_segments = False
+                self.supports_buffered_continuous = self.preedit_capable
         return CommitResult(backend="fcitx", committed=True, detail=detail, outcome="committed")
 
     def commit_segment(self, text: str) -> CommitResult:
@@ -308,6 +316,17 @@ class FcitxStreamingSession:
         except (CommitError, OSError) as exc:
             message = str(exc)
             error_name = _parse_dbus_error_name(message)
+            if error_name == "SegmentsUnsafe":
+                # The addon rejected this segment BEFORE commitString and
+                # retained the token. Keep the shown preedit and finish in
+                # buffered mode; a lost/unknown reply never takes this path.
+                with self._lock:
+                    self.supports_segments = False
+                    self.supports_buffered_continuous = self.preedit_capable
+                return CommitResult(
+                    backend="fcitx", committed=False,
+                    detail="segments_unsafe_buffered", outcome="buffered",
+                )
             stale = error_name == "StaleSession" or "StaleSession" in message
             with self._lock:
                 self._closed = True

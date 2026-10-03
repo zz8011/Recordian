@@ -843,6 +843,49 @@ def test_begin_composition_parses_busctl_typed_descriptor(monkeypatch):
     assert session.active
 
 
+def test_preedit_capability_downgrades_segment_writes(monkeypatch) -> None:
+    session = linux_commit.FcitxStreamingSession(
+        linux_commit.FcitxCommitter(), "token", preedit_capable=True,
+        supports_segments=True,
+    )
+    calls: list[str] = []
+
+    def bus(method: str, signature: str, values: list[str]) -> str:
+        calls.append(method)
+        return "updated segments=0" if method == "UpdatePreedit" else "cleared"
+
+    monkeypatch.setattr(linux_commit, "_fcitx_busctl_call", bus)
+    assert session.update_preedit("自己输入的预编辑").committed
+    assert not session.supports_segments
+    assert session.supports_buffered_continuous
+    assert session.commit("最终文字").committed
+    assert calls == ["UpdatePreedit", "CommitSession"]
+
+
+def test_segment_unsafe_refusal_preserves_bound_session(monkeypatch) -> None:
+    session = linux_commit.FcitxStreamingSession(
+        linux_commit.FcitxCommitter(), "token", preedit_capable=True,
+        supports_segments=True,
+    )
+    calls: list[str] = []
+
+    def bus(method: str, signature: str, values: list[str]) -> str:
+        calls.append(method)
+        if method == "CommitSegment":
+            raise linux_commit.CommitError(
+                "CommitSegment: Call failed: surrounding text unsafe "
+                "(org.fcitx.Fcitx.Recordian.Error.SegmentsUnsafe)"
+            )
+        return "committed wayland_v2 editor" if method == "CommitSession" else "updated"
+
+    monkeypatch.setattr(linux_commit, "_fcitx_busctl_call", bus)
+    result = session.commit_segment("第一段")
+    assert result.outcome == "buffered" and not result.committed
+    assert session.active and not session.supports_segments
+    assert session.commit("第一段后续").committed
+    assert calls == ["CommitSegment", "CommitSession"]
+
+
 def test_session_commit_busctl_reply_marks_committed(monkeypatch):
     """session.commit succeeds when busctl replies 's "committed ..."'."""
     from recordian.linux_commit import FcitxCommitter

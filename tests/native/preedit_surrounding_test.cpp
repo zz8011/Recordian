@@ -64,12 +64,14 @@ int main() {
     // (11 bytes, caret 3). These are our changing composition, not user edits.
     StreamingSession chromium;
     chromium.frontend = "wayland_v2";
+    chromium.segmentSafe = true;
     chromium.lastPreedit = "我";
     rememberPreedit(chromium, "我");
     assert(acceptPreeditSurrounding(chromium, {true, "我\n\n", 1, 1}));
     chromium.lastPreedit = "我想说";
     rememberPreedit(chromium, "我想说");
     assert(acceptPreeditSurrounding(chromium, {true, "我想说\n\n", 3, 3}));
+    assert(chromium.segmentSafe);
     assert(sameSnap(chromium.ack.accepted, {true, "\n\n", 0, 0}));
     chromium.lastPreedit = "我想试";
     rememberPreedit(chromium, "我想试");
@@ -121,23 +123,26 @@ int main() {
     rememberPreedit(gtk, "文字");
     assert(!acceptPreeditSurrounding(gtk, {true, "草稿文字\n", 4, 4}));
 
-    // Antigravity reports its composition in surrounding text with the
-    // caret anchored at the start. A changing OWN preedit must stay live.
-    StreamingSession antigravity;
-    antigravity.frontend = "wayland_v2";
-    antigravity.program = "antigravity";
-    antigravity.lastPreedit = "登";
-    rememberPreedit(antigravity, "登");
-    assert(acceptPreeditSurrounding(antigravity,
+    // Any Wayland editor may report composition in surrounding text with
+    // the caret anchored at its start. Keep OWN preedit and downgrade only
+    // segment commits, regardless of the application's program name.
+    StreamingSession anchored;
+    anchored.frontend = "wayland_v2";
+    anchored.program = "another-editor";
+    anchored.segmentSafe = true;
+    anchored.lastPreedit = "登";
+    rememberPreedit(anchored, "登");
+    assert(acceptPreeditSurrounding(anchored,
                                     {true, "前登后", 1, 1}));
-    antigravity.lastPreedit = "登录";
-    rememberPreedit(antigravity, "登录");
-    assert(acceptPreeditSurrounding(antigravity,
+    anchored.lastPreedit = "登录";
+    rememberPreedit(anchored, "登录");
+    assert(acceptPreeditSurrounding(anchored,
                                     {true, "前登录后", 1, 1}));
-    assert(sameSnap(antigravity.ack.accepted, {true, "前后", 1, 1}));
-    assert(!acceptPreeditSurrounding(antigravity,
+    assert(!anchored.segmentSafe);
+    assert(sameSnap(anchored.ack.accepted, {true, "前后", 1, 1}));
+    assert(!acceptPreeditSurrounding(anchored,
                                      {true, "前登录改", 1, 1}));
-    assert(!acceptPreeditSurrounding(antigravity,
+    assert(!acceptPreeditSurrounding(anchored,
                                      {true, "前登录后", 2, 2}));
 
     // A capped 4 KiB window may move its outer edges, but a local edit
@@ -148,14 +153,34 @@ int main() {
         std::string(1797, 'a') + "登录" + std::string(2200, 'b'), 1797, 1797};
     StreamingSession clipped;
     clipped.frontend = "wayland_v2";
-    clipped.program = "antigravity";
+    clipped.program = "second-editor";
+    clipped.segmentSafe = true;
     clipped.lastPreedit = "登";
     rememberPreedit(clipped, "登");
     assert(acceptPreeditSurrounding(clipped, clippedBefore));
     clipped.lastPreedit = "登录";
     rememberPreedit(clipped, "登录");
     assert(acceptPreeditSurrounding(clipped, clippedAfter));
+    assert(!clipped.segmentSafe);
     assert(!acceptPreeditSurrounding(clipped,
         {true, std::string(1797, 'a') + "登录X" +
                    std::string(2199, 'b'), 1797, 1797}));
+
+    // An exact composition echo in a long document must not be mistaken
+    // for a clipped window and disable otherwise safe segment commits.
+    StreamingSession longExact;
+    longExact.frontend = "wayland_v2";
+    longExact.program = "third-editor";
+    longExact.segmentSafe = true;
+    longExact.lastPreedit = "登";
+    rememberPreedit(longExact, "登");
+    const auto longLeft = std::string(1800, 'a');
+    const auto longRight = std::string(2200, 'b');
+    assert(acceptPreeditSurrounding(longExact,
+        {true, longLeft + "登" + longRight, 1801, 1801}));
+    longExact.lastPreedit = "登录";
+    rememberPreedit(longExact, "登录");
+    assert(acceptPreeditSurrounding(longExact,
+        {true, longLeft + "登录" + longRight, 1802, 1802}));
+    assert(longExact.segmentSafe);
 }

@@ -402,6 +402,44 @@ def test_unknown_surrounding_rotates_audio_but_commits_only_once() -> None:
     assert worker.outcome == "committed"
 
 
+def test_wayland_echo_downgrades_any_editor_before_first_segment() -> None:
+    session = _FakeCompositionSession()
+    original_update = session.update_preedit
+
+    def update_and_downgrade(text: str) -> _Result:
+        result = original_update(text)
+        session.supports_segments = False
+        session.supports_buffered_continuous = True
+        return result
+
+    session.update_preedit = update_and_downgrade  # type: ignore[method-assign]
+    h = _Harness(reader=_Reader(_speech(25.0)),
+                 provider=_FakeProvider(["第一段。", "第二段。"]), session=session)
+    worker = h.run()
+
+    assert session.segments == []
+    assert session.commits == ["第一段。第二段。"]
+    assert worker.segments_committed == 0
+    assert worker.outcome == "committed"
+
+
+def test_segments_unsafe_refusal_buffers_tail_after_committed_prefix() -> None:
+    session = _FakeCompositionSession()
+    session.fail_segment_at = 2
+    session.fail_segment_outcome = "buffered"
+    payload = (_speech(20.0) + _silence(0.4) + _speech(24.0)
+               + _speech(23.6) + _silence(0.4) + _speech(21.6))
+    h = _Harness(reader=_Reader(payload),
+                 provider=_FakeProvider(["第一段。", "第二段。", "第三段。", "最后一段。"]),
+                 session=session)
+    worker = h.run()
+
+    assert session.segments == ["第一段。", "第二段。"]
+    assert session.commits == ["第二段。第三段。最后一段。"]
+    assert worker.segments_committed == 1
+    assert worker.outcome == "committed"
+
+
 def test_unknown_surrounding_stale_preedit_never_commits() -> None:
     session = _FakeCompositionSession()
     session.supports_segments = False

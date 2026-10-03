@@ -811,7 +811,9 @@ def main() -> int:
         token_ok = bool(re.fullmatch(r"[0-9a-f]{20,}", session.token))
         record("s1_token_parsed_from_busctl_reply", token_ok, f"token={session.token[:8]}… preedit_capable={session.preedit_capable} info={session.info}")
         up = session.update_preedit("预编辑 你好 🎙️ ünïcödé 中文English123")
-        record("s1_update_unicode", up.committed and up.detail == "updated", f"detail={up.detail}")
+        record("s1_update_unicode",
+               up.committed and up.detail in {"updated", "updated segments=0", "updated segments=1"},
+               f"detail={up.detail}")
         preedit_seen = False
         deadline = time.monotonic() + 3.0
         while time.monotonic() < deadline:

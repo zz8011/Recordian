@@ -131,6 +131,8 @@ constexpr char kErrorPreedit[] =
     "org.fcitx.Fcitx.Recordian.Error.ExistingPreedit";
 constexpr char kErrorSequence[] =
     "org.fcitx.Fcitx.Recordian.Error.BadSequence";
+constexpr char kErrorSegmentsUnsafe[] =
+    "org.fcitx.Fcitx.Recordian.Error.SegmentsUnsafe";
 
 constexpr auto kSessionTTL = std::chrono::seconds(120);
 constexpr std::size_t kMaxSessions = 8;
@@ -344,9 +346,9 @@ bool removeOwnPreeditAtCaret(const SurroundSnap &observed,
 }
 
 bool sameClippedBase(const SurroundSnap &a, const SurroundSnap &b) {
-    // Antigravity's editor caps its surrounding-text window near 4 KiB. As
-    // the composition changes, a few characters can enter/leave the OUTER
-    // ends of that window. Require exact text on both sides of the caret;
+    // Some Wayland editors cap their surrounding-text window near 4 KiB. As
+    // the composition changes, characters can enter/leave the OUTER ends.
+    // Require exact text on both sides of the caret;
     // never accept a local edit or a changed selection as window movement.
     if (!a.valid || !b.valid || a.cursor != a.anchor ||
         b.cursor != b.anchor || a.text.size() < 3500 ||
@@ -377,10 +379,9 @@ bool sameClippedBase(const SurroundSnap &a, const SurroundSnap &b) {
            rightA.compare(0, rightN, rightB, 0, rightN) == 0;
 }
 
-bool antigravityPreeditEcho(StreamingSession &session,
-                            const SurroundSnap &observed) {
+bool waylandPreeditEcho(StreamingSession &session,
+                       const SurroundSnap &observed) {
     if (session.frontend != "wayland_v2" ||
-        session.program != "antigravity" ||
         session.lastPreedit.empty() || !observed.valid ||
         !session.ack.hasAccepted || session.ack.armed ||
         session.ack.poisoned) {
@@ -389,25 +390,40 @@ bool antigravityPreeditEcho(StreamingSession &session,
     struct Candidate {
         SurroundSnap snap;
         bool removedOwnPreedit;
+        bool caretAtCompositionStart;
     };
-    std::vector<Candidate> bases{{session.ack.accepted, false}};
-    std::vector<Candidate> observations{{observed, false}};
+    std::vector<Candidate> bases{{session.ack.accepted, false, false}};
+    std::vector<Candidate> observations{{observed, false, false}};
     for (const auto &text : session.preeditHistory) {
         SurroundSnap stripped;
-        if (removeOwnPreedit(session.ack.accepted, text, &stripped) ||
-            removeOwnPreeditAtCaret(session.ack.accepted, text, &stripped)) {
-            bases.push_back({stripped, true});
+        if (removeOwnPreedit(session.ack.accepted, text, &stripped)) {
+            bases.push_back({stripped, true, false});
         }
-        if (removeOwnPreedit(observed, text, &stripped) ||
-            removeOwnPreeditAtCaret(observed, text, &stripped)) {
-            observations.push_back({stripped, true});
+        if (removeOwnPreeditAtCaret(session.ack.accepted, text, &stripped)) {
+            bases.push_back({stripped, true, true});
+        }
+        if (removeOwnPreedit(observed, text, &stripped)) {
+            observations.push_back({stripped, true, false});
+        }
+        if (removeOwnPreeditAtCaret(observed, text, &stripped)) {
+            observations.push_back({stripped, true, true});
         }
     }
     for (const auto &base : bases) {
         for (const auto &candidate : observations) {
-            if (sameSnap(base.snap, candidate.snap) ||
-                ((base.removedOwnPreedit || candidate.removedOwnPreedit) &&
-                 sameClippedBase(base.snap, candidate.snap))) {
+            const bool exact = sameSnap(base.snap, candidate.snap);
+            const bool clipped =
+                !exact &&
+                (base.removedOwnPreedit || candidate.removedOwnPreedit) &&
+                sameClippedBase(base.snap, candidate.snap);
+            if (exact || clipped) {
+                if (base.caretAtCompositionStart ||
+                    candidate.caretAtCompositionStart || clipped) {
+                    // A client with this echo format cannot prove the exact
+                    // surrounding-text ack required for CommitSegment.
+                    // Keep the composition bound and buffer subsequent text.
+                    session.segmentSafe = false;
+                }
                 session.ack.accepted = base.snap;
                 session.initialEchoCandidates.clear();
                 return true;
@@ -477,7 +493,7 @@ bool acceptPreeditSurrounding(StreamingSession &session,
             ownPreeditEcho(session, ack.accepted, observed)) {
             return true;
         }
-        if (antigravityPreeditEcho(session, observed)) {
+        if (waylandPreeditEcho(session, observed)) {
             return true;
         }
         if (session.frontend == "wayland_v2" &&
@@ -660,13 +676,6 @@ public:
         session.lastActive = std::chrono::steady_clock::now();
         const SurroundSnap initialSurround = readSurround(ic);
         session.segmentSafe = initialSurround.valid;
-        // This editor's capped Wayland surrounding-text window cannot prove
-        // the exact echo required for intermediate CommitSegment writes.
-        // Keep live preedit, then commit the buffered final on the bound token.
-        if (session.frontend == "wayland_v2" &&
-            session.program == "antigravity") {
-            session.segmentSafe = false;
-        }
         const bool segmentSafe = session.segmentSafe;
         initializeSurroundingBaseline(session, initialSurround);
         const std::string token = session.token;
@@ -711,8 +720,8 @@ public:
             }
             if (!entry->segmentSafe) {
                 throw fcitx::dbus::MethodCallError(
-                    kErrorSequence,
-                    "surrounding text is unavailable for segment commits (org.fcitx.Fcitx.Recordian.Error.BadSequence)");
+                    kErrorSegmentsUnsafe,
+                    "surrounding text cannot prove segment commits (org.fcitx.Fcitx.Recordian.Error.SegmentsUnsafe)");
             }
             // Reject before any write and before consuming the token.
             // Duplicate (sequence already accepted) and skip (sequence
@@ -848,7 +857,7 @@ public:
         entry->lastPreedit = text;
         setClientPreedit(ic, text);
         entry->lastActive = std::chrono::steady_clock::now();
-        return "updated";
+        return entry->segmentSafe ? "updated segments=1" : "updated segments=0";
     }
 
     std::string CommitSession(const std::string &token,

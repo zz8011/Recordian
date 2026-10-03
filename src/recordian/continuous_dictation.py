@@ -256,7 +256,7 @@ def run_continuous_dictation(
         the current (possibly empty) preedit again — no new text, no new
         BeginSession. A cancel observed here means zero further writes.
         """
-        nonlocal ime_idle_samples, last_display
+        nonlocal ime_idle_samples, last_display, commit_segments
         if cancel_event.is_set():
             _fail("realtime_cancelled", outcome="cancelled")
             return False
@@ -269,6 +269,8 @@ def run_continuous_dictation(
         result = session.update_preedit(shown)
         if bool(getattr(result, "committed", False)):
             ime_idle_samples = 0
+            if not bool(getattr(session, "supports_segments", False)):
+                commit_segments = False
             if changed:
                 on_state({"event": "realtime_asr_partial", "text": shown})
             return True
@@ -295,9 +297,22 @@ def run_continuous_dictation(
             }
         )
 
+    def _buffer_piece(canonical: str, *, already_shown: bool = False) -> bool:
+        nonlocal buffered_canonical, last_partial_snapshot, context_tail
+        if len(buffered_canonical) + len(canonical) > _HISTORY_CHARS:
+            _fail("buffered_text_limit", outcome="uncertain")
+            return False
+        buffered_canonical += canonical
+        if not already_shown and not _preedit(buffered_canonical):
+            return False
+        last_partial_snapshot = None
+        context_tail = (context_tail + canonical)[-guard.CONTINUOUS_CONTEXT_CHARS :]
+        _note(canonical)
+        return True
+
     def _commit_piece(prefix_raw: str) -> bool:
         nonlocal context_tail, committed_chars_total, ime_idle_samples, last_display
-        nonlocal buffered_canonical
+        nonlocal buffered_canonical, commit_segments
         nonlocal last_partial_snapshot
         if not prefix_raw:
             return True
@@ -313,24 +328,20 @@ def run_continuous_dictation(
             _fail("realtime_cancelled", outcome="cancelled")
             return False
         if not commit_segments:
-            if len(buffered_canonical) + len(canonical) > _HISTORY_CHARS:
-                _fail("buffered_text_limit", outcome="uncertain")
-                return False
-            buffered_canonical += canonical
-            if not _preedit(buffered_canonical):
-                return False
-            last_partial_snapshot = None
-            context_tail = (context_tail + canonical)[-guard.CONTINUOUS_CONTEXT_CHARS :]
-            _note(canonical)
-            return True
+            return _buffer_piece(canonical)
         if not _preedit(canonical):
             return False
+        if not commit_segments:
+            return _buffer_piece(canonical, already_shown=True)
         if cancel_event.is_set():
             _fail("realtime_cancelled", outcome="cancelled")
             return False
         result = session.commit_segment(canonical)
         if not bool(getattr(result, "committed", False)):
             outcome = str(getattr(result, "outcome", "") or "uncertain")
+            if outcome == "buffered":
+                commit_segments = False
+                return _buffer_piece(canonical, already_shown=True)
             if outcome not in {"stale", "uncertain"}:
                 outcome = "uncertain"
             _fail(f"segment_commit_{outcome}", outcome=outcome)
