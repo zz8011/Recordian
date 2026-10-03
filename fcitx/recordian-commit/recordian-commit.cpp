@@ -324,6 +324,99 @@ bool removeOwnPreedit(const SurroundSnap &observed, const std::string &text,
     return true;
 }
 
+// Some Chromium editors report the caret at the START of their composition
+// while including the composition in surrounding text. The ordinary Wayland
+// echo above reports it at the end. Only strip an exact string we sent.
+bool removeOwnPreeditAtCaret(const SurroundSnap &observed,
+                             const std::string &text, SurroundSnap *base) {
+    if (!observed.valid || text.empty() || observed.cursor != observed.anchor) {
+        return false;
+    }
+    const auto begin = utf8ByteOffset(observed.text, observed.cursor);
+    if (begin == std::string::npos ||
+        observed.text.compare(begin, text.size(), text) != 0) {
+        return false;
+    }
+    *base = {true, observed.text.substr(0, begin) +
+                       observed.text.substr(begin + text.size()),
+             observed.cursor, observed.cursor};
+    return true;
+}
+
+bool sameClippedBase(const SurroundSnap &a, const SurroundSnap &b) {
+    // Antigravity's editor caps its surrounding-text window near 4 KiB. As
+    // the composition changes, a few characters can enter/leave the OUTER
+    // ends of that window. Require exact text on both sides of the caret;
+    // never accept a local edit or a changed selection as window movement.
+    if (!a.valid || !b.valid || a.cursor != a.anchor ||
+        b.cursor != b.anchor || a.text.size() < 3500 ||
+        b.text.size() < 3500) {
+        return false;
+    }
+    const auto ai = utf8ByteOffset(a.text, a.cursor);
+    const auto bi = utf8ByteOffset(b.text, b.cursor);
+    if (ai == std::string::npos || bi == std::string::npos) {
+        return false;
+    }
+    const auto leftA = a.text.substr(0, ai);
+    const auto leftB = b.text.substr(0, bi);
+    const auto rightA = a.text.substr(ai);
+    const auto rightB = b.text.substr(bi);
+    if (leftA.size() < 128 || leftB.size() < 128 ||
+        rightA.size() < 128 || rightB.size() < 128 ||
+        std::max(leftA.size(), leftB.size()) -
+                std::min(leftA.size(), leftB.size()) > 32 ||
+        std::max(rightA.size(), rightB.size()) -
+                std::min(rightA.size(), rightB.size()) > 32) {
+        return false;
+    }
+    const auto leftN = std::min(leftA.size(), leftB.size());
+    const auto rightN = std::min(rightA.size(), rightB.size());
+    return leftA.compare(leftA.size() - leftN, leftN,
+                         leftB, leftB.size() - leftN, leftN) == 0 &&
+           rightA.compare(0, rightN, rightB, 0, rightN) == 0;
+}
+
+bool antigravityPreeditEcho(StreamingSession &session,
+                            const SurroundSnap &observed) {
+    if (session.frontend != "wayland_v2" ||
+        session.program != "antigravity" ||
+        session.lastPreedit.empty() || !observed.valid ||
+        !session.ack.hasAccepted || session.ack.armed ||
+        session.ack.poisoned) {
+        return false;
+    }
+    struct Candidate {
+        SurroundSnap snap;
+        bool removedOwnPreedit;
+    };
+    std::vector<Candidate> bases{{session.ack.accepted, false}};
+    std::vector<Candidate> observations{{observed, false}};
+    for (const auto &text : session.preeditHistory) {
+        SurroundSnap stripped;
+        if (removeOwnPreedit(session.ack.accepted, text, &stripped) ||
+            removeOwnPreeditAtCaret(session.ack.accepted, text, &stripped)) {
+            bases.push_back({stripped, true});
+        }
+        if (removeOwnPreedit(observed, text, &stripped) ||
+            removeOwnPreeditAtCaret(observed, text, &stripped)) {
+            observations.push_back({stripped, true});
+        }
+    }
+    for (const auto &base : bases) {
+        for (const auto &candidate : observations) {
+            if (sameSnap(base.snap, candidate.snap) ||
+                ((base.removedOwnPreedit || candidate.removedOwnPreedit) &&
+                 sameClippedBase(base.snap, candidate.snap))) {
+                session.ack.accepted = base.snap;
+                session.initialEchoCandidates.clear();
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 bool emptyEditorLayout(const SurroundSnap &snap) {
     // Chromium emits zero, one or two layout newlines for an empty paragraph
     // as its placeholder and composition node appear/disappear. Never apply
@@ -382,6 +475,9 @@ bool acceptPreeditSurrounding(StreamingSession &session,
     if (ack.hasAccepted) {
         if (sameSnap(observed, ack.accepted) ||
             ownPreeditEcho(session, ack.accepted, observed)) {
+            return true;
+        }
+        if (antigravityPreeditEcho(session, observed)) {
             return true;
         }
         if (session.frontend == "wayland_v2" &&
@@ -564,6 +660,14 @@ public:
         session.lastActive = std::chrono::steady_clock::now();
         const SurroundSnap initialSurround = readSurround(ic);
         session.segmentSafe = initialSurround.valid;
+        // This editor's capped Wayland surrounding-text window cannot prove
+        // the exact echo required for intermediate CommitSegment writes.
+        // Keep live preedit, then commit the buffered final on the bound token.
+        if (session.frontend == "wayland_v2" &&
+            session.program == "antigravity") {
+            session.segmentSafe = false;
+        }
+        const bool segmentSafe = session.segmentSafe;
         initializeSurroundingBaseline(session, initialSurround);
         const std::string token = session.token;
         const bool preeditCapable = session.preeditCapable;
@@ -585,7 +689,7 @@ public:
         }
         return token + " preedit=" + (preeditCapable ? "1" : "0") +
                " frontend=" + frontend + " program=" + program +
-               (initialSurround.valid ? " segments=1" : " segments=0");
+               (segmentSafe ? " segments=1" : " segments=0");
     }
 
     std::string CommitSegment(const std::string &token, uint32_t sequence,

@@ -120,4 +120,42 @@ int main() {
     // Unrelated frontends do not inherit the Wayland exception.
     rememberPreedit(gtk, "文字");
     assert(!acceptPreeditSurrounding(gtk, {true, "草稿文字\n", 4, 4}));
+
+    // Antigravity reports its composition in surrounding text with the
+    // caret anchored at the start. A changing OWN preedit must stay live.
+    StreamingSession antigravity;
+    antigravity.frontend = "wayland_v2";
+    antigravity.program = "antigravity";
+    antigravity.lastPreedit = "登";
+    rememberPreedit(antigravity, "登");
+    assert(acceptPreeditSurrounding(antigravity,
+                                    {true, "前登后", 1, 1}));
+    antigravity.lastPreedit = "登录";
+    rememberPreedit(antigravity, "登录");
+    assert(acceptPreeditSurrounding(antigravity,
+                                    {true, "前登录后", 1, 1}));
+    assert(sameSnap(antigravity.ack.accepted, {true, "前后", 1, 1}));
+    assert(!acceptPreeditSurrounding(antigravity,
+                                     {true, "前登录改", 1, 1}));
+    assert(!acceptPreeditSurrounding(antigravity,
+                                     {true, "前登录后", 2, 2}));
+
+    // A capped 4 KiB window may move its outer edges, but a local edit
+    // around the caret cannot masquerade as that movement.
+    const SurroundSnap clippedBefore{true,
+        std::string(1800, 'a') + "登" + std::string(2200, 'b'), 1800, 1800};
+    const SurroundSnap clippedAfter{true,
+        std::string(1797, 'a') + "登录" + std::string(2200, 'b'), 1797, 1797};
+    StreamingSession clipped;
+    clipped.frontend = "wayland_v2";
+    clipped.program = "antigravity";
+    clipped.lastPreedit = "登";
+    rememberPreedit(clipped, "登");
+    assert(acceptPreeditSurrounding(clipped, clippedBefore));
+    clipped.lastPreedit = "登录";
+    rememberPreedit(clipped, "登录");
+    assert(acceptPreeditSurrounding(clipped, clippedAfter));
+    assert(!acceptPreeditSurrounding(clipped,
+        {true, std::string(1797, 'a') + "登录X" +
+                   std::string(2199, 'b'), 1797, 1797}));
 }
