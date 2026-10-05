@@ -343,7 +343,20 @@ class TrayApp:
                     file=sys.stderr,
                     flush=True,
                 )
-            if observation.text:
+            if bool(commit_info.get("incomplete", False)):
+                # A confirmed prefix does not make an uncertain tail a
+                # successful turn. Preserve last_run for manual copy, but
+                # never recommend replaying text that may already be written.
+                self.state.status = "error"
+                self.state.detail = "听写中断，请核对输入框后恢复保留文字"
+                detail = "Dictation incomplete — check field before copying"
+                self.overlay.set_state("error", detail)
+                self._schedule_off_cue_from_overlay("error", detail)
+                self._notify_backend(
+                    "Recordian 听写未完成",
+                    "请先核对输入框；部分文字可能已经写入。保留文字可从最近结果复制，避免重复粘贴已写入内容。",
+                )
+            elif observation.text:
                 if committed:
                     self.state.detail = truncate(observation.text, 42)
                 else:

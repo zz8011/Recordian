@@ -347,6 +347,9 @@ class ConfuciusRealtimeSession:
         self._ws: Any | None = None
         self._send_queue: queue.Queue[bytes | None] = queue.Queue(maxsize=_SEND_QUEUE_MAX_FRAMES)
         self._lock = threading.Lock()
+        # Serialize PCM admission with the EOS sentinel, independently of the
+        # transcript lock: blocking queue.put must never stall the receiver.
+        self._admission_lock = threading.Lock()
         self._transcript_parts: list[str] = []
         self._segments = 0
         self._error: str | None = None
@@ -650,7 +653,10 @@ class ConfuciusRealtimeSession:
         if not isinstance(piece, str):
             self._set_error("malformed payload: 'text' is not a string")
             return
-        is_reset = bool(msg.get("reset", False))
+        is_reset = msg.get("reset", False)
+        if not isinstance(is_reset, bool):
+            self._set_error("malformed payload: 'reset' is not a boolean")
+            return
         with self._lock:
             if self._cancelled:
                 return  # discard late packets after cancel
@@ -701,13 +707,8 @@ class ConfuciusRealtimeSession:
         silently dropping. ``block=True`` waits up to ``timeout_s`` for room
         on THIS socket only; a timeout does not accept the frame.
         """
-        if self._finished:
-            raise RuntimeError("confucius-asr session already finished")
-        self._check_error()
         pcm = f32le_to_pcm16le(raw)
-        if pcm:
-            self._enqueue(pcm, block=block, timeout=timeout_s)
-            self.audio_accepted = True
+        self._admit_pcm(pcm, block=block, timeout_s=timeout_s)
         with self._lock:
             text = "".join(self._transcript_parts)
         return {"text": text}
@@ -719,17 +720,24 @@ class ConfuciusRealtimeSession:
         up to ``timeout_s`` for queue room and raises ``TimeoutError`` when
         the budget is exhausted.
         """
-        if self._finished:
-            raise RuntimeError("confucius-asr session already finished")
-        self._check_error()
         if len(pcm) % 2 != 0:
             raise ValueError(f"PCM16 audio must be a multiple of 2 bytes, got {len(pcm)}")
-        if pcm:
-            self._enqueue(pcm, block=block, timeout=timeout_s)
-            self.audio_accepted = True
+        self._admit_pcm(pcm, block=block, timeout_s=timeout_s)
         with self._lock:
             text = "".join(self._transcript_parts)
         return {"text": text}
+
+    def _admit_pcm(self, pcm: bytes, *, block: bool, timeout_s: float | None) -> None:
+        with self._admission_lock:
+            with self._lock:
+                finished = self._finished
+            if finished:
+                raise RuntimeError("confucius-asr session already finished")
+            self._check_error()
+            if pcm:
+                self._enqueue(pcm, block=block, timeout=timeout_s)
+                self.audio_accepted = True
+            self._check_error()
 
     def finish(self) -> ASRResult:
         """Send EOS and wait for the final message plus a clean CLOSE (1000).
@@ -757,8 +765,16 @@ class ConfuciusRealtimeSession:
 
         try:
             self._check_error()
-            # Flush remaining audio frames ahead of EOS, then send EOS itself.
-            self._enqueue(None, block=True, timeout=max(0.0, _remaining()))
+            # Admission already in progress must finish before the sentinel.
+            # New pushes see _finished and cannot enqueue behind it. The wait
+            # shares the same absolute deadline as drain/EOS/close.
+            if not self._admission_lock.acquire(timeout=max(0.0, _remaining())):
+                raise TimeoutError("confucius-asr audio admission did not drain before EOS")
+            try:
+                self._check_error()
+                self._enqueue(None, block=True, timeout=max(0.0, _remaining()))
+            finally:
+                self._admission_lock.release()
             sender = self._sender_thread
             if sender is not None:
                 sender.join(timeout=max(0.0, _remaining()))

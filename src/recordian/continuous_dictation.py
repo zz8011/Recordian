@@ -101,6 +101,9 @@ def run_continuous_dictation(
     # idle, so long silence must re-touch it well before that.
     ime_idle_samples = 0
     last_display = ""
+    # Keep a bounded full hypothesis for manual recovery independently of
+    # the much smaller IME preedit. Never automatically replay this text.
+    recovery_text = ""
     # Last RAW snapshot handed to submit(); repeating it must poll for a ready
     # judgment instead of submitting again.
     last_partial_snapshot: str | None = None
@@ -137,7 +140,9 @@ def run_continuous_dictation(
             "backend": "fcitx",
             "committed": prefix_kept,
             "detail": reason if not prefix_kept else f"continuous_prefix_kept;{reason}",
-            "outcome": "committed" if prefix_kept else outcome,
+            "outcome": outcome,
+            "incomplete": outcome in {"stale", "uncertain"},
+            "recovery_text": recovery_text if outcome in {"stale", "uncertain"} else "",
             "segments_committed": int(getattr(worker, "segments_committed", 0) or 0),
         }
         if outcome == "stale":
@@ -249,17 +254,19 @@ def run_continuous_dictation(
             corrector = build_corrector(context_tail[-guard.CONTINUOUS_CONTEXT_CHARS :])
         return corrector
 
-    def _preedit(text: str, *, refresh: bool = False) -> bool:
+    def _preedit(text: str, *, refresh: bool = False, recovery: str | None = None) -> bool:
         """Show (or re-touch) the bounded live preedit on the SAME token.
 
         ``refresh=True`` is the TTL keepalive during long silence: it sends
         the current (possibly empty) preedit again — no new text, no new
         BeginSession. A cancel observed here means zero further writes.
         """
-        nonlocal ime_idle_samples, last_display, commit_segments
+        nonlocal ime_idle_samples, last_display, commit_segments, recovery_text
         if cancel_event.is_set():
             _fail("realtime_cancelled", outcome="cancelled")
             return False
+        if not refresh:
+            recovery_text = (text if recovery is None else recovery)[:_HISTORY_CHARS]
         shown = text[-guard.CONTINUOUS_PREEDIT_CHARS :]
         changed = shown != last_display
         worker.partial_text = shown
@@ -312,7 +319,7 @@ def run_continuous_dictation(
 
     def _commit_piece(prefix_raw: str) -> bool:
         nonlocal context_tail, committed_chars_total, ime_idle_samples, last_display
-        nonlocal buffered_canonical, commit_segments
+        nonlocal buffered_canonical, commit_segments, recovery_text
         nonlocal last_partial_snapshot
         if not prefix_raw:
             return True
@@ -329,7 +336,7 @@ def run_continuous_dictation(
             return False
         if not commit_segments:
             return _buffer_piece(canonical)
-        if not _preedit(canonical):
+        if not _preedit(canonical, recovery=canonical + held_raw):
             return False
         if not commit_segments:
             return _buffer_piece(canonical, already_shown=True)
@@ -352,6 +359,7 @@ def run_continuous_dictation(
         # keepalive must never replay it (it would duplicate text on a GTK
         # focus change). Only uncommitted text may stay in last_display.
         last_display = ""
+        recovery_text = ""
         # The corrector was closed above and the next segment rebuilds one:
         # its first partial must submit again even if the string repeats.
         last_partial_snapshot = None
@@ -393,7 +401,7 @@ def run_continuous_dictation(
 
     def _rotate(*, final: bool) -> bool:
         nonlocal held_raw, segment_samples, silence_run, segment_index, ime_idle_samples
-        nonlocal last_display
+        nonlocal last_display, recovery_text
         samples = segment_samples
         segment_samples = 0
         silence_run = 0
@@ -416,6 +424,9 @@ def run_continuous_dictation(
             prefix_raw, held_raw = _split_held_tail(snapshot)
             if not _commit_piece(prefix_raw):
                 return False
+            # A socket may fail before its first partial: the held raw tail
+            # is still uncommitted and must remain recoverable in that gap.
+            recovery_text = (buffered_canonical + held_raw)[:_HISTORY_CHARS]
             _emit(segment_index, samples, committed_chars_total)
             return True
         # User stop (reader EOF): one formatter pass over the whole
@@ -492,6 +503,7 @@ def run_continuous_dictation(
         # The final commit consumed the preedit; nothing of it may be
         # replayed by a (hypothetical) later refresh.
         last_display = ""
+        recovery_text = ""
         detail = "continuous_final"
         if refine_enabled and int(worker.segments_committed) > 0:
             detail = "continuous_final;continuous_refine_suppressed"
@@ -635,15 +647,14 @@ def run_continuous_dictation(
                 text = fh.read(_HISTORY_CHARS + 1)
         except OSError:
             text = ""
-        # A short interrupted turn has no committed spool entries yet. Keep
-        # its latest hypothesis for the result/copy UI; stale/uncertain commit
-        # metadata still forbids writing it into a possibly different field.
-        if (
-            failed
-            and worker.outcome in {"stale", "uncertain"}
-            and not int(getattr(worker, "segments_committed", 0) or 0)
-        ):
-            text = last_display
+        # Preserve confirmed prefix plus the uncertain full tail for manual
+        # inspection/copy. In buffered mode the hypothesis already includes
+        # spool entries; concatenating those would duplicate the prefix.
+        if failed and worker.outcome in {"stale", "uncertain"}:
+            if int(getattr(worker, "segments_committed", 0) or 0):
+                text = text[:committed_chars_total] + recovery_text
+            else:
+                text = recovery_text or text
         worker.final_text = text[:_HISTORY_CHARS]
         try:
             spool.close()
