@@ -488,6 +488,6 @@ def test_status_summary_shows_state_not_transcript() -> None:
 
 def test_status_summary_names_stopped_and_error() -> None:
     stopped = UiState(status="stopped", backend_running=False)
-    assert _status_summary_label(stopped).startswith("已暂停")
+    assert _status_summary_label(stopped).startswith("已停止")
     failed = UiState(status="error", backend_running=True, detail="microphone missing")
     assert _status_summary_label(failed) == "出错"

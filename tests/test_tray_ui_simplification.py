@@ -181,7 +181,7 @@ def test_status_headline_uses_app_state_and_hotkey() -> None:
         UiState(status="stopped", backend_running=False),
         {"trigger_mode": "toggle", "hotkey": "<alt_r>"},
     )
-    assert stopped == "已暂停 · 按 右 Alt 开始或停止"
+    assert stopped == "已停止 · 按 右 Alt 开始或停止"
     observed = UiState(
         status="idle",
         backend_running=True,

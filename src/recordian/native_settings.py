@@ -10,7 +10,7 @@ from recordian.settings_draft import SettingsDraft
 from recordian.tray_settings import build_gtk_hotkey_spec, load_hotkey_default_config
 
 gi.require_version("Gtk", "3.0")
-from gi.repository import Gdk, Gtk  # noqa: E402
+from gi.repository import Gdk, GdkPixbuf, Gtk  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent
 _CSS_PROVIDER = None
@@ -89,8 +89,10 @@ class NativeSettingsWindow:
         self.window.add(root)
         top = styled(box(False, 12), "topbar")
         root.pack_start(top, False, False, 0)
-        mark = label("◉")
-        styled(mark, "brand")
+        mark = Gtk.Image.new_from_pixbuf(
+            GdkPixbuf.Pixbuf.new_from_file_at_scale(str(ROOT / "ui_assets/recordian-mark-golden.svg"), -1, 32, True)
+        )
+        self.window.set_icon_from_file(str(ROOT / "ui_assets/recordian-app-64.png"))
         top.pack_start(mark, False, False, 0)
         brand = box(spacing=3)
         brand.pack_start(label("Recordian", "brand"), False, False, 0)

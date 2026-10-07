@@ -41,7 +41,8 @@
 | `voice_wake.py` | Wake-word activation |
 | `postprocess_pipeline.py` | Text refinement pipeline |
 | `tray_app.py` | System tray GUI |
-| `tray_settings.py` / `tray_menu.py` | Daily settings, advanced options, and tray actions |
+| `native_settings.py` / `settings_draft.py` | GTK preferences, editable snapshot and safe save |
+| `tray_settings.py` / `tray_menu.py` | Legacy form helpers, tray actions and packaged status icons |
 | `recommended_profile.py` | Local Confucius profile, display labels, and endpoint validation |
 | `waveform_renderer.py` | Recording overlay window + state machine (pyglet) |
 | `orb_shader.py` | Liquid-glass voice orb GLSL shader (voiceWave preset, ported from LerSent001/orb, MIT) |

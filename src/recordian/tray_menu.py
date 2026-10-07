@@ -9,38 +9,35 @@ from recordian.recommended_profile import DICTATION_BUSY_STATUSES, status_headli
 from recordian.tray_utils import truncate
 
 
+UI_ASSETS_DIR = Path(__file__).parent / "ui_assets"
+TRAY_STATUS_GROUPS = {
+    "idle": "idle",
+    "starting": "preparing",
+    "warming": "preparing",
+    "recording": "recording",
+    "processing": "processing",
+    "busy": "processing",
+    "error": "error",
+    "stopped": "stopped",
+}
+
+
 def get_logo_path(status: str) -> Path:
-    """Get logo path based on current status."""
-    # Get project root (assuming tray_gui.py is in src/recordian/)
-    project_root = Path(__file__).parent.parent.parent
-    assets_dir = project_root / "assets"
-
-    logo_map = {
-        "idle": "logo.png",
-        "recording": "logo-recording.png",
-        "processing": "logo-recording.png",
-        "error": "logo-error.png",
-        "stopped": "logo.png",
-        "starting": "logo-warming.png",
-        "warming": "logo-warming.png",
-        "busy": "logo-warming.png",
-    }
-
-    logo_file = logo_map.get(status, "logo.png")
-    logo_path = assets_dir / logo_file
-
-    if not logo_path.exists():
-        # Fallback to default logo
-        logo_path = assets_dir / "logo.png"
-
-    return logo_path
+    """Resolve an existing runtime state to its packaged, static tray artwork."""
+    group = TRAY_STATUS_GROUPS.get(status, "idle")
+    path = UI_ASSETS_DIR / f"recordian-tray-{group}-color-32.png"
+    if path.is_file():
+        return path
+    idle = UI_ASSETS_DIR / "recordian-tray-idle-color-32.png"
+    return idle if idle.is_file() else UI_ASSETS_DIR / "recordian-app-64.png"
 
 
 def list_tray_refine_presets() -> list[str]:
     """列出托盘菜单可用的文本精炼预设（过滤 asr-* 等非精炼预设）。"""
     preset_manager = PresetManager()
     names = [
-        name for name in preset_manager.list_presets()
+        name
+        for name in preset_manager.list_presets()
         if name.lower() != "readme" and not name.lower().startswith("asr-")
     ]
     builtin_order = ["default", "intent", "formal", "meeting", "summary", "technical"]
@@ -177,6 +174,7 @@ def build_appindicator_menu(
 
     def _open_agent_panel(_item):
         from .agent_panel import open_panel
+
         app.root.after(0, open_panel)
 
     agent_item.connect("activate", _open_agent_panel)
@@ -415,10 +413,12 @@ def update_tray_menu(app: Any) -> None:
         if backend_toggle_item is not None:
             backend_toggle_item.set_label(backend_toggle_label(bool(app.state.backend_running)))
         sync_appindicator_preset_submenu(app)
-        try:
-            indicator.set_icon(icon_path)
-        except Exception:
-            pass
+        if getattr(app, "_appindicator_icon_path", None) != icon_path:
+            try:
+                indicator.set_icon(icon_path)
+                app._appindicator_icon_path = icon_path
+            except Exception:
+                pass
 
     glib.idle_add(_gtk_update)
 

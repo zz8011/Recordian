@@ -215,12 +215,12 @@ def status_headline(state: Any, config: Mapping[str, Any] | None = None) -> str:
     elif status == "error":
         base = "出错"
     elif status == "stopped" or (not running and detail == "Stopped"):
-        base = "已暂停"
+        base = "已停止"
     elif status in {"starting", "warming"} or not running:
         base = "正在准备"
     else:
         base = "就绪"
-    if base in {"就绪", "已暂停", "正在准备"}:
+    if base in {"就绪", "已停止", "正在准备"}:
         hint = hotkey_action_hint(config)
         if hint:
             return f"{base} · {hint}"
