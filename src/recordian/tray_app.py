@@ -31,7 +31,7 @@ from recordian.tray_menu import (
     sync_appindicator_preset_submenu,
     update_tray_menu,
 )
-from recordian.tray_settings import load_hotkey_default_config, open_settings_gtk
+from recordian.tray_settings import load_hotkey_default_config
 from recordian.tray_speaker_wizard import open_speaker_enrollment_wizard
 from recordian.tray_utils import (
     next_event_poll_delay_ms,
@@ -714,7 +714,7 @@ class TrayApp:
     # -- Delegated methods to new modules --
 
     def open_settings(self) -> None:
-        """Open settings window (delegated to tray_settings)."""
+        """Open the on-demand native settings window."""
         from recordian.tray_settings_utils import validate_settings_dict
 
         current = load_hotkey_default_config(include_sound_defaults=True)
@@ -731,30 +731,13 @@ class TrayApp:
             allow_auto_fallback_commit=False,
         )
         current = validate_settings_dict(current, defaults=load_hotkey_default_config(include_sound_defaults=True))
-        current_record_backend = str(current.get("record_backend", "auto"))
-        current_record_format = str(current.get("record_format", "ogg"))
-        current_refine_provider = str(current.get("refine_provider", "local"))
-        current_commit_backend = normalize_commit_backend(
-            current.get("commit_backend", "auto"),
-            allow_auto_fallback=False,
-        )
-        current_enable_thinking = current.get("enable_thinking", current.get("refine_enable_thinking", False))
-        current_notify_backend = normalize_notify_backend(current.get("notify_backend", "auto"))
-
         if not (hasattr(self, "_glib") and hasattr(self, "_gtk")):
             self.events.put({"event": "log", "message": "GTK 未初始化，无法打开原生设置窗口"})
             return
 
-        open_settings_gtk(
-            self,
-            current=current,
-            current_record_backend=current_record_backend,
-            current_record_format=current_record_format,
-            current_refine_provider=current_refine_provider,
-            current_commit_backend=current_commit_backend,
-            current_enable_thinking=current_enable_thinking,
-            current_notify_backend=current_notify_backend,
-        )
+        from recordian.native_settings import open_settings_gtk
+
+        open_settings_gtk(self, current=current)
 
     def open_context_editor(self) -> None:
         """打开常用词编辑器 (delegated to tray_context_editor)."""

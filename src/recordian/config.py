@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import tempfile
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -214,16 +215,22 @@ class ConfigManager:
 
             # 保存配置（可能含 API 密钥等敏感字段，限制文件权限）
             p.parent.mkdir(parents=True, exist_ok=True)
-            old_umask = os.umask(0o077)
+            temporary: Path | None = None
             try:
-                p.write_text(
-                    json.dumps(config, ensure_ascii=False, indent=2),
-                    encoding="utf-8",
-                )
-                p.chmod(0o600)
+                with tempfile.NamedTemporaryFile(
+                    mode="w", encoding="utf-8", dir=p.parent, prefix=f".{p.name}.", suffix=".tmp", delete=False
+                ) as handle:
+                    temporary = Path(handle.name)
+                    os.fchmod(handle.fileno(), 0o600)
+                    json.dump(config, handle, ensure_ascii=False, indent=2, allow_nan=False)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                os.replace(temporary, p)
+                temporary = None
             finally:
-                os.umask(old_umask)
-        except OSError as e:
+                if temporary is not None:
+                    temporary.unlink(missing_ok=True)
+        except (OSError, ValueError, TypeError) as e:
             raise ConfigError(f"保存配置文件失败: {e}") from e
 
     @staticmethod
@@ -242,11 +249,26 @@ class ConfigManager:
             return None
 
         # 生成备份文件名
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         backup_path = p.parent / f"{p.stem}.backup.{timestamp}{p.suffix}"
 
         # 复制文件
-        shutil.copy2(p, backup_path)
+        temporary: Path | None = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="wb", dir=p.parent, prefix=f".{p.name}.backup-", suffix=".tmp", delete=False
+            ) as output:
+                temporary = Path(output.name)
+                os.fchmod(output.fileno(), 0o600)
+                with p.open("rb") as source:
+                    shutil.copyfileobj(source, output)
+                output.flush()
+                os.fsync(output.fileno())
+            os.replace(temporary, backup_path)
+            temporary = None
+        finally:
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
 
         # 清理旧备份
         ConfigManager._cleanup_old_backups(p, max_backups)
@@ -260,11 +282,7 @@ class ConfigManager:
         backup_pattern = f"{p.stem}.backup.*{p.suffix}"
 
         # 查找所有备份文件
-        backups = sorted(
-            p.parent.glob(backup_pattern),
-            key=lambda x: x.stat().st_mtime,
-            reverse=True
-        )
+        backups = sorted(p.parent.glob(backup_pattern), key=lambda x: x.stat().st_mtime, reverse=True)
 
         # 删除超出数量的备份
         for backup in backups[max_backups:]:
