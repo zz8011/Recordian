@@ -1,4 +1,5 @@
 """Tests for refine_model_discovery module."""
+
 from __future__ import annotations
 
 import json
@@ -10,6 +11,39 @@ from typing import Any
 import pytest
 
 from recordian.refine_model_discovery import fetch_model_list
+
+
+def test_discovery_never_forwards_key_to_a_redirect_target(fake_models_server):
+    class RedirectHandler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(302)
+            self.send_header("Location", fake_models_server + "/v1/models")
+            self.end_headers()
+
+        def log_message(self, *args):
+            pass
+
+    server = HTTPServer(("127.0.0.1", 0), RedirectHandler)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        # The target would return models only if the bearer token leaked there.
+        assert fetch_model_list(f"http://127.0.0.1:{server.server_port}", "test-key", timeout_s=2) == []
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_remote_error_reason_is_not_logged(fake_models_server, caplog, monkeypatch):
+    import urllib.error
+    import urllib.request
+
+    def fail(*args, **kwargs):
+        raise urllib.error.HTTPError("http://example.invalid", 401, "reflected-private-fixture", {}, None)
+
+    monkeypatch.setattr(urllib.request.OpenerDirector, "open", fail)
+    assert fetch_model_list(fake_models_server, "test-key") == []
+    assert "reflected-private-fixture" not in caplog.text
 
 
 class _FakeModelsHandler(BaseHTTPRequestHandler):

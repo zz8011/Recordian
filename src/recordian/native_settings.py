@@ -2,15 +2,18 @@
 """On-demand GTK settings with an editable snapshot and atomic persistence."""
 
 from pathlib import Path
+from threading import Thread
+from urllib.parse import urlsplit
 
 import gi
 
+from recordian.refine_model_discovery import fetch_model_list
 from recordian.setting_effects import effect_status_message
 from recordian.settings_draft import SettingsDraft
 from recordian.tray_settings import build_gtk_hotkey_spec, load_hotkey_default_config
 
 gi.require_version("Gtk", "3.0")
-from gi.repository import Gdk, GdkPixbuf, Gtk  # noqa: E402
+from gi.repository import Gdk, GdkPixbuf, GLib, Gtk  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent
 _CSS_PROVIDER = None
@@ -70,6 +73,10 @@ class NativeSettingsWindow:
             {key: form(defaults.get(key)) for key in fields},
         )
         self.controls = {}
+        self.saved_refine_key = str(current.get("refine_api_key") or "").strip()
+        self.discovery_generation = 0
+        self.discovery_running = False
+        self.closed = False
         self.syncing = False
         self.groups = {}
         self.nav = {}
@@ -184,7 +191,7 @@ class NativeSettingsWindow:
         note.set_width_chars(35)
         left.pack_start(note, False, False, 0)
         row.pack_start(left, True, True, 0)
-        value = self.draft.values[key]
+        value = self.draft.refine_key if kind == "secret" else self.draft.values[key]
         if kind == "switch":
             w = Gtk.Switch()
             w.set_active(value)
@@ -206,12 +213,25 @@ class NativeSettingsWindow:
                 w.append(val, text)
             w.set_active_id(value)
             w.connect("changed", lambda widget: self.changed(key, widget.get_active_id()))
+        elif kind == "model":
+            w = Gtk.ComboBoxText.new_with_entry()
+            entry = w.get_child()
+            entry.set_width_chars(23)
+            entry.set_text(value)
+            entry.set_placeholder_text("选择或手动输入模型")
+            entry.connect("changed", lambda widget: self.changed(key, widget.get_text()))
         else:
             w = Gtk.Entry()
             w.set_text(value)
             w.set_width_chars(23 if kind not in ("number", "hotkey") else 10)
+            if key == "refine_api_base":
+                w.set_width_chars(31)
             if not value:
                 w.set_placeholder_text("未设置")
+            if kind == "secret":
+                w.set_visibility(False)
+                w.set_input_purpose(Gtk.InputPurpose.PASSWORD)
+                w.set_placeholder_text("留空保留已保存 Key" if self.saved_refine_key else "可选 · 输入 API Key")
             if kind == "hotkey":
                 w.connect("key-press-event", lambda widget, event: self.capture_key(widget, event))
             w.connect("changed", lambda widget: self.changed(key, widget.get_text()))
@@ -302,14 +322,34 @@ class NativeSettingsWindow:
         )
         s = self.section("refine", "模型连接")
         self.refine_rows = {}
-        self.refine_rows["refine_api_base"] = self.row(s, "refine_api_base", "API 地址", "云端润色服务地址。")
-        self.refine_rows["refine_api_model"] = self.row(
-            s, "refine_api_model", "云端模型标识", "填写云端 API 使用的模型名称。"
+        self.refine_rows["refine_api_base"] = self.row(
+            s, "refine_api_base", "API 地址", "可包含端口，例如 http://主机:端口/v1。"
         )
+        self.refine_rows["refine_api_key"] = self.row(
+            s, "refine_api_key", "API Key", "隐藏显示；留空保留已保存 Key。", "secret"
+        )
+        self.refine_rows["refine_api_model"] = self.row(
+            s, "refine_api_model", "润色模型", "从识别结果中选择，也可手动输入模型标识。", "model"
+        )
+        discovery = styled(box(False, 12), "row")
+        self.discovery_status = label("点击识别，从此 API 获取模型列表。", "row-hint")
+        self.discovery_status.set_line_wrap(True)
+        self.discovery_status.set_max_width_chars(48)
+        discovery.pack_start(self.discovery_status, True, True, 0)
+        self.discover_button = Gtk.Button(label="识别模型")
+        self.discover_button.set_valign(Gtk.Align.CENTER)
+        self.discover_button.connect("clicked", self.discover_models)
+        discovery.pack_end(self.discover_button, False, False, 0)
+        s.pack_start(Gtk.Separator(), False, False, 0)
+        s.pack_start(discovery, False, False, 0)
+        self.refine_rows["discovery"] = discovery
         self.refine_rows["refine_model"] = self.row(
             s, "refine_model", "本机模型名称或路径", "本机填模型名称；llama.cpp 填 GGUF 路径。"
         )
-        self.notice("refine", "润色预设在托盘菜单中管理。已保存密钥和未显示的运行参数保持原值。")
+        self.notice(
+            "refine",
+            "识别只读取兼容 API 的模型列表，不运行模型。选中后点击「保存并生效」。\n润色预设仍在托盘菜单中管理。",
+        )
         s = self.section("remote", "另一台电脑")
         self.row(s, "enable_remote_paste", "启用远程粘贴", "远端需运行与 Recordian 兼容的接收端。", "switch")
         self.row(s, "remote_paste_host", "远程主机", "填写已配置接收端的主机地址。")
@@ -369,8 +409,74 @@ class NativeSettingsWindow:
     def changed(self, key, value):
         if self.syncing:
             return
-        self.draft.set(key, value)
+        if key == "refine_api_key":
+            self.draft.set_refine_key(value)
+        else:
+            self.draft.set(key, value)
+        if key in ("refine_api_base", "refine_api_key", "refine_provider"):
+            self.invalidate_discovery()
         self.update()
+
+    def invalidate_discovery(self):
+        self.discovery_generation += 1
+        combo = self.controls["refine_api_model"][1]
+        # Choices belong to a connection; preserve the manually edited value.
+        value = self.draft.values["refine_api_model"]
+        self.syncing = True
+        combo.remove_all()
+        combo.get_child().set_text(value)
+        self.syncing = False
+        self.discovery_status.set_text("连接已更新 · 点击识别获取模型列表。")
+
+    def discover_models(self, *_):
+        if self.closed or self.discovery_running or self.draft.values["refine_provider"] != "cloud":
+            return
+        base = self.draft.values["refine_api_base"].strip()
+        try:
+            parsed = urlsplit(base)
+            valid = parsed.scheme in ("http", "https") and bool(parsed.hostname) and parsed.port != 0
+            valid = valid and not (parsed.username or parsed.password or parsed.query or parsed.fragment)
+        except ValueError:
+            valid = False
+        if not valid:
+            self.discovery_status.set_text("请填写有效 API 基址，如 http://主机:端口/v1。")
+            return
+        key = self.draft.refine_key or self.saved_refine_key
+        generation = self.discovery_generation
+        self.discovery_running = True
+        self.discover_button.set_sensitive(False)
+        self.discovery_status.set_text("正在识别模型…")
+
+        def fetch():
+            try:
+                models = fetch_model_list(base, key, timeout_s=8.0)
+            except Exception:
+                models = []
+
+            def apply():
+                self.discovery_running = False
+                if self.closed:
+                    return False
+                self.discover_button.set_sensitive(True)
+                if generation != self.discovery_generation:
+                    return False
+                if models:
+                    combo = self.controls["refine_api_model"][1]
+                    value = self.draft.values["refine_api_model"]
+                    self.syncing = True
+                    combo.remove_all()
+                    for model in models:
+                        combo.append_text(model)
+                    combo.get_child().set_text(value)
+                    self.syncing = False
+                    self.discovery_status.set_text(f"已识别 {len(models)} 个模型 · 请在下拉框中选择。")
+                else:
+                    self.discovery_status.set_text("未获取模型 · 检查地址、Key 和服务，或手动输入模型。")
+                return False
+
+            GLib.idle_add(apply)
+
+        Thread(target=fetch, daemon=True, name="recordian-model-discovery").start()
 
     def update(self):
         if not hasattr(self, "save"):
@@ -406,11 +512,13 @@ class NativeSettingsWindow:
     def sync(self):
         self.syncing = True
         for k, (kind, w) in self.controls.items():
-            val = self.draft.values[k]
+            val = self.draft.refine_key if kind == "secret" else self.draft.values[k]
             if kind == "switch":
                 w.set_active(val)
             elif kind == "combo":
                 w.set_active_id(val)
+            elif kind == "model":
+                w.get_child().set_text(val)
             elif kind == "segments":
                 for item, btn in w._segments:
                     btn.set_active(item == val)
@@ -433,6 +541,7 @@ class NativeSettingsWindow:
             self.status.set_text(f"未保存：{errors[key]}（{key}）")
             return False
         try:
+            replacement_key = self.draft.refine_key
             effect, restarted, _ = self.draft.persist(
                 self.app.config_path,
                 apply_now=True,
@@ -447,7 +556,10 @@ class NativeSettingsWindow:
             return False
         self.app._invalidate_config_cache()
         self.app._update_tray_menu()
-        self.update()
+        if replacement_key:
+            self.saved_refine_key = replacement_key
+            self.controls["refine_api_key"][1].set_placeholder_text("留空保留已保存 Key")
+        self.sync()
         self.status.set_text(
             "已保存，正在请求后端重启" if restarted else effect_status_message(effect, restarted=False)
         )
@@ -455,6 +567,7 @@ class NativeSettingsWindow:
 
     def cancel_changes(self):
         self.draft.cancel()
+        self.invalidate_discovery()
         self.sync()
         self.status.set_text("已取消修改 · 配置文件未改变")
 
@@ -473,6 +586,7 @@ class NativeSettingsWindow:
         dlg.destroy()
         if answer == Gtk.ResponseType.OK:
             self.draft.restore()
+            self.invalidate_discovery()
             self.sync()
 
     def close_request(self, *_):
@@ -493,6 +607,9 @@ class NativeSettingsWindow:
         return answer != Gtk.ResponseType.OK
 
     def destroyed(self, *_):
+        self.closed = True
+        self.saved_refine_key = ""
+        self.draft.refine_key = ""
         if getattr(self.app, "_gtk_settings_window", None) is self.window:
             self.app._gtk_settings_window = None
             self.app._native_settings = None

@@ -3,17 +3,24 @@
 Fetches available models from an OpenAI-compatible /v1/models endpoint
 so users can pick a refine model from a dropdown instead of typing it.
 """
+
 from __future__ import annotations
 
 import json
 import logging
 import urllib.error
 import urllib.request
-from typing import Any
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_TIMEOUT_S = 8.0
+MAX_RESPONSE_BYTES = 1024 * 1024
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        # Bearer tokens must stay at the endpoint explicitly chosen by the user.
+        return None
 
 
 def fetch_model_list(
@@ -42,26 +49,34 @@ def fetch_model_list(
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
 
-    req = urllib.request.Request(url, headers=headers, method="GET")
     try:
-        with urllib.request.urlopen(req, timeout=timeout_s) as resp:
-            payload: dict[str, Any] = json.loads(resp.read().decode("utf-8"))
+        req = urllib.request.Request(url, headers=headers, method="GET")
+        opener = urllib.request.build_opener(_NoRedirect())
+        with opener.open(req, timeout=timeout_s) as resp:
+            raw = resp.read(MAX_RESPONSE_BYTES + 1)
+            if len(raw) > MAX_RESPONSE_BYTES:
+                logger.warning("Model discovery response exceeds size limit")
+                return []
+            payload = json.loads(raw.decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        logger.warning("Model discovery HTTP %s: %s", exc.code, exc.reason)
+        logger.warning("Model discovery HTTP %s", exc.code)
         return []
-    except urllib.error.URLError as exc:
-        logger.warning("Model discovery failed: %s", exc.reason)
+    except urllib.error.URLError:
+        logger.warning("Model discovery connection failed")
         return []
-    except json.JSONDecodeError as exc:
-        logger.warning("Model discovery bad JSON: %s", exc)
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        logger.warning("Model discovery bad JSON")
         return []
-    except Exception as exc:
-        logger.warning("Model discovery error: %s", exc)
+    except Exception:
+        logger.warning("Model discovery request failed")
         return []
 
+    if not isinstance(payload, dict):
+        logger.warning("Model discovery unexpected payload shape")
+        return []
     data = payload.get("data", [])
     if not isinstance(data, list):
-        logger.warning("Model discovery unexpected payload shape: %s", payload.keys())
+        logger.warning("Model discovery unexpected payload shape")
         return []
 
     models: list[str] = []

@@ -25,10 +25,16 @@ class SettingsDraft:
             key: deepcopy(current.get(key, value)) for key, value in defaults.items() if key not in CREDENTIAL_KEYS
         }
         self.values = deepcopy(self.saved)
+        # A blank replacement preserves the saved secret; never put it in the
+        # ordinary snapshot or restore-defaults mapping.
+        self.refine_key = ""
 
     @property
     def dirty(self):
-        return self.values != self.saved
+        return self.values != self.saved or bool(self.refine_key)
+
+    def set_refine_key(self, value):
+        self.refine_key = str(value).strip()
 
     def set(self, key, value):
         if key not in self.saved or key in CREDENTIAL_KEYS:
@@ -37,9 +43,11 @@ class SettingsDraft:
 
     def cancel(self):
         self.values = deepcopy(self.saved)
+        self.refine_key = ""
 
     def restore(self):
         self.values = {key: deepcopy(self.defaults[key]) for key in self.saved}
+        self.refine_key = ""
 
     def errors(self):
         errors = {}
@@ -94,6 +102,8 @@ class SettingsDraft:
             elif key in CSV_FIELDS and isinstance(value, str):
                 value = [part.strip() for part in value.split(",") if part.strip()]
             result[key] = value
+        if self.refine_key:
+            result["refine_api_key"] = self.refine_key
         return result
 
     def persist(self, path: Path, *, apply_now: bool, status="idle", restart_callback=None):
@@ -123,4 +133,5 @@ class SettingsDraft:
             restart_callback=dispatch_restart if restart_callback is not None else None,
         )
         self.saved = deepcopy(self.values)
+        self.refine_key = ""
         return effect, restart_dispatched, keys
