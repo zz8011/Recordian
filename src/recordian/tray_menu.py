@@ -8,7 +8,6 @@ from recordian.preset_manager import PresetManager
 from recordian.recommended_profile import DICTATION_BUSY_STATUSES, status_headline
 from recordian.tray_utils import truncate
 
-
 UI_ASSETS_DIR = Path(__file__).parent / "ui_assets"
 TRAY_STATUS_GROUPS = {
     "idle": "idle",

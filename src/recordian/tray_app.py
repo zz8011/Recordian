@@ -15,7 +15,7 @@ from recordian.agent_response_overlay import AgentResponseOverlay
 from recordian.audio_feedback import play_sound
 from recordian.backend_manager import BackendManager
 from recordian.config import ConfigManager
-from recordian.runtime_config import normalize_commit_backend, normalize_notify_backend, normalize_runtime_config
+from recordian.runtime_config import normalize_runtime_config
 from recordian.setting_effects import effect_label, effect_status_message
 from recordian.tray_context_editor import open_context_editor
 from recordian.tray_diagnostics import (
