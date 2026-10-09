@@ -15,33 +15,6 @@ def _is_cjk_numeric_run(text: str) -> bool:
     return bool(text) and all(ch in _CJK_NUMERIC_CHARS for ch in text)
 
 
-def _append_only_delta(previous: str, current: str) -> tuple[str, str]:
-    """Return *only* the new portion of *current* when it is a strict
-    append-only extension of *previous*.
-
-    Parameters
-    ----------
-    previous:
-        The prior accumulated text (may be empty).
-    current:
-        The newly received text.
-
-    Returns
-    -------
-    tuple[str, str]
-        A ``(base, delta)`` pair where *base* is the current best
-        accumulated text and *delta* is the newly appended portion (empty
-        string when there is no append-only relationship).
-    """
-    if current == previous:
-        return previous, ""
-    if current.startswith(previous):
-        return current, current[len(previous):]
-    if previous.startswith(current):
-        return previous, ""
-    return previous, ""
-
-
 def _stable_prefix_delta(
     *,
     previous_hypothesis: str,

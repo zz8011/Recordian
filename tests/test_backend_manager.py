@@ -7,12 +7,10 @@ import subprocess
 from pathlib import Path
 from unittest.mock import Mock, patch
 
+import pytest
+
 from recordian.backend_manager import (
     BackendManager,
-    _cleanup_orphan_recordian_recorders,
-    _is_hotkey_dictate_command,
-    _is_recordian_recorder_command,
-    _list_orphan_recordian_recorder_pids,
     _terminate_backend_process,
     parse_backend_event_line,
 )
@@ -84,9 +82,57 @@ class TestBackendManagerInit:
 class TestBackendManagerStart:
     """测试后端进程启动"""
 
-    @patch("recordian.backend_manager._cleanup_orphan_recordian_recorders")
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "python -m recordian.hotkey_dictate --config-path /tmp/other-config.json",
+            "/other-worktree/.venv/bin/python -m recordian.hotkey_dictate "
+            "--config-path /tmp/test_config.json",
+            "python -c 'print(\"recordian.hotkey_dictate\")'",
+            "python unrelated.py recordian.hotkey_dictate",
+            "python -m recordian.hotkey_dictate --config-path /tmp/test_config.json",
+            "/usr/bin/ffmpeg -f pulse -i default /tmp/recordian-ptt-a/input.ogg pipe:1",
+        ],
+        ids=[
+            "other-config",
+            "other-worktree-same-config",
+            "python-code-string",
+            "unrelated-script-argument",
+            "same-config-without-owner-evidence",
+            "recorder-without-config-evidence",
+        ],
+    )
+    def test_start_does_not_signal_processes_without_ownership(self, command: str) -> None:
+        """Starting a backend must not adopt processes found by command text."""
+        manager = BackendManager(
+            config_path=Path("/tmp/test_config.json"),
+            events=queue.Queue(),
+            on_state_change=Mock(),
+            on_menu_update=Mock(),
+        )
+        new_proc = Mock()
+        new_proc.poll.return_value = None
+        with (
+            patch("recordian.backend_manager._ACTIVE_BACKEND_PROCESSES", []),
+            patch("recordian.backend_manager.subprocess.Popen", return_value=new_proc),
+            patch("recordian.backend_manager.threading.Thread"),
+            patch("recordian.backend_manager.subprocess.run") as run,
+            patch("recordian.backend_manager.os.kill") as kill,
+            patch("recordian.backend_manager.os.killpg") as killpg,
+            patch("time.monotonic", side_effect=[0.0, 2.0]),
+        ):
+            run.return_value = Mock(stdout=f"900001 {command}\n")
+
+            manager.start()
+
+            assert kill.call_args_list == []
+            assert killpg.call_args_list == []
+            assert run.call_args_list == []
+            assert manager.proc is new_proc
+            assert manager._events.empty()
+
     @patch("recordian.backend_manager.subprocess.Popen")
-    def test_start_launches_subprocess(self, mock_popen: Mock, mock_cleanup_orphans: Mock) -> None:
+    def test_start_launches_subprocess(self, mock_popen: Mock) -> None:
         """测试启动时创建子进程"""
         config_path = Path("/tmp/test_config.json")
         events = queue.Queue()
@@ -116,7 +162,6 @@ class TestBackendManagerStart:
         assert manager.proc == mock_proc
         on_state_change.assert_called_once_with(True, "starting", "Starting backend...")
         on_menu_update.assert_called_once()
-        mock_cleanup_orphans.assert_called_once()
 
     @patch("recordian.backend_manager.subprocess.Popen")
     def test_start_does_not_restart_running_process(self, mock_popen: Mock) -> None:
@@ -143,33 +188,6 @@ class TestBackendManagerStart:
         # 验证没有创建新进程
         mock_popen.assert_not_called()
 
-    @patch("recordian.backend_manager._cleanup_orphan_recordian_recorders")
-    @patch("recordian.backend_manager.subprocess.Popen")
-    def test_start_logs_orphan_cleanup(self, mock_popen: Mock, mock_cleanup_orphans: Mock) -> None:
-        config_path = Path("/tmp/test_config.json")
-        events = queue.Queue()
-        on_state_change = Mock()
-        on_menu_update = Mock()
-
-        mock_cleanup_orphans.return_value = 3
-        mock_proc = Mock()
-        mock_proc.poll.return_value = None
-        mock_proc.stdout = Mock()
-        mock_proc.stderr = Mock()
-        mock_proc.stdout.readline.side_effect = [""]
-        mock_proc.stderr.readline.side_effect = [""]
-        mock_popen.return_value = mock_proc
-
-        manager = BackendManager(
-            config_path=config_path,
-            events=events,
-            on_state_change=on_state_change,
-            on_menu_update=on_menu_update,
-        )
-
-        manager.start()
-
-        assert events.get_nowait() == {"event": "log", "message": "cleaned_orphan_recorders:3"}
 
 
 class TestBackendManagerStop:
@@ -402,14 +420,12 @@ class TestBackendManagerProcessExit:
 class TestBackendManagerRestart:
     """测试重启功能"""
 
-    @patch("recordian.backend_manager._cleanup_orphan_recordian_recorders")
     @patch("recordian.backend_manager._terminate_backend_process")
     @patch("recordian.backend_manager.subprocess.Popen")
     def test_restart_stops_and_starts(
         self,
         mock_popen: Mock,
         mock_terminate_backend_process: Mock,
-        mock_cleanup_orphans: Mock,
     ) -> None:
         """测试重启先停止后启动"""
         config_path = Path("/tmp/test_config.json")
@@ -448,7 +464,6 @@ class TestBackendManagerRestart:
         # 验证新进程被启动
         mock_popen.assert_called_once()
         assert manager.proc == new_proc
-        mock_cleanup_orphans.assert_called_once()
 
 
 class TestBackendManagerCleanup:
@@ -587,76 +602,6 @@ class TestBackendManagerCleanup:
         ]
         assert mock_proc.wait.call_count == 2
 
-    @patch("recordian.backend_manager.subprocess.run")
-    def test_list_orphan_recordian_recorder_pids_filters_recordian_ffmpeg(self, mock_run: Mock) -> None:
-        mock_run.return_value = Mock(
-            stdout=(
-                "100 /usr/bin/ffmpeg -hide_banner -loglevel error -y -f pulse -i default "
-                "-ac 1 -ar 16000 -filter_complex [0:a]asplit=2[record][monitor] "
-                "-map [record] -c:a libopus -b:a 24k /tmp/recordian-ptt-a/input.ogg "
-                "-map [monitor] -f f32le -acodec pcm_f32le pipe:1\n"
-                "101 /usr/bin/ffmpeg -hide_banner -loglevel error -y -f x11grab -i :0 pipe:1\n"
-            )
-        )
-
-        result = _list_orphan_recordian_recorder_pids(exclude_pids={100})
-
-        assert result == []
-
-        result = _list_orphan_recordian_recorder_pids()
-        assert result == [100]
-
-    def test_is_recordian_recorder_command_matches_expected_ffmpeg(self) -> None:
-        command = (
-            "/usr/bin/ffmpeg -hide_banner -loglevel error -y -f pulse -i default "
-            "-ac 1 -ar 16000 -filter_complex [0:a]asplit=2[record][monitor] "
-            "-map [record] -c:a libopus -b:a 24k /tmp/recordian-ptt-a/input.ogg "
-            "-map [monitor] -f f32le -acodec pcm_f32le pipe:1"
-        )
-        assert _is_recordian_recorder_command(command) is True
-        assert _is_recordian_recorder_command("/usr/bin/ffmpeg -f x11grab -i :0 pipe:1") is False
-
-    def test_is_hotkey_dictate_command_matches_backend(self) -> None:
-        assert (
-            _is_hotkey_dictate_command(
-                "/home/zz8011/文档/Develop/Recordian/.venv/bin/python3 -m recordian.hotkey_dictate "
-                "--config-path /home/zz8011/.config/recordian/hotkey.json"
-            )
-            is True
-        )
-        assert _is_hotkey_dictate_command("python3 -m recordian.tray_app") is False
-
-    @patch("recordian.backend_manager.time.sleep")
-    @patch("recordian.backend_manager.time.monotonic")
-    @patch("recordian.backend_manager.os.kill")
-    @patch("recordian.backend_manager._list_orphan_recordian_recorder_pids")
-    def test_cleanup_orphan_recordian_recorders_terminates_and_kills_survivors(
-        self,
-        mock_list_pids: Mock,
-        mock_kill: Mock,
-        mock_monotonic: Mock,
-        mock_sleep: Mock,
-    ) -> None:
-        mock_list_pids.return_value = [101, 102]
-        mock_monotonic.side_effect = [0.0, 0.2, 2.0]
-
-        def _kill_side_effect(pid: int, sig: int) -> None:
-            if sig == 0 and pid == 101:
-                raise ProcessLookupError()
-
-        mock_kill.side_effect = _kill_side_effect
-
-        cleaned = _cleanup_orphan_recordian_recorders()
-
-        assert cleaned == 2
-        assert mock_kill.call_args_list == [
-            ((101, signal.SIGTERM),),
-            ((102, signal.SIGTERM),),
-            ((101, 0),),
-            ((102, 0),),
-            ((102, signal.SIGKILL),),
-        ]
-        mock_sleep.assert_called_once()
 
 
 class TestBackendManagerRequestStopRecording:

@@ -628,6 +628,8 @@ def _save_runtime_config(args: argparse.Namespace) -> None:
         "auto_hard_enter": bool(getattr(args, "auto_hard_enter", False)),
         "enable_remote_paste": bool(getattr(args, "enable_remote_paste", False)),
         "remote_paste_host": getattr(args, "remote_paste_host", ""),
+        "remote_paste_token_file": getattr(args, "remote_paste_token_file", ""),
+        "remote_paste_tls_ca_file": getattr(args, "remote_paste_tls_ca_file", ""),
         "remote_paste_port": getattr(args, "remote_paste_port", 24872),
         "remote_paste_timeout_s": getattr(args, "remote_paste_timeout_s", 3.0),
         "remote_paste_mode": getattr(args, "remote_paste_mode", "direct"),

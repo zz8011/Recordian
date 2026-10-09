@@ -19,7 +19,6 @@ import threading
 from pathlib import Path
 from types import SimpleNamespace
 
-import numpy as np
 import pytest
 
 from recordian import linux_commit
@@ -88,7 +87,7 @@ def _pipeline_args() -> argparse.Namespace:
 
 
 def _patch_pipeline_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(pp, "read_wav_mono_f32", lambda p: np.array([0.3], dtype=np.float32))
+    monkeypatch.setattr(pp, "wav_mono_rms", lambda p: 0.2)
     monkeypatch.setattr(pp, "send_remote_paste_from_args", lambda a, t, *, log=None: {"enabled": False})
 
 
@@ -457,7 +456,7 @@ def test_controller_timeout_legacy_backend_keeps_full_audio_fallback(
         "recordian.realtime_asr.open_monitor_stream_reader",
         lambda handle: _BlockingReader(),
     )
-    monkeypatch.setattr(pp, "read_wav_mono_f32", lambda p: np.array([0.3], dtype=np.float32))
+    monkeypatch.setattr(pp, "wav_mono_rms", lambda p: 0.2)
     monkeypatch.setattr(pp, "send_remote_paste_from_args", lambda a, t, *, log=None: {"enabled": False})
 
     events: list[dict[str, object]] = []

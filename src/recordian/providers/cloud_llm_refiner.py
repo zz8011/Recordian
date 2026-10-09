@@ -1,12 +1,63 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable, Iterator
 from urllib.parse import urlparse
 
 from .base_text_refiner import BaseTextRefiner
 
 #: GPUStack 在模型实例未运行时返回的 404 文案片段。
 MODEL_NOT_RUNNING_HINTS = ("no running instances", "model not found")
+
+
+class _IncompleteRefinementError(RuntimeError):
+    """The response cannot be accepted as a complete refinement."""
+
+
+def _require_finish_reason(reason: object, allowed: tuple[str, ...] = ("stop",)) -> None:
+    if reason not in allowed:
+        raise _IncompleteRefinementError("文字精炼响应未正常完成；本次应保留 ASR 原文")
+
+
+def _require_text(value: object) -> str:
+    if not isinstance(value, str):
+        raise _IncompleteRefinementError("文字精炼响应正文不是文本")
+    return value
+
+
+def _filter_thinking(chunks: Iterable[str]) -> Iterator[str]:
+    """Remove thinking blocks across arbitrary chunks with bounded tag lookahead.
+
+    A model may ignore enable_thinking=False. Never emit the inside of a
+    thinking block, including a nested or unclosed one.
+    """
+    tags = ("<think>", "</think>")
+    depth = 0
+    pending = ""
+    for chunk in chunks:
+        pending += chunk
+        while pending:
+            positions = [(pending.find(tag), tag) for tag in tags if tag in pending]
+            if positions:
+                index, tag = min(positions)
+                if not depth and index:
+                    yield pending[:index]
+                depth = depth + 1 if tag == tags[0] else max(0, depth - 1)
+                pending = pending[index + len(tag):]
+                continue
+            keep = max(
+                (size for tag in tags for size in range(1, len(tag)) if pending.endswith(tag[:size])),
+                default=0,
+            )
+            safe = pending[:-keep] if keep else pending
+            if not depth and safe:
+                yield safe
+            pending = pending[-keep:] if keep else ""
+            break
+    if depth:
+        raise _IncompleteRefinementError("文字精炼响应包含未闭合的思考块；本次应保留 ASR 原文")
+    if pending:
+        yield pending
 
 
 def _describe_refine_failure(*, api_base: str, model: str, status: int, body: str) -> str:
@@ -118,7 +169,7 @@ class CloudLLMRefiner(BaseTextRefiner):
             return self._refine_anthropic(text)
 
     def _sanitize_output(self, text: str) -> str:
-        cleaned = self._remove_think_tags(text)
+        cleaned = "".join(_filter_thinking([text]))
         # Some models may echo control tokens from prompts.
         return cleaned.replace("/no_think", "").strip()
 
@@ -231,15 +282,17 @@ class CloudLLMRefiner(BaseTextRefiner):
     @staticmethod
     def _parse_anthropic_response(result: dict) -> str:
         """从 Anthropic API 响应中提取文本"""
+        if not isinstance(result, dict):
+            raise _IncompleteRefinementError("文字精炼响应不是对象")
+        _require_finish_reason(result.get("stop_reason"), ("end_turn", "stop_sequence"))
         content = result.get("content", [])
 
         # 查找 type="text" 的内容
         if content and isinstance(content, list):
             for item in content:
                 if isinstance(item, dict) and item.get("type") == "text":
-                    text = item.get("text", "")
-                    return text.strip() if isinstance(text, str) else ""
-        return ""
+                    return _require_text(item.get("text")).strip()
+        raise _IncompleteRefinementError("文字精炼响应缺少正文")
 
     def _refine_anthropic(self, text: str) -> str:
         """使用 Anthropic API 格式"""
@@ -292,15 +345,17 @@ class CloudLLMRefiner(BaseTextRefiner):
     @staticmethod
     def _parse_openai_response(result: dict) -> str:
         """从 OpenAI API 响应中提取文本"""
+        if not isinstance(result, dict):
+            raise _IncompleteRefinementError("文字精炼响应不是对象")
         choices = result.get("choices", [])
         if choices and isinstance(choices, list):
             choice = choices[0]
             if isinstance(choice, dict):
+                _require_finish_reason(choice.get("finish_reason"))
                 message = choice.get("message", {})
                 if isinstance(message, dict):
-                    content = message.get("content", "")
-                    return content.strip() if isinstance(content, str) else ""
-        return ""
+                    return _require_text(message.get("content")).strip()
+        raise _IncompleteRefinementError("文字精炼响应缺少完整结果")
 
     def _refine_openai(self, text: str) -> str:
         """使用 OpenAI API 格式（Groq, DeepSeek 等）"""
@@ -332,30 +387,46 @@ class CloudLLMRefiner(BaseTextRefiner):
         )
         self._raise_on_error(response)
 
-        for raw_line in response.iter_lines(decode_unicode=False):
-            if not raw_line:
-                continue
-            line = raw_line.decode("utf-8", errors="replace").strip()
-            if not line.startswith("data:"):
-                continue
-            payload = line[5:].strip()
-            if payload == "[DONE]":
-                break
-            event = json.loads(payload)
-            choices = event.get("choices")
-            if not isinstance(choices, list) or not choices:
-                continue
-            choice = choices[0]
-            if not isinstance(choice, dict):
-                continue
-            delta = choice.get("delta", {})
-            if not isinstance(delta, dict):
-                continue
-            content = delta.get("content")
-            if isinstance(content, str) and content:
-                yield content
-            if choice.get("finish_reason") is not None:
-                break
+        def chunks():
+            for raw_line in response.iter_lines(decode_unicode=False):
+                if not raw_line:
+                    continue
+                line = raw_line.decode("utf-8").strip()
+                if not line.startswith("data:"):
+                    continue
+                data = line[5:].strip()
+                if data == "[DONE]":
+                    break
+                event = json.loads(data)
+                if not isinstance(event, dict) or "error" in event:
+                    raise _IncompleteRefinementError("文字精炼流式响应无效")
+                choices = event.get("choices")
+                if not isinstance(choices, list) or not choices:
+                    continue
+                choice = choices[0]
+                if not isinstance(choice, dict):
+                    raise _IncompleteRefinementError("文字精炼流式选项无效")
+                reason = choice.get("finish_reason")
+                if reason is not None:
+                    _require_finish_reason(reason)
+                delta = choice.get("delta", {})
+                if not isinstance(delta, dict):
+                    raise _IncompleteRefinementError("文字精炼流式内容无效")
+                content = delta.get("content")
+                if content is not None:
+                    token = _require_text(content)
+                    if token:
+                        yield token
+                if reason == "stop":
+                    return
+            raise _IncompleteRefinementError("文字精炼流在完成前结束；本次应保留 ASR 原文")
+
+        try:
+            yield from _filter_thinking(chunks())
+        finally:
+            close = getattr(response, "close", None)
+            if callable(close):
+                close()
 
     # --- Ollama -----------------------------------------------------------
 
@@ -385,11 +456,13 @@ class CloudLLMRefiner(BaseTextRefiner):
     @staticmethod
     def _parse_ollama_response(result: dict) -> str:
         """从 Ollama API 响应中提取文本"""
+        if not isinstance(result, dict) or result.get("done") is not True:
+            raise _IncompleteRefinementError("文字精炼响应未完成")
+        _require_finish_reason(result.get("done_reason", "stop"))
         message = result.get("message", {})
         if isinstance(message, dict):
-            content = message.get("content", "")
-            return content.strip() if isinstance(content, str) else ""
-        return ""
+            return _require_text(message.get("content")).strip()
+        raise _IncompleteRefinementError("文字精炼响应缺少正文")
 
     def _refine_ollama(self, text: str) -> str:
         """使用 Ollama 原生 API 格式"""
@@ -427,18 +500,34 @@ class CloudLLMRefiner(BaseTextRefiner):
         )
         self._raise_on_error(response)
 
-        for raw_line in response.iter_lines(decode_unicode=False):
-            if not raw_line:
-                continue
-            event = json.loads(raw_line.decode("utf-8", errors="replace"))
-            message = event.get("message", {})
-            if not isinstance(message, dict):
-                continue
-            content = message.get("content")
-            if isinstance(content, str) and content:
-                yield content
-            if bool(event.get("done")):
-                break
+        def chunks():
+            for raw_line in response.iter_lines(decode_unicode=False):
+                if not raw_line:
+                    continue
+                event = json.loads(raw_line.decode("utf-8"))
+                if not isinstance(event, dict) or "error" in event:
+                    raise _IncompleteRefinementError("文字精炼流式响应无效")
+                done = event.get("done") is True
+                if done:
+                    _require_finish_reason(event.get("done_reason", "stop"))
+                message = event.get("message", {})
+                if not isinstance(message, dict):
+                    raise _IncompleteRefinementError("文字精炼流式内容无效")
+                content = message.get("content")
+                if content is not None:
+                    token = _require_text(content)
+                    if token:
+                        yield token
+                if done:
+                    return
+            raise _IncompleteRefinementError("文字精炼流在完成前结束；本次应保留 ASR 原文")
+
+        try:
+            yield from _filter_thinking(chunks())
+        finally:
+            close = getattr(response, "close", None)
+            if callable(close):
+                close()
 
     # --- Legacy -----------------------------------------------------------
 

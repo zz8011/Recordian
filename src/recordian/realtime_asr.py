@@ -844,6 +844,19 @@ def _start_realtime_asr_worker(
                 )
                 return
 
+            # The final liveness probe can block while the controller hits
+            # its deadline. Its successful reply does not revoke cancellation.
+            if cancel_event.is_set():
+                session.cancel()
+                worker.outcome = "cancelled"
+                worker.commit_info = {
+                    "backend": "fcitx",
+                    "committed": False,
+                    "detail": "realtime_cancelled_before_commit",
+                    "outcome": "cancelled",
+                }
+                return
+
             commit_result = session.commit(final_text)
             committed = bool(getattr(commit_result, "committed", False))
             detail = str(getattr(commit_result, "detail", ""))

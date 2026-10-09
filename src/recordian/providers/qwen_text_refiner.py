@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
+from concurrent.futures import Future
 from typing import Any
 
 from .base_text_refiner import BaseTextRefiner
+from .cloud_llm_refiner import _filter_thinking, _IncompleteRefinementError
 
 
 class Qwen3TextRefiner(BaseTextRefiner):
@@ -36,6 +39,41 @@ class Qwen3TextRefiner(BaseTextRefiner):
         self.max_new_tokens = max_new_tokens
         self._model: Any | None = None
         self._tokenizer: Any | None = None
+
+    def _eos_token_id(self) -> int | list[int] | None:
+        # Preserve the model's extra termination tokens rather than overriding
+        # them with the tokenizer's single EOS. Use the same IDs for validation.
+        config = getattr(self._model, "generation_config", None)
+        eos = getattr(config, "eos_token_id", None)
+        if eos is None:
+            eos = self._tokenizer.eos_token_id
+        return eos
+
+    @staticmethod
+    def _completed_tokens(result, input_ids, *, max_new_tokens, eos_token_id, pad_token_id):
+        """Accept tensor and return_dict_in_generate outputs, excluding the prompt."""
+        sequences = result.get("sequences") if isinstance(result, Mapping) else getattr(result, "sequences", result)
+        sequences = sequences.tolist() if hasattr(sequences, "tolist") else sequences
+        inputs = input_ids.tolist() if hasattr(input_ids, "tolist") else input_ids
+        if not isinstance(sequences, (list, tuple)) or len(sequences) != len(inputs):
+            raise _IncompleteRefinementError("Qwen 生成结果缺少有效 token 序列；本次应保留 ASR 原文")
+        eos_ids = set(eos_token_id if isinstance(eos_token_id, (list, tuple)) else [eos_token_id]) - {None}
+        generated = []
+        for prompt, sequence in zip(inputs, sequences, strict=True):
+            if not isinstance(sequence, (list, tuple)) or list(sequence[:len(prompt)]) != list(prompt):
+                raise _IncompleteRefinementError("Qwen 生成结果缺少输入序列；本次应保留 ASR 原文")
+            tokens = list(sequence[len(prompt):])
+            terminal = next((i for i, token in enumerate(tokens) if token in eos_ids), None)
+            if terminal is not None:
+                complete = all(token == pad_token_id for token in tokens[terminal + 1:])
+            else:
+                # With configured EOS, a streamer stop alone proves nothing.
+                # Without EOS, exhausting the generation budget is truncation.
+                complete = not eos_ids and 0 < len(tokens) < max_new_tokens
+            if not complete or len(tokens) > max_new_tokens:
+                raise _IncompleteRefinementError("Qwen 生成结果未正常完成；本次应保留 ASR 原文")
+            generated.append(tokens)
+        return generated
 
     @property
     def provider_name(self) -> str:
@@ -135,7 +173,7 @@ class Qwen3TextRefiner(BaseTextRefiner):
             "max_new_tokens": self._max_output_tokens_for_text(text),
             "do_sample": False,  # 使用 greedy decoding，更快更稳定
             "pad_token_id": tokenizer.pad_token_id,
-            "eos_token_id": tokenizer.eos_token_id,
+            "eos_token_id": self._eos_token_id(),
         }
 
         # 注意：不使用 stop_strings，因为会导致输出为空
@@ -148,13 +186,15 @@ class Qwen3TextRefiner(BaseTextRefiner):
                 **generate_kwargs,
             )
 
-        generated_ids = [
-            output_ids[len(input_ids):]
-            for input_ids, output_ids in zip(model_inputs.input_ids, generated_ids, strict=False)
-        ]
+        generated_ids = self._completed_tokens(
+            generated_ids, model_inputs.input_ids,
+            max_new_tokens=generate_kwargs["max_new_tokens"],
+            eos_token_id=generate_kwargs["eos_token_id"],
+            pad_token_id=generate_kwargs["pad_token_id"],
+        )
 
         response = tokenizer.batch_decode(generated_ids, skip_special_tokens=True)[0]
-        return self._remove_think_tags(response)
+        return "".join(_filter_thinking([response])).strip()
 
     def refine_stream(self, text: str):
         """流式精炼文本：逐 token 生成输出。
@@ -217,57 +257,33 @@ class Qwen3TextRefiner(BaseTextRefiner):
             "temperature": self.temperature,
             "do_sample": True if self.temperature > 0 else False,
             "pad_token_id": tokenizer.pad_token_id,
-            "eos_token_id": tokenizer.eos_token_id,
+            "eos_token_id": self._eos_token_id(),
             "streamer": streamer,
         }
 
-        # 在后台线程中运行生成
-        thread = threading.Thread(target=model.generate, kwargs=generate_kwargs)
+        # Capture the actual output/error. The stream's end sentinel does not
+        # distinguish EOS from a token limit or a failed generation.
+        result: Future[Any] = Future()
+
+        def generate() -> None:
+            try:
+                result.set_result(model.generate(**generate_kwargs))
+            except BaseException as exc:
+                result.set_exception(exc)
+                # Transformers does not end the streamer on generation errors.
+                # Release its reader so the original error reaches the caller.
+                streamer.on_finalized_text("", stream_end=True)
+
+        thread = threading.Thread(target=generate, daemon=True)
         thread.start()
 
-        # 始终过滤 <think> 标签，只输出最终结果
-        in_think_block = False
-        buffer = ""
-
-        for new_text in streamer:
-            buffer += new_text
-
-            # 检测进入 <think> 块
-            if '<think>' in buffer and not in_think_block:
-                in_think_block = True
-                # 输出 <think> 之前的内容
-                before_think = buffer.split('<think>')[0]
-                if before_think:
-                    yield before_think
-                # 保留 <think> 之后的内容继续处理
-                buffer = buffer.split('<think>', 1)[1] if '<think>' in buffer else ""
-                continue
-
-            # 检测退出 </think> 块
-            if '</think>' in buffer and in_think_block:
-                in_think_block = False
-                # 跳过 </think> 及之前的内容
-                parts = buffer.split('</think>', 1)
-                buffer = parts[1] if len(parts) > 1 else ""
-                continue
-
-            # 如果不在 think 块中，输出文本
-            if not in_think_block:
-                # 检查是否可能有未完成的标签
-                if buffer.endswith('<') or buffer.endswith('<t') or buffer.endswith('<th') or \
-                   buffer.endswith('<thi') or buffer.endswith('<thin') or buffer.endswith('<think'):
-                    # 可能是标签的开始，等待更多内容
-                    continue
-
-                if buffer:
-                    yield buffer
-                    buffer = ""
-
-        # 输出剩余内容（如果不在 think 块中）
-        if buffer and not in_think_block:
-            yield buffer
-
-        thread.join()
+        yield from _filter_thinking(streamer)
+        self._completed_tokens(
+            result.result(), model_inputs.input_ids,
+            max_new_tokens=generate_kwargs["max_new_tokens"],
+            eos_token_id=generate_kwargs["eos_token_id"],
+            pad_token_id=generate_kwargs["pad_token_id"],
+        )
 
     # --- Prompt -----------------------------------------------------------
 

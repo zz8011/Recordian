@@ -22,7 +22,7 @@ def test_health(server_url: str) -> None:
         req = request.Request(f"{server_url}/health", method="GET")
         with request.urlopen(req, timeout=5) as resp:
             data = json.loads(resp.read().decode("utf-8"))
-            print(f"✅ 服务正常")
+            print("✅ 服务正常")
             print(f"   模型: {data.get('model')}")
             print(f"   设备: {data.get('device')}")
             print(f"   状态: {data.get('status')}")
@@ -66,7 +66,7 @@ def test_transcribe(server_url: str, audio_path: Path) -> None:
     try:
         with request.urlopen(req, timeout=30) as resp:
             result = json.loads(resp.read().decode("utf-8"))
-            print(f"✅ 识别成功")
+            print("✅ 识别成功")
             print(f"   文本: {result.get('text')}")
             print(f"   置信度: {result.get('confidence')}")
             print(f"   模型: {result.get('model')}")

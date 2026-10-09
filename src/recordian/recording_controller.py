@@ -468,20 +468,6 @@ def build_ptt_hotkey_handlers(
             return False
         _set_state("last_trigger", now)
 
-        target_wid = get_focused_window_id()
-        _set_state("target_window_id", target_wid)
-        _apply_target_window(committer, {"target_window_id": target_wid})
-        if args.debug_diagnostics:
-            on_state(
-                {
-                    "event": "log",
-                    "message": (
-                        f"diag capture target_window_id={target_wid}"
-                        f" commit_backend={getattr(committer, 'backend_name', 'unknown')}"
-                    ),
-                }
-            )
-
         if not lock.acquire(blocking=False):
             on_busy({"event": "busy", "reason": "dictation_in_progress"})
             return False
@@ -494,6 +480,10 @@ def build_ptt_hotkey_handlers(
         try:
             from .wayland_desktop import select_desktop_committer
 
+            # Only the owner of the recording slot may replace its target.
+            # Busy hotkeys must leave the active capture/processing untouched.
+            target_wid = get_focused_window_id()
+            _set_state("target_window_id", target_wid)
             agent_capture = agent_hub.begin_capture(trigger_source) if agent_hub is not None else None
             capture_args = agent_capture.arguments(args) if agent_capture is not None else args
             committer = (
@@ -501,6 +491,16 @@ def build_ptt_hotkey_handlers(
                 else select_desktop_committer(base_committer)
             )
             _apply_target_window(committer, {"target_window_id": target_wid})
+            if args.debug_diagnostics:
+                on_state(
+                    {
+                        "event": "log",
+                        "message": (
+                            f"diag capture target_window_id={target_wid}"
+                            f" commit_backend={getattr(committer, 'backend_name', 'unknown')}"
+                        ),
+                    }
+                )
             _set_state("recording_state", RecordingState.RECORDING)
             temp_dir = TemporaryDirectory(prefix="recordian-ptt-")
             suffix = ".ogg" if args.record_format == "ogg" else ".wav"

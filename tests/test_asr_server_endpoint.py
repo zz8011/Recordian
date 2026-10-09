@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import base64
+import io
+import wave
 from types import SimpleNamespace
 
 from server import asr_server
@@ -25,10 +27,16 @@ def test_asr_server_transcribe_applies_context_hotwords_and_language() -> None:
     asr_server.model_name = "fake-qwen"
 
     client = asr_server.app.test_client()
+    audio = io.BytesIO()
+    with wave.open(audio, 'wb') as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(16000)
+        wav.writeframes(b'\0\0' * 1600)
     response = client.post(
         "/transcribe",
         json={
-            "audio_base64": base64.b64encode(b"RIFFdemo").decode("ascii"),
+            "audio_base64": base64.b64encode(audio.getvalue()).decode("ascii"),
             "hotwords": ["OpenClaw", "会议", "OpenClaw"],
             "context": "固定上下文",
             "language": "zh",

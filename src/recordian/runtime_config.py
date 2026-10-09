@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import math
+import os
 import re
 from collections.abc import Mapping
 from pathlib import Path
@@ -207,7 +208,9 @@ def normalize_notify_backend(value: object, *, fallback: str = "auto") -> str:
     )
 
 
-def _normalize_path_string(value: object, *, base_dir: Path | None = None) -> str:
+def _normalize_path_string(
+    value: object, *, base_dir: Path | None = None, resolve_symlinks: bool = True
+) -> str:
     raw = str(value).strip()
     if not raw:
         return ""
@@ -215,7 +218,7 @@ def _normalize_path_string(value: object, *, base_dir: Path | None = None) -> st
     if path.is_absolute():
         return str(path)
     if base_dir is not None:
-        return str((base_dir / path).resolve())
+        return str((base_dir / path).resolve()) if resolve_symlinks else os.path.abspath(base_dir / path)
     return str(path)
 
 
@@ -272,6 +275,13 @@ def normalize_runtime_config(
         normalized.get("deskflow_active_screen_path", "~/.local/state/deskflow/active_screen.json"),
         base_dir=config_base_dir,
     )
+    for key in ("remote_paste_token_file", "remote_paste_tls_ca_file"):
+        if key in normalized:
+            # Preserve the supplied filename so the private token loader can
+            # reject a symlink with O_NOFOLLOW rather than opening its target.
+            normalized[key] = _normalize_path_string(
+                normalized.get(key) or "", base_dir=config_base_dir, resolve_symlinks=False
+            )
     if "deskflow_log_path" in normalized:
         normalized["deskflow_log_path"] = _normalize_path_string(
             normalized.get("deskflow_log_path", ""),

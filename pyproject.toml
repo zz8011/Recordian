@@ -20,7 +20,7 @@ correction = ["requests>=2.31.0", "pypinyin>=0.50.0"]
 hotkey = ["pynput>=1.7.7"]
 gui = ["pystray>=0.19.5", "pillow>=10.0.0", "pynput>=1.7.7", "pyglet>=2.0.10", "sounddevice>=0.4.6", "numpy>=1.20.0"]
 wake = ["sherpa-onnx>=1.10.0", "sounddevice>=0.4.6", "numpy>=1.20.0", "pypinyin>=0.50.0", "sentencepiece>=0.2.0", "webrtcvad-wheels>=2.0.14"]
-dev = ["pytest>=8.0", "pytest-cov>=4.0.0", "ruff>=0.1.0", "mypy>=1.0.0", "sentry-sdk>=1.40.0", "numpy>=1.20.0", "psutil>=5.9.0", "flask>=3.0.0", "websocket-client>=1.7.0", "websockets>=13.0", "requests>=2.31.0", "pypinyin>=0.50.0"]
+dev = ["pytest>=8.0", "pytest-cov>=4.0.0", "ruff>=0.1.0", "mypy>=1.0.0", "sentry-sdk>=1.40.0", "numpy>=1.20.0", "psutil>=5.9.0", "flask>=3.1.3", "werkzeug>=3.1.9", "websocket-client>=1.7.0", "websockets>=13.0", "requests>=2.31.0", "pypinyin>=0.50.0"]
 
 [project.scripts]
 recordian = "recordian.cli:main"
@@ -44,6 +44,7 @@ recordian = ["agent_panel.html", "native_settings.css", "ui_assets/*.png", "ui_a
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+markers = ["integration: optional external service integration checks"]
 
 [tool.ruff]
 line-length = 120

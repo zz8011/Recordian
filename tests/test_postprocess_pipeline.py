@@ -3,8 +3,6 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
-import numpy as np
-
 from recordian.postprocess_pipeline import PostprocessPipelineContext, run_postprocess_pipeline
 from recordian.providers import ASRProviderCapabilities
 
@@ -98,8 +96,8 @@ def test_run_postprocess_pipeline_runs_asr_refine_commit_and_lexicon(tmp_path: P
 
     auto_lexicon = _AutoLexicon()
     monkeypatch.setattr(
-        "recordian.postprocess_pipeline.read_wav_mono_f32",
-        lambda path: np.array([0.2, -0.2, 0.2, -0.2], dtype=np.float32),
+        "recordian.postprocess_pipeline.wav_mono_rms",
+        lambda path: 0.2,
     )
 
     context = PostprocessPipelineContext(
@@ -179,8 +177,8 @@ def test_run_postprocess_pipeline_captures_refine_samples_jsonl(tmp_path: Path, 
             return SimpleNamespace(backend="stdout", committed=True, detail=f"committed:{text}")
 
     monkeypatch.setattr(
-        "recordian.postprocess_pipeline.read_wav_mono_f32",
-        lambda path: np.array([0.3, -0.2, 0.2], dtype=np.float32),
+        "recordian.postprocess_pipeline.wav_mono_rms",
+        lambda path: 0.2,
     )
     monkeypatch.setattr(
         "recordian.postprocess_pipeline.send_remote_paste_from_args",
@@ -252,8 +250,8 @@ def test_run_postprocess_pipeline_logs_when_refine_enabled_without_refiner(tmp_p
             return SimpleNamespace(backend="stdout", committed=True, detail=f"committed:{text}")
 
     monkeypatch.setattr(
-        "recordian.postprocess_pipeline.read_wav_mono_f32",
-        lambda path: np.array([0.3, -0.2, 0.2], dtype=np.float32),
+        "recordian.postprocess_pipeline.wav_mono_rms",
+        lambda path: 0.2,
     )
     monkeypatch.setattr(
         "recordian.postprocess_pipeline.send_remote_paste_from_args",
@@ -323,8 +321,8 @@ def test_run_postprocess_pipeline_corrects_prefetched_text_before_oneshot_commit
 
     committer = _Committer()
     monkeypatch.setattr(
-        "recordian.postprocess_pipeline.read_wav_mono_f32",
-        lambda path: np.array([0.2, -0.2, 0.2, -0.2], dtype=np.float32),
+        "recordian.postprocess_pipeline.wav_mono_rms",
+        lambda path: 0.2,
     )
     monkeypatch.setattr(
         "recordian.postprocess_pipeline.send_remote_paste_from_args",
@@ -391,8 +389,8 @@ def test_run_postprocess_pipeline_reuses_prefetched_asr_text_and_commit(tmp_path
             raise AssertionError("prefetched realtime commit should skip local recommit")
 
     monkeypatch.setattr(
-        "recordian.postprocess_pipeline.read_wav_mono_f32",
-        lambda path: np.array([0.2, -0.2, 0.2, -0.2], dtype=np.float32),
+        "recordian.postprocess_pipeline.wav_mono_rms",
+        lambda path: 0.2,
     )
     monkeypatch.setattr(
         "recordian.postprocess_pipeline.send_remote_paste_from_args",
@@ -466,8 +464,8 @@ def test_run_postprocess_pipeline_skips_local_refine_recommit_when_realtime_comm
             raise AssertionError("local recommit should be skipped")
 
     monkeypatch.setattr(
-        "recordian.postprocess_pipeline.read_wav_mono_f32",
-        lambda path: np.array([0.2, -0.2, 0.2, -0.2], dtype=np.float32),
+        "recordian.postprocess_pipeline.wav_mono_rms",
+        lambda path: 0.2,
     )
     monkeypatch.setattr(
         "recordian.postprocess_pipeline.send_remote_paste_from_args",
@@ -534,8 +532,8 @@ def test_run_postprocess_pipeline_waits_before_hard_enter_for_clipboard_paste(tm
         detail = "hard_enter_sent"
 
     monkeypatch.setattr(
-        "recordian.postprocess_pipeline.read_wav_mono_f32",
-        lambda path: np.array([0.3, -0.2, 0.1], dtype=np.float32),
+        "recordian.postprocess_pipeline.wav_mono_rms",
+        lambda path: 0.2,
     )
     monkeypatch.setattr("recordian.postprocess_pipeline.time.sleep", lambda value: delays.append(value))
     monkeypatch.setattr("recordian.postprocess_pipeline.send_hard_enter", lambda committer: _EnterResult())
@@ -594,8 +592,8 @@ def test_run_postprocess_pipeline_streams_asr_commit_when_enabled(tmp_path: Path
 
     committer = _Committer()
     monkeypatch.setattr(
-        "recordian.postprocess_pipeline.read_wav_mono_f32",
-        lambda path: np.array([0.3, -0.2, 0.1], dtype=np.float32),
+        "recordian.postprocess_pipeline.wav_mono_rms",
+        lambda path: 0.2,
     )
     monkeypatch.setattr(
         "recordian.postprocess_pipeline.send_remote_paste_from_args",
@@ -666,8 +664,8 @@ def test_empty_file_stream_falls_back_to_oneshot_commit(tmp_path: Path, monkeypa
 
     committer = _Committer()
     monkeypatch.setattr(
-        "recordian.postprocess_pipeline.read_wav_mono_f32",
-        lambda path: np.array([0.3, -0.2, 0.1], dtype=np.float32),
+        "recordian.postprocess_pipeline.wav_mono_rms",
+        lambda path: 0.2,
     )
     monkeypatch.setattr(
         "recordian.postprocess_pipeline.send_remote_paste_from_args",
@@ -732,8 +730,8 @@ def test_run_postprocess_pipeline_streams_asr_commit_with_normalized_growth(tmp_
 
     committer = _Committer()
     monkeypatch.setattr(
-        "recordian.postprocess_pipeline.read_wav_mono_f32",
-        lambda path: np.array([0.3, -0.2, 0.1], dtype=np.float32),
+        "recordian.postprocess_pipeline.wav_mono_rms",
+        lambda path: 0.2,
     )
     monkeypatch.setattr(
         "recordian.postprocess_pipeline.send_remote_paste_from_args",
@@ -808,8 +806,8 @@ def test_run_postprocess_pipeline_streams_asr_commit_uses_streaming_committer_ov
     original_committer = _OriginalCommitter()
     fast_committer = _FastCommitter()
     monkeypatch.setattr(
-        "recordian.postprocess_pipeline.read_wav_mono_f32",
-        lambda path: np.array([0.3, -0.2, 0.1], dtype=np.float32),
+        "recordian.postprocess_pipeline.wav_mono_rms",
+        lambda path: 0.2,
     )
     monkeypatch.setattr(
         "recordian.postprocess_pipeline.send_remote_paste_from_args",
@@ -886,8 +884,8 @@ def test_run_postprocess_pipeline_streams_refine_commit_when_enabled(tmp_path: P
 
     committer = _Committer()
     monkeypatch.setattr(
-        "recordian.postprocess_pipeline.read_wav_mono_f32",
-        lambda path: np.array([0.3, -0.2, 0.1], dtype=np.float32),
+        "recordian.postprocess_pipeline.wav_mono_rms",
+        lambda path: 0.2,
     )
     monkeypatch.setattr(
         "recordian.postprocess_pipeline.send_remote_paste_from_args",
@@ -963,8 +961,8 @@ def test_run_postprocess_pipeline_streams_refine_commit_applies_postprocess_rule
 
     committer = _Committer()
     monkeypatch.setattr(
-        "recordian.postprocess_pipeline.read_wav_mono_f32",
-        lambda path: np.array([0.3, -0.2, 0.1], dtype=np.float32),
+        "recordian.postprocess_pipeline.wav_mono_rms",
+        lambda path: 0.2,
     )
     monkeypatch.setattr(
         "recordian.postprocess_pipeline.send_remote_paste_from_args",
@@ -1027,8 +1025,8 @@ def test_run_postprocess_pipeline_records_remote_paste_result(tmp_path: Path, mo
             return SimpleNamespace(backend="stdout", committed=True, detail=f"committed:{text}")
 
     monkeypatch.setattr(
-        "recordian.postprocess_pipeline.read_wav_mono_f32",
-        lambda path: np.array([0.3, -0.2, 0.1], dtype=np.float32),
+        "recordian.postprocess_pipeline.wav_mono_rms",
+        lambda path: 0.2,
     )
     monkeypatch.setattr(
         "recordian.postprocess_pipeline.send_remote_paste_from_args",
@@ -1100,8 +1098,8 @@ def test_run_postprocess_pipeline_routes_to_remote_only_when_deskflow_screen_mat
             raise AssertionError("remote-only route should skip local commit")
 
     monkeypatch.setattr(
-        "recordian.postprocess_pipeline.read_wav_mono_f32",
-        lambda path: np.array([0.3, -0.2, 0.1], dtype=np.float32),
+        "recordian.postprocess_pipeline.wav_mono_rms",
+        lambda path: 0.2,
     )
     monkeypatch.setattr(
         "recordian.postprocess_pipeline.send_remote_paste_from_args",
@@ -1176,8 +1174,8 @@ def test_run_postprocess_pipeline_applies_hotword_correction_before_commit(tmp_p
             return SimpleNamespace(backend="stdout", committed=True, detail=f"committed:{text}")
 
     monkeypatch.setattr(
-        "recordian.postprocess_pipeline.read_wav_mono_f32",
-        lambda path: np.array([0.2, -0.2, 0.2, -0.2], dtype=np.float32),
+        "recordian.postprocess_pipeline.wav_mono_rms",
+        lambda path: 0.2,
     )
 
     context = PostprocessPipelineContext(
@@ -1236,8 +1234,8 @@ def test_run_postprocess_pipeline_hotword_correction_can_be_disabled(tmp_path: P
             return SimpleNamespace(backend="stdout", committed=True, detail=f"committed:{text}")
 
     monkeypatch.setattr(
-        "recordian.postprocess_pipeline.read_wav_mono_f32",
-        lambda path: np.array([0.2, -0.2, 0.2, -0.2], dtype=np.float32),
+        "recordian.postprocess_pipeline.wav_mono_rms",
+        lambda path: 0.2,
     )
 
     context = PostprocessPipelineContext(
@@ -1389,8 +1387,8 @@ def test_run_postprocess_pipeline_skips_llm_and_commits_cleaned_long_text(tmp_pa
             return SimpleNamespace(backend="stdout", committed=True, detail=f"committed:{text}")
 
     monkeypatch.setattr(
-        "recordian.postprocess_pipeline.read_wav_mono_f32",
-        lambda path: np.array([0.3, -0.2, 0.2], dtype=np.float32),
+        "recordian.postprocess_pipeline.wav_mono_rms",
+        lambda path: 0.2,
     )
     monkeypatch.setattr(
         "recordian.postprocess_pipeline.send_remote_paste_from_args",

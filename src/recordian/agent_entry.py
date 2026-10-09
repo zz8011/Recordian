@@ -12,6 +12,7 @@ import queue
 import re
 import signal
 import subprocess
+import tempfile
 import threading
 import time
 import urllib.error
@@ -30,12 +31,14 @@ TERMINAL = {'completed', 'failed', 'cancelled', 'interrupted'}
 
 def private_json(path: Path, value: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    tmp = path.with_name(path.name + '.tmp')
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, 'w') as f:
-        json.dump(value, f, ensure_ascii=False, indent=2)
-    tmp.chmod(0o600)
-    os.replace(tmp, path)
+    fd, filename = tempfile.mkstemp(prefix=path.name + '.', suffix='.tmp', dir=path.parent)
+    tmp = Path(filename)
+    try:
+        with os.fdopen(fd, 'w') as f:
+            json.dump(value, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, path)
+    finally:
+        tmp.unlink(missing_ok=True)
 
 
 @dataclass(frozen=True)

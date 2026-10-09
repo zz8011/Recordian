@@ -98,7 +98,8 @@ def normalize_realtime_url(url: str) -> str:
 
 def _compute_websocket_accept(key: str) -> str:
     payload = (key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode("ascii")
-    digest = hashlib.sha1(payload).digest()
+    # RFC 6455 handshake checksum; this is not a cryptographic security primitive.
+    digest = hashlib.sha1(payload, usedforsecurity=False).digest()
     return base64.b64encode(digest).decode("ascii")
 
 

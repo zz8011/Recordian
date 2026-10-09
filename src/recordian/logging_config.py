@@ -10,8 +10,24 @@ from __future__ import annotations
 
 import logging
 import os
+import stat
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
+
+
+class _PrivateRotatingFileHandler(RotatingFileHandler):
+    def _open(self):
+        fd = os.open(self.baseFilename, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600)
+        try:
+            info = os.fstat(fd)
+            if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_nlink != 1:
+                raise OSError('log must be a private regular file owned by the current user')
+            os.fchmod(fd, 0o600)
+            stream = os.fdopen(fd, self.mode, encoding=self.encoding, errors=self.errors)
+        except BaseException:
+            os.close(fd)
+            raise
+        return stream
 
 
 def setup_logging(
@@ -44,7 +60,9 @@ def setup_logging(
 
     # 清除现有 handlers（如果强制重新配置）
     if force_reconfigure:
-        logger.handlers.clear()
+        for handler in logger.handlers[:]:
+            logger.removeHandler(handler)
+            handler.close()
 
     logger.setLevel(level)
     logger.propagate = False  # 不传播到根 logger
@@ -64,7 +82,7 @@ def setup_logging(
     # 确保日志目录存在
     log_file.parent.mkdir(parents=True, exist_ok=True)
 
-    file_handler = RotatingFileHandler(
+    file_handler = _PrivateRotatingFileHandler(
         log_file,
         maxBytes=max_bytes,
         backupCount=backup_count,

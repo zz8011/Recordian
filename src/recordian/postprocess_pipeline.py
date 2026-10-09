@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from . import streaming_correction as _streaming_correction
-from .audio import read_wav_mono_f32
+from .audio import wav_mono_rms
 from .hotword_corrector import correct_hotwords, lexicon_from_args
 from .linux_commit import (
     CompositionRefusedError,
@@ -427,93 +427,6 @@ def _merge_stream_text(prev: str, current: str) -> str:
     return prev + current
 
 
-def _stream_display_delta(prev_display: str, next_display: str) -> tuple[str, str]:
-    if next_display == prev_display:
-        return prev_display, ""
-    if next_display.startswith(prev_display):
-        return next_display, next_display[len(prev_display):]
-    if prev_display.startswith(next_display):
-        return prev_display, ""
-    return prev_display, ""
-
-
-@dataclass(slots=True)
-class _StreamingCommitAccumulator:
-    committer: Any
-    accumulated_text: str = ""
-    chunk_count: int = 0
-    any_committed: bool = False
-    last_backend: str = ""
-    last_result: Any | None = None
-    error: str = ""
-    pending_text: str = ""
-    last_flush_started_at: float = 0.0
-
-    def _flush_policy(self) -> tuple[int, float]:
-        backend = str(getattr(self.committer, "backend_name", "")).strip().lower()
-        if backend == "xdotool-clipboard":
-            return 12, 0.35
-        return 1, 0.0
-
-    def _flush_pending(self) -> None:
-        if not self.pending_text or self.error:
-            return
-        token = self.pending_text
-        self.pending_text = ""
-        try:
-            result = self.committer.commit(token)
-        except Exception as exc:  # noqa: BLE001
-            self.error = str(exc)
-            return
-        self.chunk_count += 1
-        self.last_result = result
-        self.last_backend = str(getattr(result, "backend", "") or getattr(self.committer, "backend_name", "unknown"))
-        if bool(getattr(result, "committed", False)):
-            self.any_committed = True
-        self.last_flush_started_at = time.monotonic()
-
-    def append_chunk(self, chunk: str) -> None:
-        token = str(chunk)
-        if token == "":
-            return
-        self.accumulated_text += token
-        if self.error:
-            return
-        self.pending_text += token
-        if self.last_flush_started_at <= 0.0:
-            self.last_flush_started_at = time.monotonic()
-        min_chars, max_delay_s = self._flush_policy()
-        now = time.monotonic()
-        if len(self.pending_text) >= min_chars or (max_delay_s > 0.0 and now - self.last_flush_started_at >= max_delay_s):
-            self._flush_pending()
-
-    def finalize(self, *, final_text: str, auto_hard_enter: bool) -> dict[str, object]:
-        self._flush_pending()
-        if self.error and not self.any_committed and final_text.strip():
-            return _commit_text(self.committer, final_text, auto_hard_enter=auto_hard_enter)
-
-        backend = self.last_backend or getattr(self.committer, "backend_name", "unknown")
-        details: list[str] = []
-        if self.chunk_count:
-            details.append(f"streaming_chunks:{self.chunk_count}")
-        if self.error:
-            details.append(f"streaming_error:{self.error}")
-        if auto_hard_enter and self.any_committed and self.last_result is not None:
-            enter_delay_s = paste_to_enter_delay_seconds(self.last_result)
-            if enter_delay_s > 0.0:
-                time.sleep(enter_delay_s)
-            enter_result = send_hard_enter(self.committer)
-            enter_detail = str(getattr(enter_result, "detail", "")).strip()
-            if enter_detail:
-                details.append(enter_detail)
-        detail = ";".join(part for part in details if part) or "streaming_complete"
-        return {
-            "backend": backend,
-            "committed": self.any_committed,
-            "detail": detail,
-        }
-
-
 def _remote_only_commit_info(remote_result: Mapping[str, Any]) -> dict[str, object]:
     detail = str(remote_result.get("detail", "")).strip() or "remote_paste_failed"
     return {
@@ -742,7 +655,7 @@ def _run_refinement(
             }
         )
 
-    on_state({"event": "log", "message": f"ASR 原始输出: {text}"})
+    on_state({"event": "log", "message": f"ASR 原始输出: text_chars={len(text)}"})
 
     refined_text = ""
     try:
@@ -759,6 +672,9 @@ def _run_refinement(
         else:
             refined_text = refiner.refine(text)
     except Exception as exc:  # noqa: BLE001
+        # A streamed prefix is not a completed refinement. Keep the entire
+        # ASR input when the generator fails after yielding some chunks.
+        refined_text = ""
         on_state(
             {
                 "event": "log",
@@ -774,7 +690,7 @@ def _run_refinement(
 
     refine_latency_ms = (time.perf_counter() - t1) * 1000
     if refined_text.strip():
-        on_state({"event": "log", "message": f"精炼后输出: {refined_text}"})
+        on_state({"event": "log", "message": f"精炼后输出: text_chars={len(refined_text)}"})
         text = refined_text
     text = _apply_refine_postprocess(text, rule=refine_postprocess_rule)
     return text, refine_latency_ms
@@ -1138,7 +1054,7 @@ def _run_refinement_streaming_commit(
             }
         )
 
-    context.on_state({"event": "log", "message": f"ASR 原始输出: {text}"})
+    context.on_state({"event": "log", "message": f"ASR 原始输出: text_chars={len(text)}"})
     streaming_committer = resolve_streaming_committer(context.committer)
     try:
         session = _open_stream_composition(context)
@@ -1198,14 +1114,16 @@ def _run_refinement_streaming_commit(
             "outcome": "stale",
         }
     if failed_terminal:
-        return final_text, refine_latency_ms, {
+        # The bound preedit was cancelled: preserve the original for manual
+        # recovery, without replaying through another token/global committer.
+        return text, refine_latency_ms, {
             "backend": "fcitx",
             "committed": False,
             "detail": "refine_stream_failed_no_fallback",
             "outcome": "cancelled",
         }
     if final_text:
-        context.on_state({"event": "log", "message": f"精炼后输出: {final_text}"})
+        context.on_state({"event": "log", "message": f"精炼后输出: text_chars={len(final_text)}"})
     # Streaming refine finalizes through the SAME deterministic cleanup as
     # the non-streaming refiner: the preset's @postprocess rule
     # (zh-stutter-lite / repeat-lite) must not silently stop applying just
@@ -1302,30 +1220,39 @@ def run_postprocess_pipeline(context: PostprocessPipelineContext) -> None:
                 }
             )
 
-        try:
-            import numpy as np
-
-            samples = read_wav_mono_f32(context.audio_path)
-            rms = float(np.sqrt(np.mean(samples ** 2)))
-            if rms < 0.003:
-                context.on_state({"event": "log", "message": f"静音跳过 ASR (rms={rms:.4f})"})
-                _emit_result(
-                    context.on_result,
-                    audio_path=context.audio_path,
-                    record_backend=context.record_backend,
-                    record_latency_ms=0.0,
-                    transcribe_latency_ms=0.0,
-                    refine_latency_ms=0.0,
-                    text="",
-                    detected_language="",
-                    asr_provider=_describe_asr_provider(context.provider),
-                    asr_path="silence_skipped",
-                    asr_capabilities=_describe_asr_capabilities(context.provider),
-                    commit={"backend": "none", "committed": False, "detail": "silence_skipped"},
-                )
-                return
-        except Exception:
-            pass
+        # A whole-file average must not discard an accepted transcript or
+        # replace an IME terminal outcome. Continuous turns also avoid loading
+        # their recording into RAM again once the worker has handled it.
+        prefetched_turn = (
+            bool(context.prefetched_asr_text.strip())
+            or bool(context.prefetched_commit_info and context.prefetched_commit_info.get("committed"))
+            or _commit_suppresses_fallback(
+                context.prefetched_commit_info,
+                composition_started=context.prefetched_composition_started,
+            )
+        )
+        if not prefetched_turn:
+            try:
+                rms = wav_mono_rms(context.audio_path)
+                if rms < 0.003:
+                    context.on_state({"event": "log", "message": f"静音跳过 ASR (rms={rms:.4f})"})
+                    _emit_result(
+                        context.on_result,
+                        audio_path=context.audio_path,
+                        record_backend=context.record_backend,
+                        record_latency_ms=0.0,
+                        transcribe_latency_ms=0.0,
+                        refine_latency_ms=0.0,
+                        text="",
+                        detected_language="",
+                        asr_provider=_describe_asr_provider(context.provider),
+                        asr_path="silence_skipped",
+                        asr_capabilities=_describe_asr_capabilities(context.provider),
+                        commit={"backend": "none", "committed": False, "detail": "silence_skipped"},
+                    )
+                    return
+            except Exception:
+                pass
 
         auto_hard_enter = _resolve_auto_hard_enter(context.args)
         routing = resolve_remote_paste_routing(context.args)

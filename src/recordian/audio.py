@@ -2,9 +2,35 @@ from __future__ import annotations
 
 import sys
 import wave
+from math import sqrt
 from pathlib import Path
 
 import numpy as np
+
+
+def wav_mono_rms(path: Path, *, sample_rate: int = 16000) -> float:
+    """Measure PCM16 mono RMS with fixed-size reads, independent of duration."""
+    square_sum = 0.0
+    sample_count = 0
+    with wave.open(str(path), "rb") as wf:
+        channels = wf.getnchannels()
+        sampwidth = wf.getsampwidth()
+        rate = wf.getframerate()
+        if sampwidth != 2:
+            raise ValueError(f"only PCM16 wav is supported, got sample width={sampwidth}")
+        if rate != sample_rate:
+            raise ValueError(f"unsupported sample rate={rate}, expected={sample_rate}")
+        if channels < 1:
+            raise ValueError("wav has invalid channel count")
+        while payload := wf.readframes(16000):
+            pcm = np.frombuffer(payload, dtype="<i2")
+            if channels > 1:
+                pcm = pcm.reshape(-1, channels).mean(axis=1)
+            mono = pcm.astype(np.float32) / 32768.0
+            square_sum += float(np.square(mono, dtype=np.float64).sum())
+            sample_count += len(mono)
+    # Empty audio was not classified as silence by the previous NaN RMS.
+    return sqrt(square_sum / sample_count) if sample_count else float("nan")
 
 
 def read_wav_mono_f32(path: Path, *, sample_rate: int = 16000) -> np.ndarray:
