@@ -72,7 +72,8 @@ def _apply_preemphasis(frame, coeff: float = 0.97):
     return np.clip(emphasized, -2.0, 2.0)
 
 
-def _assess_sample_quality(samples: Any, sample_rate: int) -> dict[str, float]:
+def _assess_sample_quality(samples: Any, sample_rate: int, *, min_rms: float = 0.005,
+                           min_voiced_ratio: float = 0.3) -> dict[str, float]:
     """Assess audio sample quality for speaker enrollment.
 
     Args:
@@ -120,7 +121,7 @@ def _assess_sample_quality(samples: Any, sample_rate: int) -> dict[str, float]:
     duration_s = len(data) / sample_rate
 
     # Quality thresholds
-    is_acceptable = rms > 0.005 and voiced_ratio > 0.3 and duration_s >= 0.5
+    is_acceptable = rms > min_rms and voiced_ratio > min_voiced_ratio and duration_s >= 0.5
 
     return {
         "rms": rms,
@@ -449,7 +450,8 @@ def enroll_speaker_profile_from_multiple_wavs(
             samples, sample_rate = _load_wav_any_f32(sample_path)
 
             # Assess quality
-            quality = _assess_sample_quality(samples, sample_rate)
+            quality = _assess_sample_quality(samples, sample_rate, min_rms=min_quality_rms,
+                                            min_voiced_ratio=min_quality_voiced_ratio)
             if not quality["is_acceptable"]:
                 rejected_samples.append(
                     {
@@ -513,7 +515,8 @@ def add_speaker_sample(
 
     # Load and assess new sample
     samples, sample_rate = _load_wav_any_f32(sample_path)
-    quality = _assess_sample_quality(samples, sample_rate)
+    quality = _assess_sample_quality(samples, sample_rate, min_rms=min_quality_rms,
+                                    min_voiced_ratio=min_quality_voiced_ratio)
 
     if not quality["is_acceptable"]:
         raise ValueError(
@@ -539,5 +542,4 @@ def add_speaker_sample(
 
     save_speaker_profile(profile_path, updated_profile)
     return updated_profile
-
 

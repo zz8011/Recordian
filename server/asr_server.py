@@ -13,18 +13,25 @@ API 端点：
         响应：{"status": "ok", "model": "qwen3-asr-1.7b"}
 
 使用方法：
-    python asr_server.py --host 0.0.0.0 --port 8000 --model Qwen/Qwen3-ASR-0.6B
+    python asr_server.py --host 127.0.0.1 --port 8000 --model Qwen/Qwen3-ASR-0.6B
 """
 
 from __future__ import annotations
 
 import argparse
 import base64
+import hmac
 import logging
 import os
 import tempfile
+import threading
 
 from flask import Flask, jsonify, request
+from werkzeug.exceptions import HTTPException
+
+from recordian.audio_budget import validate_wav
+from recordian.http_service import run_http_service
+from recordian.local_auth import http_request_allowed, load_private_token, require_private_bind, server_tls_context
 
 # 配置日志
 logging.basicConfig(
@@ -34,6 +41,22 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
+app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024
+auth_token = ''
+_model_lock = threading.Lock()
+_request_slot = threading.BoundedSemaphore(1)
+
+
+@app.before_request
+def authenticate():
+    from urllib.parse import urlsplit
+    if not http_request_allowed(host=urlsplit(request.host_url).hostname or '', origin=request.headers.get('Origin'),
+                                base_url=request.host_url, authenticated=bool(auth_token)):
+        return jsonify({'error': 'forbidden origin or host'}), 403
+    if auth_token and not hmac.compare_digest(
+            request.headers.get('Authorization', '').encode('utf-8'),
+            ('Bearer ' + auth_token).encode('utf-8')):
+        return jsonify({'error': 'unauthorized'}), 401
 
 # 全局变量：ASR 模型
 asr_model = None
@@ -106,6 +129,15 @@ def health_check():
 
 @app.route("/transcribe", methods=["POST"])
 def transcribe():
+    if not _request_slot.acquire(blocking=False):
+        return jsonify({'error': 'model is busy'}), 429
+    try:
+        return _transcribe_request()
+    finally:
+        _request_slot.release()
+
+
+def _transcribe_request():
     """语音识别端点
 
     请求体：
@@ -125,16 +157,18 @@ def transcribe():
         return jsonify({"error": "Model not loaded"}), 503
 
     try:
-        data = request.json
-        if not data:
+        data = request.get_json(silent=True)
+        if not isinstance(data, dict) or not data:
             return jsonify({"error": "Invalid JSON"}), 400
 
         audio_base64 = data.get("audio_base64")
-        if not audio_base64:
+        if not isinstance(audio_base64, str) or not audio_base64:
             return jsonify({"error": "Missing audio_base64"}), 400
 
         hotwords = _normalize_hotwords(data.get("hotwords", []))
         context = _compose_context(context=data.get("context", ""), hotwords=hotwords)
+        if len(context) > 4000:
+            return jsonify({'error': 'context exceeds 4000 characters'}), 400
         raw_language = data.get("language")
         language = str(raw_language).strip() or None if raw_language is not None else None
 
@@ -143,14 +177,17 @@ def transcribe():
         if requested_max_new_tokens is not None:
             try:
                 requested_max_new_tokens = int(requested_max_new_tokens)
-                if requested_max_new_tokens < 1:
-                    requested_max_new_tokens = None
-            except (TypeError, ValueError):
-                requested_max_new_tokens = None
+                if not 1 <= requested_max_new_tokens <= 8192:
+                    return jsonify({'error': 'max_new_tokens exceeds the server budget'}), 400
+            except (TypeError, ValueError, OverflowError):
+                return jsonify({'error': 'invalid max_new_tokens'}), 400
 
         # 解码音频
         try:
-            audio_data = base64.b64decode(audio_base64)
+            audio_data = base64.b64decode(audio_base64, validate=True)
+            if not audio_data:
+                return jsonify({'error': 'empty audio'}), 400
+            validate_wav(audio_data)
         except Exception as e:
             return jsonify({"error": f"Invalid base64: {e}"}), 400
 
@@ -160,32 +197,27 @@ def transcribe():
             temp_path = f.name
 
         # 临时应用单请求的 max_new_tokens（不污染全局模型配置）
-        original_max_new_tokens = None
-        if requested_max_new_tokens is not None and hasattr(asr_model, "max_new_tokens"):
-            original_max_new_tokens = asr_model.max_new_tokens
-            asr_model.max_new_tokens = requested_max_new_tokens
-
         try:
-            # 识别
-            logger.info(
-                "Transcribing audio: %s bytes hotwords=%s context_len=%s language=%s max_new_tokens=%s",
-                len(audio_data),
-                hotwords,
-                len(context),
-                language or "auto",
-                requested_max_new_tokens or getattr(asr_model, "max_new_tokens", "default"),
-            )
-            results = asr_model.transcribe(
-                audio=temp_path,
-                context=context,
-                language=language,
-                return_time_stamps=False,
-            )
+            # Serialize the model and its per-request generation setting.
+            with _model_lock:
+                original_max_new_tokens = getattr(asr_model, 'max_new_tokens', None)
+                if requested_max_new_tokens is not None and requested_max_new_tokens > int(original_max_new_tokens or 8192):
+                    return jsonify({'error': 'max_new_tokens exceeds the server budget'}), 400
+                try:
+                    if requested_max_new_tokens is not None and original_max_new_tokens is not None:
+                        asr_model.max_new_tokens = requested_max_new_tokens
+                    logger.info('Transcribing %s audio bytes, context_chars=%s', len(audio_data), len(context))
+                    results = asr_model.transcribe(audio=temp_path, context=context, language=language,
+                                                   return_time_stamps=False)
+                    used_max_new_tokens = getattr(asr_model, 'max_new_tokens', None)
+                finally:
+                    if original_max_new_tokens is not None:
+                        asr_model.max_new_tokens = original_max_new_tokens
 
             result = results[0]
             text = (result.text or "").strip()
 
-            logger.info(f"Transcription result: {text[:50]}...")
+            logger.info('Transcription completed, text_chars=%s', len(text))
 
             return jsonify({
                 "text": text,
@@ -194,28 +226,29 @@ def transcribe():
                 "applied_hotwords": hotwords,
                 "applied_context": context,
                 "requested_language": language,
-                "max_new_tokens": getattr(asr_model, "max_new_tokens", None),
+                "max_new_tokens": used_max_new_tokens,
             })
         finally:
-            if original_max_new_tokens is not None:
-                asr_model.max_new_tokens = original_max_new_tokens
             # 清理临时文件
             try:
                 os.unlink(temp_path)
             except Exception:
                 pass
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Transcription error: {e}", exc_info=True)
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": "transcription_failed"}), 500
 
 
 def main():
+    global auth_token
     parser = argparse.ArgumentParser(description="Recordian ASR HTTP Server")
     parser.add_argument(
         "--host",
-        default="0.0.0.0",
-        help="Host to bind (default: 0.0.0.0)",
+        default="127.0.0.1",
+        help="Host to bind (default: 127.0.0.1); LAN binds require --token-file",
     )
     parser.add_argument(
         "--port",
@@ -240,14 +273,20 @@ def main():
         help="Maximum ASR generation tokens per request (default: 8192)",
     )
 
+    parser.add_argument('--token-file', default='', help='Owner-only Bearer token file (0600)')
+    parser.add_argument('--tls-cert-file', default='')
+    parser.add_argument('--tls-key-file', default='')
     args = parser.parse_args()
+    auth_token = load_private_token(args.token_file) if args.token_file else ''
+    tls = server_tls_context(args.tls_cert_file, args.tls_key_file)
+    require_private_bind(args.host, auth_token, encrypted=tls is not None)
 
     # 加载模型
     load_asr_model(args.model, args.device, max_new_tokens=args.max_new_tokens)
 
     # 启动服务器
     logger.info(f"Starting ASR server on {args.host}:{args.port}")
-    app.run(host=args.host, port=args.port, threaded=True)
+    run_http_service(app, host=args.host, port=args.port, tls=tls)
 
 
 if __name__ == "__main__":

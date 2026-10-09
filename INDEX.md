@@ -2,7 +2,7 @@
 
 > Voice dictation for Linux. Audio → ASR → hotword correction → input-method commit, with optional text refinement.
 
-**Last updated:** 2026-10-09
+**Last updated:** 2026-10-10
 
 > 文档导航见 [`docs/README.md`](docs/README.md)；版本历史见 [`CHANGELOG.md`](CHANGELOG.md)。
 
@@ -57,6 +57,7 @@
 | `agent_entry.py` / `agent_panel.py` / `agent_panel.html` | Agent voice routing, Hermes CLI/Gateway sessions, and local task panel |
 | `agent_response_overlay.py` | Movable and resizable floating Agent replies; explicit close button or timeout dismisses without taking focus |
 | `desktop_control.py` | Compositor control socket, recording toggle and status stream |
+| `local_auth.py` / `http_service.py` / `audio_budget.py` | Private token/TLS, bounded HTTP transport and uploaded-audio validation |
 | `pyproject.toml` | Python package config (uv/pip) |
 | `scripts/build_native_core.py` | Offline release build, ABI1 validation and atomic library install |
 | `setup.py` / `MANIFEST.in` | Optional build-time native wheel with platform tag; source-only Rust sdist |

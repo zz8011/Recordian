@@ -169,7 +169,8 @@ class TestCloudLLMRefinerInit:
                         {
                             "message": {
                                 "content": "整理完成",
-                            }
+                            },
+                            "finish_reason": "stop",
                         }
                     ]
                 }
@@ -210,7 +211,7 @@ class TestCloudLLMRefinerInit:
             status_code = 200
 
             def json(self) -> dict[str, object]:
-                return {"choices": [{"message": {"content": "整理完成"}}]}
+                return {"choices": [{"message": {"content": "整理完成"}, "finish_reason": "stop"}]}
 
         def _fake_post(url: str, *, headers: dict[str, str], json: dict[str, object], timeout: float) -> _Response:
             captured["url"] = url
@@ -246,7 +247,8 @@ class TestCloudLLMRefinerInit:
                         {
                             "message": {
                                 "content": "整理完成",
-                            }
+                            },
+                            "finish_reason": "stop",
                         }
                     ]
                 }

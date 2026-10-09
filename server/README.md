@@ -1,3 +1,5 @@
+> 安全默认值：服务仅监听回环地址。跨机器访问优先使用 SSH/Tailscale 加密隧道；直接暴露 ASR 时必须配置私有令牌和 TLS。见 [安全部署说明](../docs/SECURE-NETWORK.zh-CN.md)。
+
 # Recordian 服务器部署指南
 
 在局域网服务器（192.168.5.225）上部署 ASR + LLM 服务，供其他电脑使用。
@@ -41,7 +43,7 @@ curl -fsSL https://ollama.com/install.sh | sh
 编辑 `/etc/systemd/system/ollama.service`，在 `[Service]` 下添加：
 
 ```ini
-Environment="OLLAMA_HOST=0.0.0.0:11434"
+Environment="OLLAMA_HOST=127.0.0.1:11434"
 ```
 
 重启服务：
@@ -78,7 +80,7 @@ modelscope download --model Qwen/Qwen3-ASR-0.6B --local_dir ./models/Qwen3-ASR-0
 
 ```bash
 # 手动启动（测试用）
-python server/asr_server.py --host 0.0.0.0 --port 8000 --model ./models/Qwen3-ASR-0.6B
+python server/asr_server.py --host 127.0.0.1 --port 8000 --model ./models/Qwen3-ASR-0.6B
 
 # 或创建 systemd 服务（生产环境）
 sudo cp server/recordian-asr.service /etc/systemd/system/

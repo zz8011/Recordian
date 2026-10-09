@@ -454,10 +454,16 @@ def test_llamacpp_refiner_without_preset_uses_fewshot_fallback() -> None:
 def test_llamacpp_refiner_extracts_chat_and_completion_text() -> None:
     from recordian.providers.llamacpp_text_refiner import LlamaCppTextRefiner
 
-    assert LlamaCppTextRefiner._extract_chat_text({"choices": [{"message": {"content": " 好 "}}]}) == "好"
-    assert LlamaCppTextRefiner._extract_completion_text({"choices": [{"text": " 好 "}]}) == "好"
-    assert LlamaCppTextRefiner._extract_chat_text({}) == ""
-    assert LlamaCppTextRefiner._extract_completion_text({"choices": []}) == ""
+    assert LlamaCppTextRefiner._extract_chat_text(
+        {"choices": [{"message": {"content": " 好 "}, "finish_reason": "stop"}]}
+    ) == "好"
+    assert LlamaCppTextRefiner._extract_completion_text(
+        {"choices": [{"text": " 好 ", "finish_reason": "stop"}]}
+    ) == "好"
+    with pytest.raises(RuntimeError):
+        LlamaCppTextRefiner._extract_chat_text({})
+    with pytest.raises(RuntimeError):
+        LlamaCppTextRefiner._extract_completion_text({"choices": []})
 
 
 # ---------------------------------------------------------------------------

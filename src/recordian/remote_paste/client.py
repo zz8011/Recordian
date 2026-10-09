@@ -3,8 +3,10 @@ from __future__ import annotations
 import argparse
 import logging
 import socket
+import ssl
 import time
 from dataclasses import asdict, dataclass
+from pathlib import Path
 from typing import Any
 
 from recordian.deskflow_active_screen import (
@@ -13,6 +15,7 @@ from recordian.deskflow_active_screen import (
     resolve_deskflow_active_screen,
 )
 from recordian.linux_commit import _set_clipboard_text
+from recordian.local_auth import load_private_token
 
 from .protocol import (
     DEFAULT_REMOTE_PASTE_PORT,
@@ -57,6 +60,8 @@ class RemotePasteResult:
 
 
 def add_remote_paste_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument('--remote-paste-token-file', default='', help='Private token matching the remote paste agent (0600)')
+    parser.add_argument('--remote-paste-tls-ca-file', default='', help='Trusted TLS CA certificate for direct LAN transport')
     parser.add_argument(
         "--enable-remote-paste",
         action=argparse.BooleanOptionalAction,
@@ -115,13 +120,16 @@ def add_remote_paste_args(parser: argparse.ArgumentParser) -> None:
     )
 
 
-def send_remote_paste(host: str, text: str, *, port: int, timeout_s: float) -> RemotePasteResult:
+def send_remote_paste(host: str, text: str, *, port: int, timeout_s: float, token: str = '', tls_ca_file: str = '') -> RemotePasteResult:
     request = {
         "action": "paste",
         "text": text,
         "timestamp": int(time.time()),
     }
-    return _send_remote_command(host, request, port=port, timeout_s=timeout_s)
+    if token:
+        request['token'] = token
+    kwargs = {'tls_ca_file': tls_ca_file} if tls_ca_file else {}
+    return _send_remote_command(host, request, port=port, timeout_s=timeout_s, **kwargs)
 
 
 def send_remote_paste_via_shared_clipboard(
@@ -131,6 +139,8 @@ def send_remote_paste_via_shared_clipboard(
     port: int,
     timeout_s: float,
     sync_wait_s: float,
+    token: str = '',
+    tls_ca_file: str = '',
 ) -> RemotePasteResult:
     _set_clipboard_text(text)
     request = {
@@ -141,15 +151,25 @@ def send_remote_paste_via_shared_clipboard(
         "clipboard_wait_s": max(0.0, float(sync_wait_s)),
         "timestamp": int(time.time()),
     }
-    return _send_remote_command(host, request, port=port, timeout_s=timeout_s)
+    if token:
+        request['token'] = token
+    kwargs = {'tls_ca_file': tls_ca_file} if tls_ca_file else {}
+    return _send_remote_command(host, request, port=port, timeout_s=timeout_s, **kwargs)
 
 
-def _send_remote_command(host: str, payload: dict[str, Any], *, port: int, timeout_s: float) -> RemotePasteResult:
+def _send_remote_command(host: str, payload: dict[str, Any], *, port: int, timeout_s: float, tls_ca_file: str = '') -> RemotePasteResult:
+    if host not in {'localhost', '127.0.0.1', '::1'} and (not payload.get('token') or not tls_ca_file):
+        raise ValueError('a token and TLS CA are required for direct LAN transport; alternatively use an SSH tunnel')
     timeout = max(0.1, float(timeout_s))
-    with socket.create_connection((host, port), timeout=timeout) as sock:
-        sock.settimeout(timeout)
-        sock.sendall(encode_message(payload))
-        raw = _read_response_line(sock)
+    with socket.create_connection((host, port), timeout=timeout) as raw_sock:
+        sock = ssl.create_default_context(cafile=str(Path(tls_ca_file).expanduser())).wrap_socket(raw_sock, server_hostname=host) if tls_ca_file else raw_sock
+        try:
+            sock.settimeout(timeout)
+            sock.sendall(encode_message(payload))
+            raw = _read_response_line(sock, deadline=time.monotonic() + timeout)
+        finally:
+            if sock is not raw_sock:
+                sock.close()
     response = decode_message(raw)
     status = str(response.get("status", "")).strip() or "error"
     detail = str(response.get("detail", "")).strip() or status
@@ -163,15 +183,22 @@ def _send_remote_command(host: str, payload: dict[str, Any], *, port: int, timeo
     )
 
 
-def _read_response_line(sock: socket.socket) -> bytes:
+def _read_response_line(sock: socket.socket, *, deadline: float | None = None) -> bytes:
     chunks = bytearray()
     while len(chunks) <= MAX_MESSAGE_BYTES:
+        if deadline is not None:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError('response deadline exceeded')
+            sock.settimeout(remaining)
         chunk = sock.recv(4096)
         if not chunk:
             break
         chunks.extend(chunk)
         if b"\n" in chunk:
             line, _sep, _rest = bytes(chunks).partition(b"\n")
+            if len(line) > MAX_MESSAGE_BYTES:
+                raise RuntimeError('response_too_large')
             return line
     if len(chunks) > MAX_MESSAGE_BYTES:
         raise RuntimeError("response_too_large")
@@ -300,6 +327,11 @@ def send_remote_paste_from_args(
 
     result["attempted"] = True
     try:
+        filename = str(getattr(args, 'remote_paste_token_file', '') or '').strip()
+        token_kwargs = {'token': load_private_token(filename)} if filename else {}
+        tls_ca_file = str(getattr(args, 'remote_paste_tls_ca_file', '') or '').strip()
+        if tls_ca_file:
+            token_kwargs['tls_ca_file'] = tls_ca_file
         if mode == "shared-clipboard":
             response = send_remote_paste_via_shared_clipboard(
                 host,
@@ -307,9 +339,10 @@ def send_remote_paste_from_args(
                 port=port,
                 timeout_s=timeout_s,
                 sync_wait_s=sync_wait_s,
+                **token_kwargs,
             )
         else:
-            response = send_remote_paste(host, text, port=port, timeout_s=timeout_s)
+            response = send_remote_paste(host, text, port=port, timeout_s=timeout_s, **token_kwargs)
         result.update(
             {
                 "sent": response.ok,

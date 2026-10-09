@@ -8,64 +8,11 @@ import signal
 import subprocess
 import sys
 import threading
-import time
 from collections.abc import Callable
 from pathlib import Path
 
 # 全局进程注册表
 _ACTIVE_BACKEND_PROCESSES: list[subprocess.Popen[str]] = []
-_ORPHAN_RECORDER_PATH_TOKEN = "/tmp/recordian-ptt-"
-
-
-def _is_hotkey_dictate_command(command: str) -> bool:
-    lowered = str(command).strip().lower()
-    return "recordian.hotkey_dictate" in lowered and "python" in lowered
-
-
-def _is_recordian_recorder_command(command: str) -> bool:
-    normalized = str(command).strip()
-    if not normalized:
-        return False
-    lowered = normalized.lower()
-    return (
-        "ffmpeg" in lowered
-        and "-f pulse" in lowered
-        and "pipe:1" in lowered
-        and _ORPHAN_RECORDER_PATH_TOKEN in normalized
-    )
-
-
-def _list_orphan_recordian_recorder_pids(*, exclude_pids: set[int] | None = None) -> list[int]:
-    excluded = set(exclude_pids or set())
-    excluded.add(os.getpid())
-    try:
-        result = subprocess.run(
-            ["ps", "-eo", "pid=,args="],
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-    except (FileNotFoundError, subprocess.SubprocessError):
-        return []
-
-    pids: list[int] = []
-    for raw_line in result.stdout.splitlines():
-        line = raw_line.strip()
-        if not line:
-            continue
-        parts = line.split(None, 1)
-        if len(parts) != 2:
-            continue
-        pid_text, command = parts
-        try:
-            pid = int(pid_text)
-        except ValueError:
-            continue
-        if pid in excluded:
-            continue
-        if _is_recordian_recorder_command(command) or _is_hotkey_dictate_command(command):
-            pids.append(pid)
-    return pids
 
 
 def _terminate_backend_process(proc: subprocess.Popen[str], *, timeout_s: float = 2.0) -> None:
@@ -93,42 +40,6 @@ def _terminate_backend_process(proc: subprocess.Popen[str], *, timeout_s: float 
             proc.wait(timeout=0.5)
         except (ProcessLookupError, subprocess.TimeoutExpired, OSError):
             pass
-
-
-def _cleanup_orphan_recordian_recorders(*, exclude_pids: set[int] | None = None) -> int:
-    pids = _list_orphan_recordian_recorder_pids(exclude_pids=exclude_pids)
-    if not pids:
-        return 0
-
-    for pid in pids:
-        try:
-            os.kill(pid, signal.SIGTERM)
-        except ProcessLookupError:
-            pass
-        except OSError:
-            continue
-
-    deadline = time.monotonic() + 1.5
-    survivors = set(pids)
-    while survivors and time.monotonic() < deadline:
-        for pid in list(survivors):
-            try:
-                os.kill(pid, 0)
-            except ProcessLookupError:
-                survivors.discard(pid)
-            except OSError:
-                survivors.discard(pid)
-        if survivors:
-            time.sleep(0.05)
-
-    for pid in list(survivors):
-        try:
-            os.kill(pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        except OSError:
-            continue
-    return len(pids)
 
 
 def _cleanup_backend_processes() -> None:
@@ -191,9 +102,10 @@ class BackendManager:
         if self.proc is not None and self.proc.poll() is None:
             return
         self._intentional_stop = False
-        cleaned = _cleanup_orphan_recordian_recorders()
-        if cleaned:
-            self._events.put({"event": "log", "message": f"cleaned_orphan_recorders:{cleaned}"})
+        # Do not adopt processes from the system process list. UID, argv, config
+        # and even PPID=1 cannot prove that another backend belongs to us or is
+        # abandoned; recorder argv has no config identity. Only manage children
+        # launched here and retained as Popen objects in our process registry.
         cmd = self._cmd()
         self.proc = subprocess.Popen(
             cmd,

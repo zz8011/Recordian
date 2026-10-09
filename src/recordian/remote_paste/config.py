@@ -11,6 +11,10 @@ from .protocol import DEFAULT_REMOTE_PASTE_PORT
 
 @dataclass(slots=True)
 class RemotePasteAgentConfig:
+    host: str = '127.0.0.1'
+    token_file: str = ''
+    tls_cert_file: str = ''
+    tls_key_file: str = ''
     port: int = DEFAULT_REMOTE_PASTE_PORT
     hostname: str = socket.gethostname()
     enable_notify: bool = True

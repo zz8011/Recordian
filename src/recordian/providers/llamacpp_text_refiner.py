@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import concurrent.futures
 import logging
+import threading
 from pathlib import Path
 from typing import Any, cast
 
 from .base_text_refiner import BaseTextRefiner
+from .cloud_llm_refiner import _filter_thinking, _IncompleteRefinementError, _require_finish_reason, _require_text
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +53,8 @@ class LlamaCppTextRefiner(BaseTextRefiner):
         self._n_threads = n_threads
         self._llm = None
         self.last_error = ""
+        self._inference_lock = threading.Lock()
+        self._inflight: concurrent.futures.Future[str] | None = None
 
     def _lazy_load(self) -> None:
         if self._llm is not None:
@@ -93,38 +97,54 @@ class LlamaCppTextRefiner(BaseTextRefiner):
         if not text.strip():
             return ""
 
-        self._lazy_load()
+        with self._inference_lock:
+            if self._inflight is not None and not self._inflight.done():
+                self.last_error = "inference_inflight"
+                return text
+            future: concurrent.futures.Future[str] = concurrent.futures.Future()
+            self._inflight = future
 
-        # 使用 ThreadPoolExecutor 添加超时保护
-        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-            future = executor.submit(self._run_inference, text)
-            try:
-                generated = future.result(timeout=self.timeout)
-            except concurrent.futures.TimeoutError:
-                self.last_error = f"timeout>{self.timeout}s"
-                logger.warning("llamacpp refine 超时（>%ss），按 ASR 原文提交", self.timeout)
-                return text
-            except Exception as exc:  # noqa: BLE001
-                self.last_error = f"{type(exc).__name__}: {exc}"
-                logger.warning("llamacpp refine 失败: %s: %s", type(exc).__name__, exc)
-                return text
+            def run():
+                try:
+                    self._lazy_load()
+                    generated = self._run_inference(text)
+                except BaseException as exc:
+                    future.set_exception(exc)
+                else:
+                    future.set_result(generated)
+
+            # Native inference cannot be forcibly stopped by Python. Retain
+            # this one inflight task after timeout; never queue more work or
+            # spawn another thread until it exits. Daemon avoids an executor's
+            # shutdown/atexit join on a stuck native call.
+            threading.Thread(target=run, name="llamacpp-refine", daemon=True).start()
+        try:
+            generated = future.result(timeout=self.timeout)
+        except concurrent.futures.TimeoutError:
+            self.last_error = f"timeout>{self.timeout}s"
+            logger.warning("llamacpp refine 超时（>%ss），按 ASR 原文提交", self.timeout)
+            return text
+        except _IncompleteRefinementError:
+            self.last_error = "incomplete_response"
+            raise
+        except Exception as exc:  # noqa: BLE001
+            self.last_error = f"{type(exc).__name__}: {exc}"
+            logger.warning("llamacpp refine 失败: %s: %s", type(exc).__name__, exc)
+            return text
+        self.last_error = ""
 
         generated = str(generated or "").strip()
         if not generated:
             return ""
 
         # 移除 <think> 标签
-        generated = self._remove_think_tags(generated).replace("/no_think", "").strip()
+        generated = "".join(_filter_thinking([generated])).replace("/no_think", "").strip()
 
         # 移除可能的前缀
         for prefix in ["输出：", "书面语：", "纪要：", "文档："]:
             if generated.startswith(prefix):
                 generated = generated[len(prefix):].strip()
                 break
-
-        # 只取第一段（避免多余输出）
-        if "\n\n" in generated:
-            generated = generated.split("\n\n")[0].strip()
 
         # 检测并移除重复句子
         generated = self._remove_repetitions(generated)
@@ -146,7 +166,7 @@ class LlamaCppTextRefiner(BaseTextRefiner):
         return [{"role": "user", "content": content}]
 
     def _run_inference(self, text: str) -> str:
-        """执行推理（可被超时中断），返回生成的文本。"""
+        """Execute native inference; timeout limits the caller's wait only."""
         if self._llm is None:
             raise RuntimeError("llama model not loaded")
 
@@ -177,7 +197,7 @@ class LlamaCppTextRefiner(BaseTextRefiner):
                 temperature=0.1,
                 repeat_penalty=1.2,
                 top_p=0.9,
-                stop=["\n\n", "输入：", "<think>", "<|"],  # 优化停止词
+                stop=["输入：", "<think>", "<|"],
                 echo=False,
             ))
             return self._extract_completion_text(result)
@@ -186,18 +206,26 @@ class LlamaCppTextRefiner(BaseTextRefiner):
 
     @staticmethod
     def _extract_chat_text(result: dict[str, Any]) -> str:
+        if not isinstance(result, dict):
+            raise _IncompleteRefinementError("文字精炼响应不是对象")
         choices = result.get("choices") or []
-        if not choices:
-            return ""
+        if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
+            raise _IncompleteRefinementError("文字精炼响应缺少完整结果")
+        _require_finish_reason(choices[0].get("finish_reason"))
         message = choices[0].get("message") or {}
-        return str(message.get("content") or "").strip()
+        if not isinstance(message, dict):
+            raise _IncompleteRefinementError("文字精炼响应缺少正文")
+        return _require_text(message.get("content")).strip()
 
     @staticmethod
     def _extract_completion_text(result: dict[str, Any]) -> str:
+        if not isinstance(result, dict):
+            raise _IncompleteRefinementError("文字精炼响应不是对象")
         choices = result.get("choices") or []
-        if not choices:
-            return ""
-        return str(choices[0].get("text") or "").strip()
+        if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
+            raise _IncompleteRefinementError("文字精炼响应缺少完整结果")
+        _require_finish_reason(choices[0].get("finish_reason"))
+        return _require_text(choices[0].get("text")).strip()
 
     def _build_fewshot_prompt(self, text: str) -> str:
         """根据 prompt_template 动态构建 Few-shot prompt

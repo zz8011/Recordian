@@ -702,6 +702,8 @@ class HttpCloudProvider(ASRProvider):
         buffered = ""
         asr_tag = "<asr_text>"
         end_tag = "</asr_text>"
+        ended = False
+        complete = False
 
         for raw_line in response.iter_lines(decode_unicode=False):
             if not raw_line:
@@ -716,11 +718,18 @@ class HttpCloudProvider(ASRProvider):
             choices = event.get("choices")
             if not isinstance(choices, list) or not choices:
                 continue
+            finish_reason = choices[0].get("finish_reason")
+            if finish_reason is not None:
+                if finish_reason != "stop":
+                    raise RuntimeError("流式 ASR 响应未正常完成")
+                complete = True
             delta = choices[0].get("delta", {})
             if not isinstance(delta, dict):
                 continue
             chunk = str(delta.get("content", ""))
             if not chunk:
+                continue
+            if ended:
                 continue
             buffered += chunk
             if not started:
@@ -728,7 +737,9 @@ class HttpCloudProvider(ASRProvider):
                 if idx != -1:
                     started = True
                     buffered = buffered[idx + len(asr_tag):]
-                elif len(buffered) > 64:
+                # Keep a possible language header pending until its ASR tag
+                # or confirmed completion; the word alone does not reject text.
+                elif len(buffered) > 64 and not buffered.lstrip().startswith("language "):
                     started = True
             if not started:
                 continue
@@ -741,9 +752,28 @@ class HttpCloudProvider(ASRProvider):
                     yield current
                 buffered = buffered[end_idx + len(end_tag):]
                 started = False
+                ended = True
             if started and buffered:
-                yield buffered
-                buffered = ""
+                # Markers may straddle any token/SSE boundary. Retain their
+                # possible prefixes, including an incomplete opening marker.
+                keep = max(
+                    (size for tag in (asr_tag, end_tag) for size in range(1, len(tag)) if buffered.endswith(tag[:size])),
+                    default=0,
+                )
+                safe = buffered[:-keep] if keep else buffered
+                if safe:
+                    yield safe
+                buffered = buffered[-keep:] if keep else ""
+        if not complete:
+            raise RuntimeError("流式 ASR 响应缺少正常完成标记")
+        if not ended and buffered:
+            # A short plain transcript is valid, but an unfinished Qwen ASR
+            # header/opening marker must never become transcript text.
+            if any(
+                buffered.endswith(asr_tag[:size]) for size in range(2, len(asr_tag))
+            ):
+                raise RuntimeError("流式 ASR 响应包含未完成的协议前缀")
+            yield buffered
 
     @property
     def provider_name(self) -> str:

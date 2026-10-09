@@ -149,6 +149,7 @@ def test_http_cloud_provider_transcribe_stream_parses_sse_chunks(tmp_path: Path)
             'data: {"choices":[{"delta":{"content":" None<asr_text>你"}}]}',
             'data: {"choices":[{"delta":{"content":"好"}}]}',
             'data: {"choices":[{"delta":{"content":"</asr_text>"}}]}',
+            'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}',
             'data: [DONE]',
         ]
     )

@@ -13,8 +13,6 @@ import threading
 from pathlib import Path
 from types import SimpleNamespace
 
-import numpy as np
-
 from recordian.linux_commit import (
     CommitterWithFallback,
     FcitxCommitter,
@@ -615,8 +613,8 @@ def _pipeline_args(**overrides: object) -> argparse.Namespace:
 
 def _patch_pipeline_env(monkeypatch) -> None:
     monkeypatch.setattr(
-        "recordian.postprocess_pipeline.read_wav_mono_f32",
-        lambda path: np.array([0.3, -0.2, 0.1], dtype=np.float32),
+        "recordian.postprocess_pipeline.wav_mono_rms",
+        lambda path: 0.2,
     )
     monkeypatch.setattr(
         "recordian.postprocess_pipeline.send_remote_paste_from_args",

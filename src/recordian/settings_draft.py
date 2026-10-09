@@ -2,6 +2,7 @@
 
 import math
 from copy import deepcopy
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 from recordian.recommended_profile import (
@@ -16,6 +17,25 @@ from recordian.tray_utils import save_config_changes
 INTEGERS = {"cooldown_ms", "sample_rate", "channels", "refine_max_tokens", "remote_paste_port", "wake_num_threads"}
 FLOATS = {"duration", "asr_timeout_s", "remote_paste_timeout_s", "wake_auto_stop_silence_s"}
 CSV_FIELDS = {"wake_prefix", "wake_name"}
+
+
+def _parse_number(key, raw):
+    """Use the same numeric grammar for validation and persistence."""
+    if key in INTEGERS:
+        try:
+            value = Decimal(str(raw))
+        except InvalidOperation as exc:
+            raise ValueError("请输入有效数值") from exc
+        if not value.is_finite() or not math.isfinite(float(value)) or value != value.to_integral_value():
+            raise ValueError("请输入有效数值")
+        minimum = 0 if key == "cooldown_ms" else 1
+        if value < minimum or (key == "remote_paste_port" and value > 65535):
+            raise ValueError("请输入有效数值")
+        return int(value)
+    value = float(raw)
+    if not math.isfinite(value) or value < 1e-9:
+        raise ValueError("请输入有效数值")
+    return value
 
 
 class SettingsDraft:
@@ -55,14 +75,7 @@ class SettingsDraft:
             if key not in self.values:
                 continue
             try:
-                value = float(self.values[key])
-                minimum = 0 if key == "cooldown_ms" else 1e-9
-                if not math.isfinite(value) or value < minimum:
-                    raise ValueError()
-                if key in INTEGERS and not value.is_integer():
-                    raise ValueError()
-                if key == "remote_paste_port" and value > 65535:
-                    raise ValueError()
+                _parse_number(key, self.values[key])
             except (ValueError, TypeError):
                 errors[key] = "请输入有效数值"
         provider = self.values.get("asr_provider")
@@ -95,10 +108,8 @@ class SettingsDraft:
         for key, value in self.values.items():
             if value == self.saved[key]:
                 continue
-            if key in INTEGERS:
-                value = int(value)
-            elif key in FLOATS:
-                value = float(value)
+            if key in INTEGERS | FLOATS:
+                value = _parse_number(key, value)
             elif key in CSV_FIELDS and isinstance(value, str):
                 value = [part.strip() for part in value.split(",") if part.strip()]
             result[key] = value

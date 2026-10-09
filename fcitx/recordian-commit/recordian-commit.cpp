@@ -136,6 +136,8 @@ constexpr char kErrorSegmentsUnsafe[] =
 
 constexpr auto kSessionTTL = std::chrono::seconds(120);
 constexpr std::size_t kMaxSessions = 8;
+constexpr std::size_t kMaxPendingSegmentAcks = 32;
+constexpr std::size_t kMaxPendingSurroundBytes = 4 * 1024 * 1024;
 
 // Snapshot of SurroundingText. cursor/anchor are Unicode scalar offsets
 // (fcitx SurroundingText), while text is UTF-8 bytes.
@@ -242,9 +244,9 @@ SurroundSnap readSurround(const fcitx::InputContext *ic) {
     return snap;
 }
 
-// One outstanding CommitSegment whose client echo we may accept.
-// Cleared on ack, cancel, failure, and TTL. A later event may repeat the
-// already-accepted snapshot; any other text or caret invalidates.
+// Latest CommitSegment provenance and bounded cumulative snapshots of our
+// unconfirmed writes. A client may acknowledge them individually or coalesce
+// them. Only the already-accepted snapshot may repeat; other edits invalidate.
 struct SegmentAck {
     bool armed = false;
     bool poisoned = false;
@@ -257,6 +259,7 @@ struct SegmentAck {
     bool afterKnown = false;
     bool hasAccepted = false;
     SurroundSnap accepted{};
+    std::vector<SurroundSnap> pending;
 };
 
 void clearPendingAck(SegmentAck *ack) {
@@ -621,6 +624,23 @@ public:
         {
             std::lock_guard<std::mutex> guard(mutex_);
             replaced = dropExpiredLocked();
+        }
+        // Erasing an expired token removes its ownership proof from the map.
+        // Clear only its exact preedit BEFORE checking a new Begin, including
+        // when a foreign server preedit will make that Begin fail. Callbacks
+        // run outside the lock and may change focus or destroy the context.
+        for (const auto &entry : replaced) {
+            clearOwnedPreedit(
+                instance_->inputContextManager().findByUUID(entry->uuid), entry);
+        }
+        replaced.clear();
+        ic = instance_->inputContextManager().findByUUID(uuid);
+        if (ic == nullptr || !ic->hasFocus() || !usableContext(ic)) {
+            throw fcitx::dbus::MethodCallError(
+                kError, "bound input context changed during expiry cleanup (org.fcitx.Fcitx.Recordian.Error.NoInputContext)");
+        }
+        {
+            std::lock_guard<std::mutex> guard(mutex_);
             // Refuse to overwrite a preedit that no live Recordian session
             // owns *and still shows exactly*: the user is composing with
             // their own IME (Rime, pinyin, ...). Matching lastPreedit
@@ -657,10 +677,8 @@ public:
                     kErrorBusy, "too many concurrent streaming sessions (org.fcitx.Fcitx.Recordian.Error.SessionBusy)");
             }
         }
-        // Clean any preedit a superseded/expired session still owns, even
+        // Clean any preedit a superseded session still owns, even
         // when the new session itself cannot render inline (no residue).
-        // Each entry is resolved through its OWN uuid: an expired session
-        // may belong to a different context than the one being bound now.
         for (const auto &entry : replaced) {
             clearOwnedPreedit(
                 instance_->inputContextManager().findByUUID(entry->uuid),
@@ -763,27 +781,46 @@ public:
                     kErrorSequence,
                     "duplicate or out-of-order segment (org.fcitx.Fcitx.Recordian.Error.BadSequence)");
             }
-            // Advance before the toolkit write so a lost reply cannot be
-            // retried into a second commit of this sequence. The token
-            // stays in the map; only CommitSession / Cancel consumes it.
-            entry->nextSegment = sequence + 1;
-            entry->lastActive = std::chrono::steady_clock::now();
-            if (text.empty()) {
-                clearPendingAck(&entry->ack);
-            } else {
-                // Predict the client echo from the surrounding text BEFORE
-                // this write. cursor/anchor are Unicode offsets.
+            if (!text.empty()) {
+                // A later write extends the last proven OWN insertion, not
+                // the client's stale cache. Without provenance or a known
+                // prediction, refuse before writing rather than guessing.
+                if (entry->ack.armed &&
+                    (!entry->ack.commitSeen || !entry->ack.afterKnown ||
+                     entry->ack.pending.empty())) {
+                    throw fcitx::dbus::MethodCallError(
+                        kErrorSegmentsUnsafe,
+                        "previous commit has no proven cumulative snapshot (org.fcitx.Fcitx.Recordian.Error.SegmentsUnsafe)");
+                }
                 SegmentAck ack;
                 ack.armed = true;
                 ack.sequence = sequence;
                 ack.uuid = entry->uuid;
                 ack.requested = text;
-                ack.before = commitBaseline(*entry, readSurround(ic));
+                ack.before = entry->ack.armed ? entry->ack.pending.back() :
+                    commitBaseline(*entry, readSurround(ic));
                 ack.afterKnown = predictCommittedSurround(ack.before, text, &ack.after);
+                std::size_t pendingBytes = 0;
+                for (const auto &snapshot : entry->ack.pending) {
+                    pendingBytes += snapshot.text.size();
+                }
+                if (entry->ack.pending.size() >= kMaxPendingSegmentAcks ||
+                    text.size() > kMaxPendingSurroundBytes ||
+                    (ack.afterKnown &&
+                     ack.after.text.size() > kMaxPendingSurroundBytes - pendingBytes)) {
+                    throw fcitx::dbus::MethodCallError(
+                        kErrorSegmentsUnsafe,
+                        "pending commit echoes exceed bounded storage (org.fcitx.Fcitx.Recordian.Error.SegmentsUnsafe)");
+                }
                 ack.hasAccepted = entry->ack.hasAccepted;
                 ack.accepted = entry->ack.accepted;
+                ack.pending = std::move(entry->ack.pending);
                 entry->ack = std::move(ack);
             }
+            // Empty segments preserve outstanding echoes. Advance before a
+            // toolkit write so a lost reply cannot cause the sequence to repeat.
+            entry->nextSegment = sequence + 1;
+            entry->lastActive = std::chrono::steady_clock::now();
         }
         if (text.empty()) {
             clearOwnedPreedit(ic, entry);
@@ -965,7 +1002,7 @@ private:
                     }
                     auto *commitEvent =
                         dynamic_cast<fcitx::CommitStringEvent *>(&event);
-                    if (commitEvent == nullptr ||
+                    if (commitEvent == nullptr || session.ack.commitSeen ||
                         commitEvent->text() != session.ack.requested ||
                         session.ack.uuid != uuid ||
                         session.ack.sequence == 0) {
@@ -978,6 +1015,11 @@ private:
                     session.ack.commitSeen = true;
                     session.ack.afterKnown = predictCommittedSurround(
                         session.ack.before, commitEvent->text(), &session.ack.after);
+                    if (session.ack.afterKnown) {
+                        // Only the nested, exact CommitString event proves
+                        // this cumulative snapshot came from our write.
+                        session.ack.pending.push_back(session.ack.after);
+                    }
                     // No before-snapshot: the following surrounding event
                     // may accept only the exact empty-field insert below.
                     break;
@@ -1091,13 +1133,25 @@ private:
             if (session.ack.uuid != session.uuid) {
                 return false;
             }
-            if (session.ack.afterKnown &&
-                (sameSnap(observed, session.ack.after) ||
-                 ownPreeditEcho(session, session.ack.after, observed))) {
+            auto &pending = session.ack.pending;
+            const auto confirmed = std::find_if(pending.begin(), pending.end(),
+                [&](const SurroundSnap &snapshot) {
+                    return sameSnap(observed, snapshot) ||
+                           ownPreeditEcho(session, snapshot, observed);
+                });
+            if (confirmed != pending.end()) {
                 session.ack.hasAccepted = true;
-                session.ack.accepted = session.ack.after;
+                session.ack.accepted = *confirmed;
+                // A coalesced snapshot confirms every earlier own insertion.
+                // Retire that prefix; never accept a regressing client snapshot.
+                pending.erase(pending.begin(), confirmed + 1);
                 session.initialEchoCandidates.clear();
-                clearPendingAck(&session.ack);
+                // A nested callback can confirm the older prefix before the
+                // current CommitString event reaches us. Keep that in-flight
+                // provenance until its own event has been observed.
+                if (pending.empty() && session.ack.commitSeen) {
+                    clearPendingAck(&session.ack);
+                }
                 return true;
             }
             // Client repeated the previous snapshot and has not applied

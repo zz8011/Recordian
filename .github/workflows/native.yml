@@ -33,7 +33,7 @@ jobs:
       - name: Install system GIO and isolated D-Bus fixture dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libglib2.0-dev pkg-config dbus python3-gi gir1.2-glib-2.0
+          sudo apt-get install -y libglib2.0-dev pkg-config dbus python3-gi gir1.2-glib-2.0 ffmpeg
       - name: Install Python regression and packaging dependencies
         run: |
           python -m pip install --upgrade pip

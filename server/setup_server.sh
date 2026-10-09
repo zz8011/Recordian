@@ -1,6 +1,6 @@
 #!/bin/bash
 # Recordian 服务器一键部署脚本
-# 用于在 192.168.5.225 上部署 ASR + LLM 服务
+# 默认部署仅本机访问的 ASR + LLM 服务；跨机器使用加密隧道
 
 set -e
 
@@ -37,17 +37,18 @@ echo "=== 步骤 2: 配置 Ollama 服务 ==="
 OLLAMA_SERVICE="/etc/systemd/system/ollama.service"
 
 if [ -f "$OLLAMA_SERVICE" ]; then
-    echo "配置 Ollama 监听所有网络接口..."
+    echo "配置 Ollama 仅监听本机回环地址..."
 
     # 备份原配置
-    cp "$OLLAMA_SERVICE" "$OLLAMA_SERVICE.bak"
+    cp -f "$OLLAMA_SERVICE" "$OLLAMA_SERVICE.bak"
 
     # 添加环境变量
-    if ! grep -q "Environment=\"OLLAMA_HOST=0.0.0.0:11434\"" "$OLLAMA_SERVICE"; then
-        sed -i '/\[Service\]/a Environment="OLLAMA_HOST=0.0.0.0:11434"' "$OLLAMA_SERVICE"
+    if ! grep -q "Environment=\"OLLAMA_HOST=127.0.0.1:11434\"" "$OLLAMA_SERVICE"; then
+        sed -i '/^Environment="OLLAMA_HOST=/d' "$OLLAMA_SERVICE"
+        sed -i '/\[Service\]/a Environment="OLLAMA_HOST=127.0.0.1:11434"' "$OLLAMA_SERVICE"
         echo "✅ Ollama 配置已更新"
     else
-        echo "✅ Ollama 已配置为监听所有接口"
+        echo "✅ Ollama 已配置为仅监听本机回环地址"
     fi
 
     # 重启服务
@@ -57,7 +58,7 @@ if [ -f "$OLLAMA_SERVICE" ]; then
     echo "✅ Ollama 服务已重启"
 else
     echo "⚠️  未找到 Ollama systemd 服务文件"
-    echo "手动启动 Ollama: OLLAMA_HOST=0.0.0.0:11434 ollama serve"
+    echo "手动启动 Ollama: OLLAMA_HOST=127.0.0.1:11434 ollama serve"
 fi
 echo ""
 
@@ -80,7 +81,7 @@ fi
 source .venv/bin/activate
 
 echo "安装依赖..."
-pip install -e .[qwen-asr] flask
+pip install -e '.[qwen-asr]' 'flask>=3.1.3' 'werkzeug>=3.1.9'
 
 echo "✅ Python 环境准备完成"
 echo ""
@@ -114,7 +115,6 @@ echo "=== 步骤 6: 创建 ASR 服务 ==="
 
 # 获取当前用户（实际运行 sudo 的用户）
 ACTUAL_USER="${SUDO_USER:-$USER}"
-ACTUAL_HOME=$(eval echo ~$ACTUAL_USER)
 
 cat > /etc/systemd/system/recordian-asr.service << EOF
 [Unit]
@@ -126,7 +126,7 @@ Type=simple
 User=$ACTUAL_USER
 WorkingDirectory=$PROJECT_ROOT
 Environment="PATH=$PROJECT_ROOT/.venv/bin:/usr/local/bin:/usr/bin:/bin"
-ExecStart=$PROJECT_ROOT/.venv/bin/python $SCRIPT_DIR/asr_server.py --host 0.0.0.0 --port 8000 --model $ASR_MODEL_PATH
+ExecStart=$PROJECT_ROOT/.venv/bin/python $SCRIPT_DIR/asr_server.py --host 127.0.0.1 --port 8000 --model $ASR_MODEL_PATH
 Restart=always
 RestartSec=10
 
@@ -181,8 +181,8 @@ echo ""
 echo "=== 部署完成！ ==="
 echo ""
 echo "服务信息："
-echo "  - Ollama LLM: http://192.168.5.225:11434"
-echo "  - ASR 服务:   http://192.168.5.225:8000"
+echo "  - Ollama LLM: http://127.0.0.1:11434"
+echo "  - ASR 服务:   http://127.0.0.1:8000"
 echo ""
 echo "管理命令："
 echo "  - 查看 ASR 日志: sudo journalctl -u recordian-asr -f"
@@ -195,12 +195,12 @@ echo "  ~/.config/recordian/hotkey.json"
 echo ""
 echo "  {"
 echo "    \"asr_provider\": \"http-cloud\","
-echo "    \"asr_endpoint\": \"http://192.168.5.225:8000/transcribe\","
+echo "    \"asr_endpoint\": \"http://127.0.0.1:8000/transcribe\","
 echo "    \"asr_timeout_s\": 30,"
 echo ""
 echo "    \"enable_text_refine\": true,"
 echo "    \"refine_provider\": \"cloud\","
-echo "    \"refine_api_base\": \"http://192.168.5.225:11434\","
+echo "    \"refine_api_base\": \"http://127.0.0.1:11434\","
 echo "    \"refine_api_key\": \"dummy\","
 echo "    \"refine_api_model\": \"qwen2.5:7b\""
 echo "  }"

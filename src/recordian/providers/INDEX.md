@@ -1,6 +1,6 @@
 # ASR Providers & Text Refiners
 
-**Last updated:** 2026-07-02
+**Last updated:** 2026-10-10
 
 ## Provider Map
 
@@ -85,4 +85,5 @@ class TextRefiner(ABC):
 
 - `asr_context.py` is NOT a provider — it's a context manager wrapping ASR calls
 - Multiple refiners can be chained in `postprocess_pipeline.py`
-- Provider credentials are set via environment variables, not hardcoded
+- Provider credentials come from runtime JSON, CLI or provider-specific environment configuration; do not hardcode or commit them.
+- Refinement accepts complete model responses only. Thinking tags are filtered across chunks, and failed/truncated refinement preserves the original ASR text.
