@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 import textwrap
 import time
 from pathlib import Path
 
+import pytest
+
+from recordian.jev_judge import plumb_base_url, request_jev_choices
 from recordian.streaming_correction import StreamingHotwordCorrector
 
 _ALIAS = [{"heard": "jeff", "word": "jev", "meaning": "软件工具"}]
@@ -34,8 +38,7 @@ def _corrector(tmp_path: Path, argv: list[str], **kwargs: object) -> StreamingHo
 
 _TOOL_SCRIPT = """
 import json, os, sys
-assert os.environ.get("SEMIF") == "0"
-assert os.environ.get("TYPESAFE_MODEL") == "jev-latest"
+assert "SEMIF" not in os.environ
 blob = " ".join(sys.argv)
 if "jeff" in blob.lower() or "打开" in blob:
     sys.exit(4)
@@ -51,18 +54,54 @@ sys.stdout.write(json.dumps({"answers": {"role": answer}}))
 """
 
 
-def test_jev_replaces_tool_span_and_keeps_parent_env(tmp_path: Path) -> None:
-    before = os.environ.get("SEMIF")
-    model = os.environ.get("TYPESAFE_MODEL")
+def test_jev_replaces_tool_span_and_keeps_parent_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SEMIF", "0")
     corrector = _corrector(tmp_path, _write_script(tmp_path, _TOOL_SCRIPT))
     try:
         text = "打开jeff工具检查这个项目"
         assert corrector.submit(text) == text
         assert corrector.finish(text) == "打开jev工具检查这个项目"
-        assert os.environ.get("SEMIF") == before
-        assert os.environ.get("TYPESAFE_MODEL") == model
+        assert os.environ.get("SEMIF") == "0"
     finally:
         corrector.close()
+
+
+def test_plumb_base_url_strips_systemone_path() -> None:
+    assert plumb_base_url("http://192.168.5.111:42171/v1/systemone") == "http://192.168.5.111:42171"
+    assert plumb_base_url(" http://192.168.5.111:42171/v1/systemone/ ") == "http://192.168.5.111:42171"
+    assert plumb_base_url("http://192.168.5.111:42171/") == "http://192.168.5.111:42171"
+    assert plumb_base_url("") == ""
+
+
+def test_endpoint_reaches_child_as_plumb_base_url(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SEMIF", "0")
+    monkeypatch.delenv("SEMIF_BASE_URL", raising=False)
+    seen = tmp_path / "env.json"
+    argv = _write_script(
+        tmp_path,
+        f"""
+        import json, os, sys
+        sys.stdin.buffer.read()
+        keys = ("SEMIF", "SEMIF_BASE_URL", "SEMIF_TIMEOUT")
+        open({str(seen)!r}, "w").write(json.dumps({{k: os.environ.get(k) for k in keys}}))
+        answer = {{"type": "choice", "choice": "tool",
+                   "probabilities": {{"tool": 0.9, "person": 0.05, "unclear": 0.05}}}}
+        sys.stdout.write(json.dumps({{"answers": {{"role": answer}}}}))
+        """,
+    )
+    questions = {"role": {"criteria": {"tool": "软件工具", "person": "人名", "unclear": "不确定"}}}
+    result = request_jev_choices(
+        1.0,
+        "打开jeff工具",
+        questions,
+        endpoint="http://192.168.5.111:42171/v1/systemone",
+        argv=argv,
+    )
+    assert result == {"role": "tool"}
+    env = json.loads(seen.read_text())
+    assert env["SEMIF"] is None
+    assert env["SEMIF_BASE_URL"] == "http://192.168.5.111:42171"
+    assert float(env["SEMIF_TIMEOUT"]) <= 1.0
 
 
 def test_jev_person_negation_code_and_repeat_do_not_replace(tmp_path: Path) -> None:
@@ -184,5 +223,36 @@ def test_jev_path_does_not_require_requests(tmp_path: Path, monkeypatch) -> None
     corrector = _corrector(tmp_path, _write_script(tmp_path, _TOOL_SCRIPT))
     try:
         assert corrector.finish("打开jeff工具检查这个项目") == "打开jev工具检查这个项目"
+    finally:
+        corrector.close()
+
+
+@pytest.mark.integration
+def test_real_jev_cli_integration(tmp_path: Path) -> None:
+    """Integration test: run real `jev ask` against live plumb.json config.
+
+    Requires jev CLI installed and ~/.hermes/jev/plumb.json configured.
+    Skipped unless pytest is invoked with `-m integration`.
+    """
+    import shutil
+    if not shutil.which("jev"):
+        pytest.skip("jev CLI not found on PATH")
+
+    plumb_config = Path.home() / ".hermes" / "jev" / "plumb.json"
+    if not plumb_config.exists():
+        pytest.skip("~/.hermes/jev/plumb.json not configured")
+
+    corrector = StreamingHotwordCorrector(
+        [],
+        endpoint="",  # Uses plumb.json
+        timeout_s=2.0,
+        enabled=True,
+        provider="jev",
+        contextual_aliases=[{"heard": "jeff", "word": "jev", "meaning": "软件工具"}],
+    )
+    try:
+        # Real round-trip: should replace tool mention, keep person mention
+        assert "jev工具" in corrector.finish("打开jeff工具检查这个项目")
+        assert "Jeff帮我" in corrector.finish("Jeff帮我调试脚本")
     finally:
         corrector.close()

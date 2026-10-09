@@ -38,6 +38,35 @@ def test_invalid_distributions_keep_original() -> None:
     assert interpret_choice(_OPTIONS, _picked("c0", {"keep": 0.0, "c0": 1.0})) == "c0"
 
 
+def test_gate_thresholds_reject_weak_distributions() -> None:
+    """0.70 top and 0.20 margin reject near-ties and low-confidence answers."""
+    from recordian.semif_judge import _MIN_MARGIN, _MIN_TOP
+
+    # Boundary: exactly _MIN_TOP passes when margin is sufficient
+    assert interpret_choice(_OPTIONS, _picked("c0", {"keep": 0.10, "c0": 0.90})) == "c0"
+    assert interpret_choice(_OPTIONS, _picked("c0", {"keep": 0.29, "c0": 0.71})) == "c0"
+    assert interpret_choice(_OPTIONS, _picked("c0", {"keep": 0.30, "c0": 0.70})) == "c0"
+
+    # Just below _MIN_TOP is rejected
+    assert interpret_choice(_OPTIONS, _picked("c0", {"keep": 0.31, "c0": 0.69})) is None
+
+    # Exactly _MIN_MARGIN passes when top is sufficient (probabilities must sum to 1.0)
+    assert interpret_choice(_OPTIONS, _picked("c0", {"keep": 0.29, "c0": 0.71})) == "c0"
+
+    # Just below _MIN_MARGIN is rejected
+    assert interpret_choice(_OPTIONS, _picked("c0", {"keep": 0.505, "c0": 0.495})) is None
+    assert interpret_choice(_OPTIONS, _picked("c0", {"keep": 0.31, "c0": 0.69})) is None
+
+    # Both thresholds must pass
+    assert interpret_choice(_OPTIONS, _picked("c0", {"keep": 0.25, "c0": 0.75})) == "c0"
+    assert interpret_choice(_OPTIONS, _picked("c0", {"keep": 0.29, "c0": 0.71})) == "c0"
+    assert interpret_choice(_OPTIONS, _picked("c0", {"keep": 0.26, "c0": 0.74})) == "c0"
+
+    # Gate values are fixed, not probabilities of being correct
+    assert _MIN_TOP == 0.70
+    assert _MIN_MARGIN == 0.20
+
+
 def test_trim_new_piece_does_not_drop_or_connect() -> None:
     class _Session:
         def post(self, *args: object, **kwargs: object) -> object:

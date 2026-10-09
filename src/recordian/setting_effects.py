@@ -105,6 +105,12 @@ _SETTING_EFFECTS: dict[str, SettingEffect] = {
     "wake_sample_rate": SettingEffect.RESTART_REQUIRED,
     "wake_keyword_score": SettingEffect.RESTART_REQUIRED,
     "wake_keyword_threshold": SettingEffect.RESTART_REQUIRED,
+    "correction_provider": SettingEffect.RESTART_REQUIRED,
+    "jev_timeout_s": SettingEffect.RESTART_REQUIRED,
+    "semif_timeout_s": SettingEffect.RESTART_REQUIRED,
+    "semif_endpoint": SettingEffect.RESTART_REQUIRED,
+    "enable_semif_correction": SettingEffect.RESTART_REQUIRED,
+    "contextual_aliases": SettingEffect.RESTART_REQUIRED,
 }
 
 

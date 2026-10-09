@@ -8,11 +8,14 @@ a thread and does not call the network.
 
 from __future__ import annotations
 
+import json
+import os
 import re
 import threading
 import time
 from collections import OrderedDict
 from collections.abc import Sequence
+from pathlib import Path
 from typing import Any, cast
 
 from .hotword_corrector import (
@@ -389,7 +392,7 @@ class StreamingHotwordCorrector:
         session: Any | None = None,
         context: str = "",
         contextual_aliases: object = None,
-        provider: str = "semif",
+        provider: str = "jev",
         jev_argv: Sequence[str] | None = None,
     ) -> None:
         self._terms, self._replacements, self._frequencies = _compile_hotwords(hotwords)
@@ -666,6 +669,10 @@ class StreamingHotwordCorrector:
         self._cache.move_to_end(origin)
         while len(self._cache) > _CACHE_LIMIT:
             self._cache.popitem(last=False)
+        # Optional JSONL recording of judgment outcomes for offline analysis
+        log_path = _correction_log_path()
+        if log_path:
+            _append_correction_record(log_path, origin, result, context)
 
     def _loop(self) -> None:
         while True:
@@ -709,18 +716,19 @@ class StreamingHotwordCorrector:
         def ask(state: str, questions: dict[str, dict[str, Any]]) -> dict[str, str | None]:
             if job.dropped or time.monotonic() >= deadline:
                 return {}
+            remaining = deadline - time.monotonic()
             if self._provider == "jev":
-                remaining = deadline - time.monotonic()
                 if remaining < 0.15:
                     return {}
                 return request_jev_choices(
                     remaining,
                     state,
                     questions,
+                    endpoint=endpoint,
                     argv=self._jev_argv,
                     on_process=lambda proc: self._register_proc(proc, job),
                 )
-            return request_choices(session, endpoint, timeout_s, state, questions)
+            return request_choices(session, endpoint, remaining, state, questions)
 
         span = job.span
         if span is not None:
@@ -816,7 +824,7 @@ def corrector_from_args(
     input. Callers that own a session or lifecycle can still construct
     ``StreamingHotwordCorrector`` directly.
     """
-    provider = normalize_correction_provider(getattr(args, "correction_provider", "semif"))
+    provider = normalize_correction_provider(getattr(args, "correction_provider", "jev"))
     if provider == "jev":
         timeout_s = normalize_jev_timeout_s(getattr(args, "jev_timeout_s", DEFAULT_JEV_TIMEOUT_S))
     else:
@@ -830,3 +838,31 @@ def corrector_from_args(
         contextual_aliases=getattr(args, "contextual_aliases", None),
         provider=provider,
     )
+
+
+def _correction_log_path() -> Path | None:
+    """Return JSONL log path from RECORDIAN_CORRECTION_LOG env var, or None if disabled."""
+    raw = os.environ.get("RECORDIAN_CORRECTION_LOG", "").strip()
+    if not raw:
+        return None
+    try:
+        return Path(raw).expanduser().resolve()
+    except Exception:
+        return None
+
+
+def _append_correction_record(log_path: Path, origin: str, result: str, context: str) -> None:
+    """Append one judgment outcome to the JSONL log. Failures are silent."""
+    try:
+        record = {
+            "timestamp": time.time(),
+            "origin": origin,
+            "result": result,
+            "context": context,
+            "changed": origin != result,
+        }
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        with log_path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(record, ensure_ascii=False) + "\n")
+    except Exception:
+        pass

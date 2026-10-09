@@ -768,6 +768,23 @@ def transcribe_and_commit(
             replacements=replacements,
         )
 
+    # Optional contextual correction (same _apply_final_semif logic as postprocess_pipeline)
+    if text.strip() and bool(getattr(args, "enable_semif_correction", False)):
+        try:
+            from . import streaming_correction as _sc
+
+            effective = list(hotwords)
+            if not effective:
+                lexicon, _pairs = lexicon_from_args(args)
+                effective = list(lexicon)
+            corrector = _sc.corrector_from_args(args, effective)
+            try:
+                text = corrector.finish(text)
+            finally:
+                corrector.close()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("contextual_correction_failed: %s: %s", type(exc).__name__, exc)
+
     commit_info = {"backend": committer.backend_name, "committed": False, "detail": "disabled"}
     if text.strip():
         if routing.commit_local:

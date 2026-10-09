@@ -39,11 +39,14 @@ def _peaked(choice: str, criteria: dict[str, str]) -> dict[str, object]:
 
 
 def _corrector(hotwords: list[str], session: _Session | None = None, **kwargs: object) -> StreamingHotwordCorrector:
+    # 这些用例注入 HTTP session 验证 SemIf 协议，显式声明 provider，
+    # 不受 CLI 默认值（jev → 子进程）影响。
     return StreamingHotwordCorrector(
         hotwords,
         endpoint=str(kwargs.get("endpoint", "http://192.168.5.111:42032/v1/systemone")),
         timeout_s=float(kwargs.get("timeout_s", 0.12)),
         enabled=bool(kwargs.get("enabled", False)),
+        provider=str(kwargs.get("provider", "semif")),
         session=session,
     )
 
@@ -94,7 +97,8 @@ def test_one_span_one_budget_and_number_stays() -> None:
     pytest.importorskip("pypinyin")
 
     def handler(call: dict[str, object]) -> dict[str, object]:
-        assert call["timeout"] == 0.12
+        # Allow small floating-point error from time.monotonic() arithmetic
+        assert abs(call["timeout"] - 0.12) < 0.001
         time.sleep(0.04)
         criteria = call["json"]["questions"]["pick"]["criteria"]
         assert list(criteria) == ["keep", "c0"]
@@ -296,7 +300,7 @@ def test_finish_without_submit_uses_one_budget() -> None:
     pytest.importorskip("pypinyin")
 
     def handler(call: dict[str, object]) -> dict[str, object]:
-        assert call["timeout"] == 0.12
+        assert abs(call["timeout"] - 0.12) < 0.001
         criteria = call["json"]["questions"]["pick"]["criteria"]
         assert len(criteria) <= 8
         assert "keep" in criteria
@@ -420,11 +424,22 @@ assert trim_new_piece("现在", "流逝") == "流逝"
 raised = False
 try:
     StreamingHotwordCorrector(
-        ["时期"], endpoint="http://127.0.0.1:9", enabled=True, timeout_s=0.2
+        ["时期"],
+        endpoint="http://127.0.0.1:9",
+        enabled=True,
+        timeout_s=0.2,
+        provider="semif",
     ).finish("屋里湿气很重")
 except ImportError as exc:
     raised = "requests" in str(exc)
-assert raised, "enabled path must report a missing requests install"
+assert raised, "enabled semif path must report a missing requests install"
+
+# The jev path shells out to `jev ask`, so it must not need requests at all.
+jev = StreamingHotwordCorrector(
+    ["时期"], endpoint="http://127.0.0.1:9", enabled=True, timeout_s=0.2, provider="jev"
+)
+jev.submit("屋里湿气很重")
+jev.close()
 """
     env = os.environ.copy()
     env["PYTHONPATH"] = "src"
@@ -485,11 +500,13 @@ def _role_answers(choices: dict[str, str]) -> dict[str, object]:
 
 
 def _alias_corrector(session: _Session, **kwargs: object) -> StreamingHotwordCorrector:
+    # 走注入 session 的 SemIf 协议，显式声明 provider。
     return StreamingHotwordCorrector(
         [],
         endpoint="http://192.168.5.111:42032/v1/systemone",
         timeout_s=float(kwargs.pop("timeout_s", 0.3)),
         enabled=True,
+        provider=str(kwargs.pop("provider", "semif")),
         session=session,
         contextual_aliases=_ALIAS,
         **kwargs,
@@ -612,6 +629,7 @@ def test_alias_veto_is_per_heard_token_not_per_snapshot() -> None:
         endpoint="http://192.168.5.111:42032/v1/systemone",
         timeout_s=0.3,
         enabled=True,
+        provider="semif",
         session=session,
         contextual_aliases=aliases,
     )
@@ -891,6 +909,7 @@ def test_alias_multiple_distinct_aliases_judge_independently() -> None:
         endpoint="http://192.168.5.111:42032/v1/systemone",
         timeout_s=0.3,
         enabled=True,
+        provider="semif",
         session=session,
         contextual_aliases=aliases,
     )
@@ -951,6 +970,7 @@ def test_invalid_alias_entries_ignored() -> None:
         endpoint="http://192.168.5.111:42032/v1/systemone",
         timeout_s=0.3,
         enabled=True,
+        provider="semif",
         session=session,
         contextual_aliases=[
             {"heard": "", "word": "jev", "meaning": "软件工具"},
@@ -975,6 +995,7 @@ def test_corrector_from_args_centralizes_wiring() -> None:
 
     args = argparse.Namespace(
         enable_semif_correction=True,
+        correction_provider="semif",
         semif_endpoint="http://127.0.0.1:9/v1/systemone",
         semif_timeout_s=0.3,
         contextual_aliases=_ALIAS,
@@ -996,9 +1017,20 @@ def test_corrector_from_args_centralizes_wiring() -> None:
         assert disabled._endpoint == ""
         assert disabled._context == ""
         assert disabled._aliases == []
-        assert disabled._provider == "semif"
+        assert disabled._provider == "jev"
     finally:
         disabled.close()
+
+    # 老配置没有 correction_provider 时必须落到新的默认 jev，
+    # 而不是继续用 semif 的短超时走 HTTP。
+    legacy = corrector_from_args(
+        argparse.Namespace(enable_semif_correction=True, semif_timeout_s=0.3), ["时期"]
+    )
+    try:
+        assert legacy._provider == "jev"
+        assert legacy._timeout_s == 1.5
+    finally:
+        legacy.close()
 
     jev_args = argparse.Namespace(
         enable_semif_correction=True,
