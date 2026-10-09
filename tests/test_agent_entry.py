@@ -40,8 +40,15 @@ def hub(tmp_path):
 def wait_done(hub):
     deadline = time.monotonic() + 3
     while time.monotonic() < deadline:
-        if not hub.cancels:
-            return
+        # The worker clears cancels before persisting the terminal state.
+        # Observe completion under its lock so persistence has also finished.
+        if not hub.lock.acquire(timeout=max(0, deadline - time.monotonic())):
+            break
+        try:
+            if time.monotonic() < deadline and not hub.cancels:
+                return
+        finally:
+            hub.lock.release()
         time.sleep(.01)
     raise AssertionError('task did not finish')
 
