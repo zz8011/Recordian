@@ -454,5 +454,6 @@ print(f"Text: {result.text}, Confidence: {result.confidence}")
 ## 更多信息
 
 - [用户手册](USER_GUIDE.md)
-- [开发者指南](DEVELOPER_GUIDE.md)
-- [贡献指南](CONTRIBUTING.md)
+- [文档索引](README.md)
+- [项目结构与模块导航](../INDEX.md)
+- [版本历史](../CHANGELOG.md)

@@ -10,10 +10,13 @@
 - `summary.md` - 提取核心信息
 - `meeting.md` - 会议纪要格式
 - `technical.md` - 技术文档风格
+- `code-comment.md` - 代码注释风格
 - `English.md` - 翻译成英文口语
 - `Japanese.md` - 翻译成日语
 - `Korean.md` - 翻译成韩语
 - `Arabic.md` - 翻译成阿拉伯语
+- `Indonesian.md` - 翻译成印尼语
+- `Uyghur.md` - 翻译成维吾尔语
 - `Extended.md` - 在原意基础上适度扩写
 
 ### 使用方法
@@ -65,5 +68,6 @@
 - **ASR Context 预设**：用于 ASR 识别阶段，作为 System Prompt，不需要占位符
 
 详细文档：
-- 使用文档：`docs/USER_GUIDE.md`
-- 故障排查：`docs/TROUBLESHOOTING.md`
+- 使用文档：[`docs/USER_GUIDE.md`](../docs/USER_GUIDE.md)
+- 故障排查：[`docs/TROUBLESHOOTING.md`](../docs/TROUBLESHOOTING.md)
+- 文档索引：[`docs/README.md`](../docs/README.md)

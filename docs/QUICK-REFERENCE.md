@@ -108,6 +108,7 @@ recordian --mode utterance --wav sample.wav --pass1 http --pass1-endpoint http:/
 
 ## 更多文档
 
-- `README.md`
-- `docs/USER_GUIDE.md`
-- `docs/TROUBLESHOOTING.md`
+- [`README.md`](README.md) — 文档索引
+- [`USER_GUIDE.md`](USER_GUIDE.md) — 用户手册
+- [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md) — 故障排查
+- [`../README.md`](../README.md) — 项目主页

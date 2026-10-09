@@ -328,7 +328,7 @@ echo $XDG_SESSION_TYPE
 
 详细问题请查看：
 
-- [`docs/TROUBLESHOOTING.md`](TROUBLESHOOTING.md)
-- [`QUICK_REFERENCE.md`](../QUICK_REFERENCE.md)
+- [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md)
+- [`QUICK-REFERENCE.md`](QUICK-REFERENCE.md)
 
 如果重点在“为什么某个桌面应用没有正确上屏”，优先看故障排查文档中与 `xprop`、窗口识别、自动检测机制、Electron 应用、降级机制相关的部分。

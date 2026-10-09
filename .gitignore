@@ -26,8 +26,8 @@ third_party/
 # 本地模型文件（太大，不提交）
 models/
 
-# 归档文件
-archive/
+# 归档文件（仅根目录；docs/archive/ 是正式归档文档，需要提交）
+/archive/
 
 # 临时脚本
 recordian-launch.sh
@@ -69,3 +69,6 @@ recordian-confucius.local.json
 .scratch/
 runtime/
 fcitx/**/librecordian-commit.so
+
+# 故障台账：仅本地保留，不公开（含内网地址与本机细节）
+FAILURES.md

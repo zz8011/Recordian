@@ -2,6 +2,15 @@
 
 This project uses **bd** (beads) for issue tracking. Run `bd onboard` to get started.
 
+## Project Navigation — Read INDEX.md First
+
+> **进门先读 `INDEX.md`**。这是项目的导航地图，列出了文件夹结构、关键文件位置、起点文件。
+> 读 INDEX.md 后才知道「去哪找」，而不是上来就 grep + 读源码蛮力搜。
+
+关键索引文件：
+- `INDEX.md` — 项目主索引（src/recordian/ 各模块一览）
+- `src/recordian/providers/INDEX.md` — ASR provider 和 text refiner 模块索引
+
 ## Quick Reference
 
 ```bash

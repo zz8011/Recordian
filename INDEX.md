@@ -2,7 +2,9 @@
 
 > Voice dictation for Linux. Audio → ASR → hotword correction → input-method commit, with optional text refinement.
 
-**Last updated:** 2026-09-27
+**Last updated:** 2026-10-09
+
+> 文档导航见 [`docs/README.md`](docs/README.md)；版本历史见 [`CHANGELOG.md`](CHANGELOG.md)。
 
 ## Module Map
 
@@ -14,9 +16,9 @@
 | `src/recordian/providers/refine/` | Text refinement LLMs | cloud LLM refine pipeline |
 | `server/` | Local ASR server processes | `confucius_streaming_server.py` (WebSocket v1, loopback), `qwen_streaming_server.py` (HTTP) |
 | `tests/` | Unit & integration tests | |
-| `docs/` | Architecture & research docs | |
+| `docs/` | 用户手册、故障排查、功能专题 | 索引见 `docs/README.md`；历史文档在 `docs/archive/` |
 | `models/` | ASR model files (gitignored) | Do not commit large files |
-| `presets/` | JSON preset configurations | |
+| `presets/` | 文本精炼 prompt 预设（`.md`） | 文件名即 preset 名 |
 | `examples/` | Usage examples | |
 | `assets/` | Static assets | |
 
@@ -37,12 +39,14 @@
 | `streaming_correction.py` / `semif_judge.py` / `jev_judge.py` | Optional asynchronous candidate judgment via SemIf or official Jev, contextual aliases, and shared corrector factory |
 | `spoken_formatting.py` / `text_cleanup.py` | Spoken numbers and URL dots, with literal-text protection |
 | `auto_lexicon.py` | Auto-learned hotword lexicon (fragment-filtered, separate auto quota) |
-| `hotkey_dictate.py` | Hotkey-based dictation |
 | `voice_wake.py` | Wake-word activation |
 | `postprocess_pipeline.py` | Text refinement pipeline |
-| `tray_app.py` | System tray GUI |
+| `tray_app.py` | TrayApp class and `main()` entry point (tkinter overlay + menu wiring) |
+| `tray_gui.py` | 兼容 shim；`recordian-tray` 的实际入口，转导出 `tray_app` 等拆分后的子模块 |
+| `tray_utils.py` / `tray_menu.py` | 纯工具函数；AppIndicator 菜单构建与包内状态图标 |
+| `tray_context_editor.py` / `tray_diagnostics.py` / `tray_speaker_wizard.py` | 词库编辑器、运行时诊断、声纹录入向导 |
 | `native_settings.py` / `settings_draft.py` | GTK preferences, editable snapshot and safe save |
-| `tray_settings.py` / `tray_menu.py` | Legacy form helpers, tray actions and packaged status icons |
+| `tray_settings.py` / `tray_settings_utils.py` | Legacy form helpers and settings-window compatibility layer |
 | `recommended_profile.py` | Local Confucius profile, display labels, and endpoint validation |
 | `waveform_renderer.py` | Recording overlay window + state machine (pyglet) |
 | `orb_shader.py` | Liquid-glass voice orb GLSL shader (voiceWave preset, ported from LerSent001/orb, MIT) |
@@ -55,13 +59,24 @@
 
 ## Canonical Presets
 
+预设是 `presets/` 下的 `.md` prompt 文件，**文件名（去掉扩展名）就是 preset 名**，由
+`preset_manager.py` 的 `glob("*.md")` 加载，托盘菜单按此列表展示。
+
 | File | Purpose |
 |------|---------|
-| `presets/default.json` | Default dictation preset |
-| `presets/refine.json` | With LLM text refinement |
+| `presets/default.md` | 默认：整理口语，去重去语气词（`refine_preset` 的默认值） |
+| `presets/intent.md` | 意图整理：去掉对话废话和改口痕迹 |
+| `presets/formal.md` / `summary.md` / `meeting.md` / `technical.md` | 书面语、摘要、会议纪要、技术文档风格 |
+| `presets/code-comment.md` | 代码注释风格 |
+| `presets/English.md` / `Japanese.md` / `Korean.md` / `Arabic.md` / `Indonesian.md` / `Uyghur.md` | 翻译类预设 |
+| `presets/Extended.md` | 在原意基础上适度扩写 |
+
+完整清单与格式说明见 `presets/README.md`。新增 `.md` 文件即可被托盘菜单识别。
 
 ## Where To Go
 
+- **文档导航** → `docs/README.md`（用户手册、故障排查、功能专题的完整索引）
+- **历史文档** → `docs/archive/`（已归档的研究与过程记录，不再维护）
 - **ASR provider changes** → `src/recordian/providers/INDEX.md`
 - **Text refinement** → `src/recordian/providers/` + `postprocess_pipeline.py`
 - **Hotkey configuration** → `hotkey_dictate.py` + `recordian-hotkey-dictate --help`
@@ -90,11 +105,14 @@ limits in `server/README-confucius.md`; design/acceptance in `docs/STREAMING-IME
 
 ## Key Design Decisions
 
-- **ASR**: qwen_asr is primary provider; `streaming_base.py` for real-time streaming
-- **Text refine**: `cloud_llm_refiner.py` (HTTP LLM) or `llamacpp_text_refiner.py` (local)
-- **Agent voice entry** → `agent_entry.py` + `docs/AGENT-VOICE.zh-CN.md` (Hermes implemented)
+- **ASR**: `qwen-asr` is the default provider; `streaming_base.py` for real-time streaming;
+  `confucius-asr` and `http-cloud` are the alternatives (`runtime_config.ASR_PROVIDER_CHOICES`)
+- **Text refine**: `cloud_llm_refiner.py` (HTTP LLM), `llamacpp_text_refiner.py` (local), or
+  `qwen_text_refiner.py`; selected by `refine_provider` (`local` / `cloud` / `llamacpp`)
+- **Contextual correction**: `jev` (default, official CLI on the LAN Plumb service) or `semif`
 - **Wake word**: `voice_wake.py` — separate from hotkey mode
-- **Tray**: `tray_app.py` — system tray GUI; `tray_settings.py` for settings UI
+- **Tray**: `tray_gui.py` is the `recordian-tray` entry point (compat shim); the implementation
+  lives in `tray_app.py` plus the focused `tray_*` submodules; `native_settings.py` for the GTK preferences window
 - **Continuous capture**: Audio is assigned to bounded ASR sessions; committed input remains in the application. Correction context and in-memory history have explicit bounds.
 
 ## Common Tasks
@@ -106,8 +124,8 @@ recordian-hotkey-dictate --config-path "$HOME/.config/recordian/hotkey.json"
 # Run tray GUI
 recordian-tray --config-path "$HOME/.config/recordian/hotkey.json"
 
-# Run benchmarks
-python -m recordian.benchmark
+# Run benchmarks（benchmark.py 只提供阈值判断，可执行入口在 performance_benchmark.py）
+python -m recordian.performance_benchmark
 
 # Type check
 mypy src/recordian/

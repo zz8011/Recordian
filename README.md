@@ -2,7 +2,7 @@
 
 <div align="center">
 
-<img src="assets/recordian-mark-golden.svg" width="124" height="150" alt="Recordian Logo"/>
+<img src="assets/logo.png" width="150" height="150" alt="Recordian Logo"/>
 
 ### Linux 优先的智能语音输入助手
 
@@ -25,18 +25,19 @@ Recordian 面向 Linux 桌面语音输入场景，核心目标是把常用语音
 - 可选语音唤醒、主人声纹校验
 - 自动词库与自定义 Preset
 
-## 当前特性
+## 核心功能
 
-- **本地 ASR**：默认集成 `Qwen3-ASR` 流程，支持 GPU。
+- **本地 ASR**：默认集成 `Qwen3-ASR` 流程，支持 GPU；也可接入 HTTP 云服务和本机 Confucius4-R2T2 流式服务。
 - **文本精炼**：支持 `local`、`cloud`、`llamacpp` 三种精炼后端。
-- **Preset 系统**：内置核心预设 `default`、`formal`、`meeting`、`summary`、`technical`，并附带 `English`、`Japanese`、`Korean`、`Arabic`、`Extended` 示例预设。
-- **智能输入方式**：支持 `auto` 与 `auto-fallback`，会自动检测窗口并选择合适的上屏方式。
+- **Preset 系统**：内置 14 个文本精炼预设，新增 `.md` 文件即可在托盘菜单里直接看到。
+- **智能输入方式**：支持 `auto` 与 `auto-fallback`，自动检测窗口并选择合适的上屏方式。
 - **自动检测 Electron 应用**：对微信、VS Code、Obsidian、Typora、Discord、Slack 等场景优先走更稳妥的粘贴路径。
-- **语音唤醒**：支持“嗨/嘿 + 名字”唤醒，并可结合主人声纹验证。
+- **连续听写**：一次触发持续识别，按段提交；配合 Fcitx 插件可做到预编辑与最终提交分离。
+- **语音唤醒**：支持「嗨/嘿 + 称呼」唤醒，并可结合主人声纹验证。
 
-## 原生设置窗口
+## 设置窗口
 
-从托盘菜单打开「设置」。窗口沿用 GTK 3，以 Omarchy Labra 配色、细边框和侧栏导航呈现八个页面；关闭设置窗口后继续听写。设置页面按需创建，不引入 Electron、浏览器服务器或新的常驻服务。
+从托盘菜单打开「设置」。窗口沿用 GTK 3，以 Omarchy Labra 配色、细边框和侧栏导航呈现八个页面：
 
 | 页面 | 当前可编辑范围 |
 | --- | --- |
@@ -49,32 +50,9 @@ Recordian 面向 Linux 桌面语音输入场景，核心目标是把常用语音
 | 语音唤醒 | 启用、前缀、称呼、静音结束时间，以及现有 Agent 入口开关 |
 | 高级设置 | 采集后端、采样率、声道、单次录音时长、预热、诊断和润色样本开关 |
 
-修改先留在窗口草稿。点击「取消修改」回到本窗口最近保存的状态；关闭时有未保存内容会询问是否放弃。「恢复默认」只修改表单显示字段，仍需点击「保存并生效」才写入配置。
+修改先留在窗口草稿，点击「保存并生效」才写入配置；保存只合并修改过的字段，保留未更改的密钥和配对信息。「恢复默认」只修改表单显示字段，仍需保存才生效。
 
-保存只合并修改过的字段，保留未显示字段、未更改的密钥和配对信息。配置使用同目录临时文件与原子替换；配置及自动备份权限为 `0600`。无效数值或不兼容地址阻止保存并定位到对应页面。保存沿用 `setting_effects.py` 的生效策略，需要重启的修改在录音和处理期间会被拦截。
-
-「文字润色 → 云端 HTTP」可填写 API 基址（含端口，例如 `http://主机:端口/v1`）和隐藏显示的 API Key。Key 留空保留已保存值；取消或恢复默认会丢弃新输入的 Key，保存后输入框清空。点击「识别模型」才使用当前表单地址和新 Key（留空则使用已保存 Key），在后台读取 OpenAI 兼容的 `/v1/models` 列表，请求超时设为 8 秒。不会自动选择第一个模型，也不会自动保存；识别失败或接口不支持列表时仍可手动填写模型标识。更改连接、取消、恢复默认或关闭窗口会丢弃过时结果。模型发现不跟随 HTTP 重定向，响应最大 1 MiB；错误日志不包含服务返回的错误文本或 Key。
-
-模型识别只读取模型列表，不执行推理、下载模型或验证所选模型的润色能力。ASR 和远程配对凭据仍不在此编辑。声纹、VAD、模型路径等未展示的低频参数保留现有配置；不应将页面中的开关当作自动部署对应服务的入口。配色对应当前 Labra 设计，尚未实现切换 Omarchy 主题后自动同步。
-
-## 0.1.2 润色设置更新
-
-新增 API Key 草稿、显式模型识别和可手动输入的模型下拉框；仅点击识别时启动短期后台请求，不增加常驻任务。保存沿用现有配置与重启策略。
-
-## 0.1.1 桌面更新
-
-本版本接入原生设置与已确认的 R 品牌资产；ASR、录音和模型实现沿用原有版本。托盘使用包内透明 PNG，现有路径缓存只在图标组变化时更新，不增加动画定时器。
-
-| 真实状态 | 托盘图形 |
-| --- | --- |
-| `idle` | R，空闲；不代表已完成服务健康检查 |
-| `starting` / `warming` | 沙漏，启动或预热中 |
-| `recording` | 实心圆，包含录音期间的流式识别 |
-| `processing` / `busy` | 分段圆环，识别、润色或提交处理中 |
-| `error` | 菱形感叹号，具体原因以现有错误说明为准 |
-| `stopped` | 实心方块，已停止 |
-
-图标缺失时回退到包内空闲 R，再回退到应用图标。未知状态保留原先默认图标的处理方式。六类图形均为静态；没有新增完成成功、断网、取消、Agent 或唤醒状态。当前彩色图标用于深色托盘，暂未自动切换浅色主题资源。
+模型识别只读取模型列表，不执行推理、下载模型或验证所选模型的润色能力。声纹、VAD、模型路径等低频参数保留在配置文件中，不在界面展示。
 
 ## 安装
 
@@ -107,12 +85,7 @@ cd Recordian
 ./install.sh
 ```
 
-安装脚本会：
-
-- 创建 `.venv`
-- 安装 Python 依赖
-- 创建桌面启动器
-- 生成本地 `recordian-launch.sh`
+安装脚本会创建 `.venv`、安装 Python 依赖、创建桌面启动器，并生成本地 `recordian-launch.sh`。
 
 ### 3. 下载 ASR 模型
 
@@ -132,7 +105,7 @@ modelscope download --model Qwen/Qwen3-ASR-0.6B --local_dir ./models/Qwen3-ASR-0
 
 ### 4. 手动安装方式
 
-如果你不想使用安装脚本，也可以手动安装：
+如果你不想使用安装脚本：
 
 ```bash
 uv sync --extra gui --extra hotkey --extra qwen-asr --extra wake
@@ -144,6 +117,8 @@ uv sync --extra gui --extra hotkey --extra qwen-asr --extra wake
 pip install -e ".[gui,hotkey,qwen-asr,wake]"
 ```
 
+可用的 extras：`gui`、`hotkey`、`qwen-asr`、`confucius-asr`、`correction`、`wake`、`dev`。
+
 ## 快速开始
 
 启动托盘程序：
@@ -152,10 +127,10 @@ pip install -e ".[gui,hotkey,qwen-asr,wake]"
 recordian-tray
 ```
 
-默认交互：
+默认交互（本机推荐配置，可从托盘「设置 → 快捷键」修改）：
 
 - **右 Ctrl**：按住录音，松开识别并上屏
-- **右 Alt**：点一下开始连续听写，再点一下结束（本机推荐配置；需要支持分段提交的 Fcitx 插件）
+- **右 Alt**：点一下开始连续听写，再点一下结束（需要支持分段提交的 Fcitx 插件）
 - **Ctrl+Alt+Q**：退出后台守护进程
 - 托盘右键：打开设置、切换精炼预设、管理自动词库
 
@@ -165,36 +140,24 @@ recordian-tray
 ~/.config/recordian/hotkey.json
 ```
 
-## 配置与文档
+## 命令
 
-- 完整用户手册：[`docs/USER_GUIDE.md`](docs/USER_GUIDE.md)
-- 快速参考：[`QUICK_REFERENCE.md`](QUICK_REFERENCE.md)
-- 故障排查：[`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md)
-- Preset 说明：[`presets/README.md`](presets/README.md)
-- 本地 vLLM/OpenAI 兼容 ASR 配置示例：[`examples/hotkey.http-cloud.local-vllm.json`](examples/hotkey.http-cloud.local-vllm.json)
-- 本机 Confucius4-R2T2 流式 ASR：服务与实测限制见 [`server/README-confucius.md`](server/README-confucius.md)，配置示例 [`examples/hotkey.confucius-asr.local.json`](examples/hotkey.confucius-asr.local.json)（PTT：`Ctrl_R` 按住录音、松开结束；服务端单会话音频上限默认 30 秒，超限显式报错而非截断）
-- 流式输入法方案设计与验收：[`docs/STREAMING-IME-PLAN.zh-CN.md`](docs/STREAMING-IME-PLAN.zh-CN.md)；实测验证记录：[`docs/STREAMING-IME-VALIDATION.zh-CN.md`](docs/STREAMING-IME-VALIDATION.zh-CN.md)
-- 连续听写、语境纠词和口述数字网址：[`docs/CONTINUOUS-DICTATION.zh-CN.md`](docs/CONTINUOUS-DICTATION.zh-CN.md)
-- Fcitx 输入法插件（预编辑/提交）：构建与安装见 [`fcitx/recordian-commit/README.md`](fcitx/recordian-commit/README.md) 与 `fcitx/recordian-commit/build.sh`；改动后需按该文档重载 Fcitx 生效
+| 命令 | 作用 |
+| --- | --- |
+| `recordian-tray` | 托盘 GUI，日常入口 |
+| `recordian-hotkey-dictate` | 热键守护进程，用 `--config-path` 指定 JSON 配置 |
+| `recordian` | 单次 WAV 文件识别（`--wav`），不读 `--config-path` |
+| `recordian-linux-dictate` | 命令行听写：按固定时长录音（`--duration`）后识别并提交，可指定输入设备与 ASR 后端 |
+| `recordian-agent` | 本地 Agent 任务面板 |
+| `recordian-remote-paste-agent` | 远程粘贴 Agent |
+| `recordian-wake-diagnose` | 检查语音唤醒配置与模型状态 |
+| `recordian-vllm-realtime-probe` | 探测本机 vLLM `/v1/realtime` 是否支持边发边出字 |
 
-常见配置项包括：
-
-- `hotkey`
-- `commit_backend`
-- `qwen_model`
-- `enable_text_refine`
-- `refine_preset`
-- `enable_auto_lexicon`
-- `enable_voice_wake`
-
-## 常用命令
+常用调用：
 
 ```bash
-# 启动托盘
-recordian-tray
-
-# 直接运行热键守护进程（JSON 配置用 --config-path；recordian cli 是 --wav 单次识别入口）
-recordian-hotkey-dictate --config-path /path/to/hotkey.json
+# 用已保存的设置启动热键守护进程
+recordian-hotkey-dictate --config-path "$HOME/.config/recordian/hotkey.json"
 
 # 本机 Confucius4-R2T2 流式 ASR 服务（完整参数见 server/README-confucius.md）
 python server/confucius_streaming_server.py --model-dir /path/to/Confucius4-R2T2 --r2t2-source /path/to/checkout
@@ -206,7 +169,44 @@ recordian-wake-diagnose
 recordian-vllm-realtime-probe --wav /path/to/sample.wav --model Qwen3-ASR-0.6B --url http://127.0.0.1:8000
 ```
 
-如果你的 vLLM 实例支持 realtime，这个命令会把增量转写直接打印到标准输出；如果握手阶段就返回 `HTTP 403`，通常表示当前实例没有真正启用 `/v1/realtime`，或者所加载模型不支持 realtime。
+如果 vLLM 实例支持 realtime，`recordian-vllm-realtime-probe` 会把增量转写直接打印到标准输出；如果握手阶段就返回 `HTTP 403`，通常表示当前实例没有真正启用 `/v1/realtime`，或者所加载模型不支持 realtime。
+
+## 主要配置项
+
+配置文件为 `~/.config/recordian/hotkey.json`。下表中的「默认」指程序内置默认值；热键类项的默认值来自本机推荐配置（`recommended_profile.py`）：
+
+| 配置项 | 说明 |
+| --- | --- |
+| `hotkey` | PTT 触发键，默认 `<ctrl_r>` |
+| `toggle_hotkey` | 连续听写开关键，推荐配置 `<alt_r>` |
+| `exit_hotkey` | 退出守护进程，推荐配置 `<ctrl>+<alt>+q` |
+| `asr_provider` | `qwen-asr`（默认）/ `http-cloud` / `confucius-asr` |
+| `commit_backend` | `auto`（默认）/ `auto-fallback` / `fcitx` / `wtype` / `xdotool` / `xdotool-clipboard` / `stdout` / `none` |
+| `enable_text_refine` | 是否启用二轮文本精炼 |
+| `refine_provider` | `local`（默认）/ `cloud` / `llamacpp` |
+| `refine_preset` | 使用的精炼预设名（不含 `.md`），默认 `default` |
+| `enable_auto_lexicon` | 自动词库开关 |
+| `enable_voice_wake` | 语音唤醒开关 |
+
+## 文档
+
+完整文档索引见 [`docs/README.md`](docs/README.md)。常用入口：
+
+- 用户手册：[`docs/USER_GUIDE.md`](docs/USER_GUIDE.md)
+- 快速参考：[`docs/QUICK-REFERENCE.md`](docs/QUICK-REFERENCE.md)
+- 故障排查：[`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md)
+- Preset 说明：[`presets/README.md`](presets/README.md)
+- 版本历史：[`CHANGELOG.md`](CHANGELOG.md)
+- 项目结构与模块导航：[`INDEX.md`](INDEX.md)
+
+专项文档：
+
+- 本地 vLLM/OpenAI 兼容 ASR 配置示例：[`examples/hotkey.http-cloud.local-vllm.json`](examples/hotkey.http-cloud.local-vllm.json)
+- 本机 Confucius4-R2T2 流式 ASR：服务与实测限制见 [`server/README-confucius.md`](server/README-confucius.md)，配置示例 [`examples/hotkey.confucius-asr.local.json`](examples/hotkey.confucius-asr.local.json)（PTT：`Ctrl_R` 按住录音、松开结束；服务端单会话音频上限默认 30 秒，超限显式报错而非截断）
+- 流式输入法方案设计与验收：[`docs/STREAMING-IME-PLAN.zh-CN.md`](docs/STREAMING-IME-PLAN.zh-CN.md)；实测验证记录：[`docs/STREAMING-IME-VALIDATION.zh-CN.md`](docs/STREAMING-IME-VALIDATION.zh-CN.md)
+- 连续听写、语境纠词和口述数字网址：[`docs/CONTINUOUS-DICTATION.zh-CN.md`](docs/CONTINUOUS-DICTATION.zh-CN.md)
+- 热词纠错策略：[`docs/HOTWORD-POLICY.md`](docs/HOTWORD-POLICY.md)
+- Fcitx 输入法插件（预编辑/提交）：构建与安装见 [`fcitx/recordian-commit/README.md`](fcitx/recordian-commit/README.md) 与 `fcitx/recordian-commit/build.sh`；改动后需按该文档重载 Fcitx 生效
 
 ## 说明
 

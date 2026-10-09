@@ -41,7 +41,7 @@ def main():
             "降级机制",
             "auto-fallback",
         ],
-        "QUICK_REFERENCE.md": [
+        "docs/QUICK-REFERENCE.md": [
             "文本上屏方式",
             "auto-fallback",
             "自动检测支持的应用",

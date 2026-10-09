@@ -511,6 +511,7 @@ export RECORDIAN_COMMIT_BACKEND=xdotool-clipboard
 
 ## 获取帮助
 
-- GitHub Issues: https://github.com/your-repo/recordian/issues
-- 文档: docs/USER_GUIDE.md
-- 技术细节: ANIMATION_FIX.md
+- GitHub Issues: https://github.com/zz8011/Recordian/issues
+- 文档索引: [README.md](README.md)
+- 用户手册: [USER_GUIDE.md](USER_GUIDE.md)
+- 速查: [QUICK-REFERENCE.md](QUICK-REFERENCE.md)
