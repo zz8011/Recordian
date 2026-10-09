@@ -14,7 +14,7 @@ import socket
 import ssl
 import threading
 import time
-from typing import Any
+from typing import Any, cast
 
 from werkzeug.exceptions import BadRequest, ClientDisconnected, RequestTimeout
 from werkzeug.serving import ThreadedWSGIServer, WSGIRequestHandler
@@ -116,7 +116,7 @@ class _RequestHandler(WSGIRequestHandler):
     def setup(self) -> None:
         super().setup()
         self.rfile.close()
-        self.receive_deadline = _ReceiveDeadline(self.connection, self.server.receive_timeout)
+        self.receive_deadline = _ReceiveDeadline(self.connection, cast("_HTTPServer", self.server).receive_timeout)
         self.rfile = io.BufferedReader(_SocketInput(self.connection, self.receive_deadline))
 
     def make_environ(self) -> dict[str, Any]:
@@ -151,22 +151,24 @@ class _HTTPServer(ThreadedWSGIServer):
         super().__init__(host, port, app, handler=_RequestHandler, ssl_context=None)
         self.ssl_context = tls
 
-    def process_request(self, request: socket.socket, client_address: Any) -> None:
+    def process_request(self, request: socket.socket | tuple[bytes, socket.socket], client_address: Any) -> None:
+        # The inherited hook also describes UDP; this server accepts TCP only.
+        connection = cast(socket.socket, request)
         if not self._slots.acquire(blocking=False):
-            self.shutdown_request(request)
+            self.shutdown_request(connection)
             return
         try:
-            super().process_request(request, client_address)
+            super().process_request(connection, client_address)
         except BaseException:
             self._slots.release()
             raise
 
-    def process_request_thread(self, request: socket.socket, client_address: Any) -> None:
-        connection = request
+    def process_request_thread(self, request: socket.socket | tuple[bytes, socket.socket], client_address: Any) -> None:
+        connection = cast(socket.socket, request)
         try:
             if self.ssl_context is not None:
                 try:
-                    connection = self.ssl_context.wrap_socket(request, server_side=True, do_handshake_on_connect=False)
+                    connection = self.ssl_context.wrap_socket(connection, server_side=True, do_handshake_on_connect=False)
                     connection.settimeout(self.handshake_timeout)
                     connection.do_handshake()
                 except (OSError, ValueError):

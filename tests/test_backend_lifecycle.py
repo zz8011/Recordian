@@ -135,14 +135,40 @@ class _Family:
         self.parent.stdin.flush()
         return self.read()
 
+    @staticmethod
+    def _identity(pid: int) -> tuple[int, int, int]:
+        # stat is available without CONFIG_CHECKPOINT_RESTORE. Parse after the
+        # final ')' because a process comm can itself contain spaces or ')'.
+        fields = Path(f"/proc/{pid}/stat").read_text().rsplit(')', 1)[1].split()
+        return int(fields[2]), int(fields[3]), int(fields[19])  # PGID, SID, start time
+
     def own(self, pid: int) -> None:
-        # Capture identity while the child is known to be alive. Teardown uses
-        # pidfds, never signals a potentially reused numeric PID.
+        # The launcher is a session/group leader. Capture only stable identities
+        # in that isolated group, then signal through pidfds during teardown.
+        # Never require the optional /proc/<pid>/task/<pid>/children file.
         self.handles[pid] = os.pidfd_open(pid)
-        children = Path(f"/proc/{pid}/task/{pid}/children").read_text().split()
-        for child in children:
-            child_pid = int(child)
-            self.handles[child_pid] = os.pidfd_open(child_pid)
+        for entry in Path('/proc').iterdir():
+            if not entry.name.isdecimal():
+                continue
+            candidate = int(entry.name)
+            if candidate in self.handles:
+                continue
+            fd = None
+            try:
+                before = self._identity(candidate)
+                if before[:2] != (pid, pid):
+                    continue
+                fd = os.pidfd_open(candidate)
+                if self._identity(candidate) != before or select.select([fd], [], [], 0)[0]:
+                    continue
+                self.handles[candidate] = fd
+                fd = None
+            except (OSError, ValueError, IndexError):
+                # Processes may disappear or be inaccessible during discovery.
+                continue
+            finally:
+                if fd is not None:
+                    os.close(fd)
 
     def dead(self, pid: int) -> bool:
         return bool(select.select([self.handles[pid]], [], [], 0)[0])
@@ -315,6 +341,24 @@ def test_watchdog_finishes_own_group_cleanup_even_when_backend_exits_first(famil
     pid = instance.ready()
     descendants = set(instance.handles) - {pid}
     assert descendants, "synthetic daemon did not create its stubborn child"
+    instance.parent.kill()
+    instance.parent.wait(timeout=5)
+    assert _eventually(lambda: all(instance.dead(child) for child in instance.handles))
+    assert instance.unlocked()
+
+
+def test_descendant_discovery_without_optional_proc_children(family, monkeypatch):
+    original = Path.read_text
+
+    def no_checkpoint_children(path, *args, **kwargs):
+        if path.name == 'children':
+            raise FileNotFoundError('CONFIG_CHECKPOINT_RESTORE is unavailable')
+        return original(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, 'read_text', no_checkpoint_children)
+    instance = family()
+    instance.ready()
+    assert len(instance.handles) >= 2, 'owned watchdog must be tracked without optional children file'
     instance.parent.kill()
     instance.parent.wait(timeout=5)
     assert _eventually(lambda: all(instance.dead(child) for child in instance.handles))

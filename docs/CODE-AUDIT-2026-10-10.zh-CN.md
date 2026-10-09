@@ -77,6 +77,10 @@ PR #3 合并后，GitHub 异步代码审查补报三处行为缺口，由 `Recor
 
 补修验收包含真实压缩音频的客户端到服务器调用链、任意标签分块及隔离父进程被强杀后的后台锁释放。
 
+类型检查另有基础代码的既有报错。CI 的 mypy 原本设置为报错不阻断，因此 CI job 成功不能解释为 mypy 无错误。
+本次修正新增 HTTP 传输和动态 EOS 辅助函数的类型注释；同环境与审核基线对比后，剩余旧报错由 `Recordian-99` 跟踪，未加忽略规则或降低检查标准。
+另修正 Qwen 模型质量相同的无依据注释。生命周期测试不再依赖可选内核 `children` 文件，按隔离进程组、会话与启动时间核对 PID，再使用 pidfd 记录和回收自有进程。
+
 ## 验证证据
 
 原始基线在独立目录尚未构建原生库时为 1290 passed、70 skipped。
@@ -90,8 +94,8 @@ Rust 离线测试 5 passed、严格 Clippy 和 Release ABI1 构建通过；原�
 全仓源码与测试 Ruff 检查、依赖锁一致性、差异格式检查通过，最终源码构建出 sdist 和包含 ABI1 原生库的 Linux wheel。
 GitHub CI 明确安装真实音频解码所需的 FFmpeg；初次远端运行暴露了缺失依赖，未通过跳过或替换真实解码测试规避。
 网络专项使用真实回环 socket/TLS 与假模型验证慢连接保护，输入法专项包含 24 个生产 C++ 类的隔离合成用例。
-复审补修最终全量：Rust 原生模式 **1613 passed、41 skipped、0 failed**（79.56 秒），Python 回退模式 **1613 passed、41 skipped、0 failed**（80.41 秒）。
-补修定向 provider/pipeline/server 159 passed，后台生命周期 45 passed，额外独立复审 10 passed；重新构建的原生 wheel 确认包含最终 helper 与 provider 源码。
+复审补修及可移植测试收尾后的最终全量：Rust 原生模式 **1614 passed、41 skipped、0 failed**（76.21 秒），Python 回退模式 **1614 passed、41 skipped、0 failed**（76.53 秒）。
+补修定向 provider/pipeline/server 159 passed，后台生命周期初轮 45 passed，额外独立复审 10 passed；可移植性及类型注释收尾定向 251 passed；重新构建的原生 wheel 确认包含最终 helper 与 provider 源码。
 审核交付的是代码；常驻桌面、输入法和识别服务未在本次审核中重启，因此不能把合并代码等同于全部运行进程已加载修复。
 实际自然麦克风长时间使用与日常应用观察仍由 `Recordian-90` 跟踪；有限测试不证明无限时长或所有应用行为。
 
