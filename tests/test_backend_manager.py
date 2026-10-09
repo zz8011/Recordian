@@ -1,6 +1,7 @@
 """测试 BackendManager 的进程管理和异常处理"""
 from __future__ import annotations
 
+import os
 import queue
 import signal
 import subprocess
@@ -14,6 +15,78 @@ from recordian.backend_manager import (
     _terminate_backend_process,
     parse_backend_event_line,
 )
+
+
+@pytest.fixture(autouse=True)
+def isolated_lifelines():
+    """Mocked Popen/threads must not leave real pipe endpoints open."""
+    with patch("recordian.backend_manager._BACKEND_LIFELINES", {}) as lifelines:
+        yield
+        for endpoint in lifelines.values():
+            endpoint.close()
+
+
+def test_old_wait_cannot_close_reused_fd_of_new_backend():
+    from recordian.backend_lifecycle import ParentEndpoint
+    from recordian.backend_manager import _BACKEND_LIFELINES, _release_backend_lifeline
+
+    old_proc, new_proc = Mock(), Mock()
+    old_fd = os.open(os.devnull, os.O_WRONLY)
+    old_endpoint = ParentEndpoint(old_fd)
+    _BACKEND_LIFELINES[old_proc] = old_endpoint
+    _release_backend_lifeline(old_proc)
+    new_fd = os.open(os.devnull, os.O_WRONLY)
+    assert new_fd == old_fd, "fixture must force descriptor number reuse"
+    _BACKEND_LIFELINES[new_proc] = ParentEndpoint(new_fd)
+    manager = BackendManager(Path("/tmp/test_config.json"), queue.Queue(), Mock(), Mock())
+    manager.proc = new_proc
+    manager._wait(old_proc)
+    old_endpoint.close()
+    os.fstat(new_fd)  # Neither the old wait nor repeated close may close this fd.
+    assert new_proc in _BACKEND_LIFELINES
+
+
+def test_spawn_failure_closes_both_pipe_ends():
+    from recordian.backend_lifecycle import spawn_backend
+
+    pipe = os.pipe
+    fds = []
+
+    def capture_pipe():
+        pair = pipe()
+        fds.extend(pair)
+        return pair
+
+    with (
+        patch("recordian.backend_lifecycle.os.pipe", side_effect=capture_pipe),
+        patch("recordian.backend_lifecycle.subprocess.Popen", side_effect=OSError("spawn failed")),
+        pytest.raises(OSError, match="spawn failed"),
+    ):
+        spawn_backend(["unused"])
+    assert len(fds) == 2
+    for fd in fds:
+        with pytest.raises(OSError):
+            os.fstat(fd)
+
+
+def test_exit_cleanup_closes_lifeline_even_when_termination_raises():
+    from recordian.backend_lifecycle import ParentEndpoint
+    from recordian.backend_manager import _BACKEND_LIFELINES, _cleanup_backend_processes
+
+    proc = Mock()
+    proc.poll.return_value = None
+    fd = os.open(os.devnull, os.O_WRONLY)
+    _BACKEND_LIFELINES[proc] = ParentEndpoint(fd)
+    with (
+        patch("recordian.backend_manager._ACTIVE_BACKEND_PROCESSES", [proc]) as processes,
+        patch("recordian.backend_manager._terminate_backend_process", side_effect=RuntimeError("stop failed")),
+        pytest.raises(RuntimeError, match="stop failed"),
+    ):
+        _cleanup_backend_processes()
+    assert processes == []
+    assert proc not in _BACKEND_LIFELINES
+    with pytest.raises(OSError):
+        os.fstat(fd)
 
 
 class TestParseBackendEventLine:
@@ -601,6 +674,24 @@ class TestBackendManagerCleanup:
             ((4321, signal.SIGKILL),),
         ]
         assert mock_proc.wait.call_count == 2
+
+    @patch("recordian.backend_manager.os.killpg")
+    @patch("recordian.backend_manager.os.getpgid", return_value=9876)
+    def test_terminate_does_not_signal_a_different_process_group(self, getpgid, killpg):
+        proc = Mock(pid=4321)
+        proc.poll.return_value = None
+        _terminate_backend_process(proc)
+        killpg.assert_not_called()
+        proc.terminate.assert_called_once()
+
+    @patch("recordian.backend_manager.os.killpg")
+    @patch("recordian.backend_manager.os.getpgid", return_value=4321)
+    def test_terminate_does_not_signal_a_child_reaped_during_group_lookup(self, getpgid, killpg):
+        proc = Mock(pid=4321)
+        proc.poll.side_effect = [None, 0]
+        _terminate_backend_process(proc)
+        killpg.assert_not_called()
+        proc.terminate.assert_not_called()
 
 
 

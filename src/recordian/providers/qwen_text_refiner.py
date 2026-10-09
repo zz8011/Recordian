@@ -12,7 +12,7 @@ class Qwen3TextRefiner(BaseTextRefiner):
     """Qwen3 文本精炼器：去重、去语气词、标点修复、总结。
 
     使用 transformers 后端加载 Qwen3 Instruct 模型。
-    默认使用 0.6B 模型以获得更快的响应速度（质量与 1.7B 相同）。
+    默认使用 0.6B 模型；可通过 model_name 指定其他模型。
     默认禁用 thinking 模式。
     """
 
@@ -40,9 +40,10 @@ class Qwen3TextRefiner(BaseTextRefiner):
         self._model: Any | None = None
         self._tokenizer: Any | None = None
 
-    def _eos_token_id(self) -> int | list[int] | None:
+    def _eos_token_id(self) -> Any:
         # Preserve the model's extra termination tokens rather than overriding
-        # them with the tokenizer's single EOS. Use the same IDs for validation.
+        # them with the tokenizer's single EOS. Configuration is dynamically typed;
+        # use these same IDs for validation rather than claiming a narrowed type.
         config = getattr(self._model, "generation_config", None)
         eos = getattr(config, "eos_token_id", None)
         if eos is None:

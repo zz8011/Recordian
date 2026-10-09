@@ -11,8 +11,19 @@ import threading
 from collections.abc import Callable
 from pathlib import Path
 
+from recordian.backend_lifecycle import ParentEndpoint, spawn_backend
+
 # 全局进程注册表
 _ACTIVE_BACKEND_PROCESSES: list[subprocess.Popen[str]] = []
+_BACKEND_LIFELINES: dict[subprocess.Popen[str], ParentEndpoint] = {}
+_LIFELINES_LOCK = threading.Lock()
+
+
+def _release_backend_lifeline(proc: subprocess.Popen[str]) -> None:
+    with _LIFELINES_LOCK:
+        endpoint = _BACKEND_LIFELINES.pop(proc, None)
+    if endpoint is not None:
+        endpoint.close()
 
 
 def _terminate_backend_process(proc: subprocess.Popen[str], *, timeout_s: float = 2.0) -> None:
@@ -25,15 +36,22 @@ def _terminate_backend_process(proc: subprocess.Popen[str], *, timeout_s: float 
     except (ProcessLookupError, OSError):
         pgid = None
 
+    # Every backend is launched as a session/group leader. A different group
+    # can belong to a reused PID; never send a group signal to it.
+    if proc.poll() is not None:
+        return
+
     try:
-        if isinstance(pgid, int) and pgid > 0:
+        if isinstance(pgid, int) and pgid > 0 and pgid == proc.pid:
             os.killpg(pgid, signal.SIGTERM)
         else:
             proc.terminate()
         proc.wait(timeout=timeout_s)
     except (ProcessLookupError, subprocess.TimeoutExpired):
+        if proc.poll() is not None:
+            return
         try:
-            if isinstance(pgid, int) and pgid > 0:
+            if isinstance(pgid, int) and pgid > 0 and pgid == proc.pid:
                 os.killpg(pgid, signal.SIGKILL)
             else:
                 proc.kill()
@@ -45,9 +63,12 @@ def _terminate_backend_process(proc: subprocess.Popen[str], *, timeout_s: float 
 def _cleanup_backend_processes() -> None:
     """清理所有后端进程"""
     for proc in _ACTIVE_BACKEND_PROCESSES[:]:
-        if proc.poll() is None:
-            _terminate_backend_process(proc)
-        _ACTIVE_BACKEND_PROCESSES.remove(proc)
+        try:
+            if proc.poll() is None:
+                _terminate_backend_process(proc)
+        finally:
+            _release_backend_lifeline(proc)
+            _ACTIVE_BACKEND_PROCESSES.remove(proc)
 
 
 # 注册清理函数
@@ -107,14 +128,9 @@ class BackendManager:
         # abandoned; recorder argv has no config identity. Only manage children
         # launched here and retained as Popen objects in our process registry.
         cmd = self._cmd()
-        self.proc = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            bufsize=1,
-            start_new_session=True,
-        )
+        self.proc, endpoint = spawn_backend(cmd)
+        with _LIFELINES_LOCK:
+            _BACKEND_LIFELINES[self.proc] = endpoint
         _ACTIVE_BACKEND_PROCESSES.append(self.proc)
         self._on_state_change(True, "starting", "Starting backend...")
         self._on_menu_update()
@@ -133,8 +149,11 @@ class BackendManager:
         if proc is None:
             return
         self._intentional_stop = True
-        if proc.poll() is None:
-            _terminate_backend_process(proc)
+        try:
+            if proc.poll() is None:
+                _terminate_backend_process(proc)
+        finally:
+            _release_backend_lifeline(proc)
         # 从注册表移除
         if proc in _ACTIVE_BACKEND_PROCESSES:
             _ACTIVE_BACKEND_PROCESSES.remove(proc)
@@ -176,7 +195,10 @@ class BackendManager:
         target = proc if proc is not None else self.proc
         if target is None:
             return
-        code = target.wait()
+        try:
+            code = target.wait()
+        finally:
+            _release_backend_lifeline(target)
         # 「主动停止」有两种：用户点了停止后端，或我们自己 restart（此时 self.proc
         # 已经换成新进程）。只有进程自己退出且没被替换，才算非预期退出。
         intentional = self._intentional_stop or target is not self.proc

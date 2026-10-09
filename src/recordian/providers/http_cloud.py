@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import base64
+import io
 import json
 import logging
 import subprocess
 import time
+import wave
 from collections.abc import Callable
 from pathlib import Path
 from shutil import which
@@ -626,12 +628,21 @@ class HttpCloudProvider(ASRProvider):
                 "-ar",
                 "16000",
                 "-f",
-                "wav",
+                "s16le",
                 "pipe:1",
             ]
-            proc = subprocess.run(cmd, capture_output=True, check=False)
+            proc = subprocess.run(cmd, capture_output=True, check=False, timeout=self.timeout_s)
             if proc.returncode == 0 and proc.stdout:
-                return proc.stdout, f"{audio_path.stem}.wav", "audio/wav"
+                # A WAV sent to a non-seekable pipe uses unknown chunk lengths.
+                # Build a finite header over our decoded PCM, so strict server
+                # duration/truncation checks can validate it without exceptions.
+                output = io.BytesIO()
+                with wave.open(output, "wb") as wav:
+                    wav.setnchannels(1)
+                    wav.setsampwidth(2)
+                    wav.setframerate(16000)
+                    wav.writeframes(proc.stdout)
+                return output.getvalue(), f"{audio_path.stem}.wav", "audio/wav"
 
         mime_map = {
             ".ogg": "audio/ogg",
@@ -702,7 +713,8 @@ class HttpCloudProvider(ASRProvider):
         buffered = ""
         asr_tag = "<asr_text>"
         end_tag = "</asr_text>"
-        ended = False
+        tagged = False
+        tag_depth = 0
         complete = False
 
         for raw_line in response.iter_lines(decode_unicode=False):
@@ -729,31 +741,28 @@ class HttpCloudProvider(ASRProvider):
             chunk = str(delta.get("content", ""))
             if not chunk:
                 continue
-            if ended:
-                continue
             buffered += chunk
-            if not started:
-                idx = buffered.find(asr_tag)
-                if idx != -1:
-                    started = True
-                    buffered = buffered[idx + len(asr_tag):]
+            while buffered:
+                markers = [(buffered.find(tag), tag) for tag in (asr_tag, end_tag) if tag in buffered]
+                if markers:
+                    index, tag = min(markers)
+                    if tag_depth and index:
+                        yield buffered[:index]
+                    if tag == asr_tag:
+                        tagged = True
+                        tag_depth += 1
+                    elif tag_depth:
+                        tag_depth -= 1
+                    else:
+                        raise RuntimeError("流式 ASR 响应包含不匹配的关闭标签")
+                    buffered = buffered[index + len(tag):]
+                    continue
                 # Keep a possible language header pending until its ASR tag
                 # or confirmed completion; the word alone does not reject text.
-                elif len(buffered) > 64 and not buffered.lstrip().startswith("language "):
+                if not tagged and len(buffered) > 64 and not buffered.lstrip().startswith("language "):
                     started = True
-            if not started:
-                continue
-            while True:
-                end_idx = buffered.find(end_tag)
-                if end_idx == -1:
+                if not tagged and not started:
                     break
-                current = buffered[:end_idx]
-                if current:
-                    yield current
-                buffered = buffered[end_idx + len(end_tag):]
-                started = False
-                ended = True
-            if started and buffered:
                 # Markers may straddle any token/SSE boundary. Retain their
                 # possible prefixes, including an incomplete opening marker.
                 keep = max(
@@ -761,19 +770,23 @@ class HttpCloudProvider(ASRProvider):
                     default=0,
                 )
                 safe = buffered[:-keep] if keep else buffered
-                if safe:
+                if safe and (tag_depth or not tagged):
                     yield safe
                 buffered = buffered[-keep:] if keep else ""
+                break
         if not complete:
             raise RuntimeError("流式 ASR 响应缺少正常完成标记")
-        if not ended and buffered:
+        if tag_depth:
+            raise RuntimeError("流式 ASR 响应包含未闭合的正文标签")
+        if buffered:
             # A short plain transcript is valid, but an unfinished Qwen ASR
             # header/opening marker must never become transcript text.
             if any(
-                buffered.endswith(asr_tag[:size]) for size in range(2, len(asr_tag))
+                buffered.endswith(tag[:size]) for tag in (asr_tag, end_tag) for size in range(2, len(tag))
             ):
                 raise RuntimeError("流式 ASR 响应包含未完成的协议前缀")
-            yield buffered
+            if not tagged:
+                yield buffered
 
     @property
     def provider_name(self) -> str:
@@ -794,7 +807,6 @@ class HttpCloudProvider(ASRProvider):
                 "requests library is required for HttpCloudProvider. Install with: pip install requests"
             ) from exc
 
-        audio_data = wav_path.read_bytes()
         headers = self._build_headers(accept="application/json")
 
         if self._is_openai_transcription_endpoint():
@@ -813,6 +825,7 @@ class HttpCloudProvider(ASRProvider):
                     timeout=self.timeout_s,
                 )
         else:
+            audio_data, _, _ = self._prepare_openai_audio_file(wav_path)
             normalized_hotwords = ASRContextComposer(self.context).normalize_hotwords(hotwords)
             payload: dict[str, object] = {
                 "audio_base64": base64.b64encode(audio_data).decode("utf-8"),

@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
+import base64
+import io
 import json
 import queue
+import subprocess
 import sys
 import threading
 import time
+import wave
 from contextlib import nullcontext
+from shutil import which
 from types import ModuleType, SimpleNamespace
 
 import pytest
@@ -516,6 +521,195 @@ def test_http_asr_never_flushes_incomplete_protocol_prefix(monkeypatch, tmp_path
         asr_stream(monkeypatch, tmp_path, list(text), emitted=emitted)
     assert "<asr_te" not in "".join(emitted)
     assert "language " not in "".join(emitted)
+
+
+@pytest.mark.parametrize("text", [
+    "<asr_text>正文",
+    "<asr_text>正文</asr_te",
+    "<asr_text>第一段</asr_text><asr_text>最后一段",
+    "<asr_text>第一段</asr_text><asr_text>最后一段</asr_te",
+])
+def test_http_asr_rejects_unclosed_tagged_result_at_every_split(monkeypatch, tmp_path, text):
+    for chunks in partitions(text):
+        with pytest.raises(RuntimeError):
+            asr_stream(monkeypatch, tmp_path, chunks)
+
+
+def test_http_asr_accepts_multiple_closed_tags_at_every_split(monkeypatch, tmp_path):
+    text = "language Chinese<asr_text>第一段</asr_text><asr_text>第二段</asr_text>"
+    for chunks in partitions(text):
+        assert asr_stream(monkeypatch, tmp_path, chunks) == "第一段第二段"
+
+
+def test_http_asr_unclosed_tag_cancels_bound_pipeline_session_without_replay(monkeypatch, tmp_path):
+    from recordian.postprocess_pipeline import _run_asr_streaming_commit
+
+    path = tmp_path / "mock.wav"
+    path.write_bytes(b"mock audio")
+    provider = HttpCloudProvider("http://example.invalid/v1/audio/transcriptions")
+    monkeypatch.setattr("requests.get", lambda *a, **kw: Response(body={"data": [{"id": "mock"}]}))
+    monkeypatch.setattr("requests.post", lambda *a, **kw: Response(events=openai_events(list("<asr_text>正文"))))
+
+    def no_replay(*args, **kwargs):
+        pytest.fail("failed bound stream must not retry or use a fallback commit")
+
+    monkeypatch.setattr(provider, "transcribe_file", no_replay)
+    operations = []
+    token = "synthetic-bound-session"
+
+    class Session:
+        def update_preedit(self, text):
+            operations.append((token, "preedit", text))
+            return SimpleNamespace(committed=True)
+
+        def cancel(self):
+            operations.append((token, "cancel", ""))
+
+        commit = staticmethod(no_replay)
+
+    class Committer:
+        def begin_composition(self, text):
+            operations.append((token, "begin", text))
+            return Session()
+
+        commit = staticmethod(no_replay)
+
+    events = []
+    context = SimpleNamespace(
+        provider=provider, audio_path=path, committer=Committer(),
+        args=SimpleNamespace(enable_hotword_correction=False),
+        normalize_final_text=lambda text: text, on_state=events.append,
+    )
+    text, _, info = _run_asr_streaming_commit(context=context, effective_hotwords=[], auto_hard_enter=False)
+    assert text == "正文"  # Retain the preview for diagnostics, never commit it.
+    assert info["committed"] is False and info["outcome"] == "cancelled"
+    assert operations[0] == (token, "begin", "")
+    assert operations[-1] == (token, "cancel", "")
+    assert any(operation == (token, "preedit", "正文") for operation in operations)
+
+
+@pytest.fixture
+def legacy_asr_route(monkeypatch):
+    """Real Flask route, guards and WAV decoder; only GPU inference is replaced."""
+    import requests
+
+    from server import asr_server
+
+    uploads = []
+    calls = []
+    token = "synthetic-provider-audit-token"
+
+    class Model:
+        max_new_tokens = 64
+
+        def transcribe(self, **kwargs):
+            with wave.open(kwargs["audio"], "rb") as wav:
+                assert (wav.getnchannels(), wav.getsampwidth(), wav.getframerate()) == (1, 2, 16000)
+                frames = wav.getnframes()
+                assert 0 < frames <= 16000 * 120
+                assert len(wav.readframes(frames + 1)) == frames * 2
+            calls.append(kwargs)
+            return [SimpleNamespace(text="默认 OGG 识别成功")]
+
+    monkeypatch.setattr(asr_server, "asr_model", Model())
+    monkeypatch.setattr(asr_server, "model_name", "audit-fake-model")
+    monkeypatch.setattr(asr_server, "auth_token", token)
+    client = asr_server.app.test_client()
+
+    def post(url, *, json, headers, timeout):
+        assert url == "http://localhost/transcribe"
+        uploads.append(base64.b64decode(json["audio_base64"], validate=True))
+        reply = client.post("/transcribe", json=json, headers=headers)
+        response = requests.Response()
+        response.status_code = reply.status_code
+        response._content = reply.get_data()
+        response.url = url
+        return response
+
+    monkeypatch.setattr(requests, "post", post)
+    provider = HttpCloudProvider("http://localhost/transcribe", api_key=token)
+    return provider, uploads, calls
+
+
+def write_real_ogg(tmp_path, *, seconds=0.12):
+    ffmpeg = which("ffmpeg")
+    if ffmpeg is None:
+        pytest.skip("real ffmpeg is required for OGG integration")
+    path = tmp_path / "recording.ogg"
+    subprocess.run(
+        [ffmpeg, "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i",
+         f"sine=frequency=440:sample_rate=48000:duration={seconds}",
+         "-ac", "2", "-c:a", "libopus", str(path)],
+        check=True, capture_output=True, timeout=10,
+    )
+    assert path.read_bytes().startswith(b"OggS")
+    return path
+
+
+def test_legacy_default_ogg_roundtrip_real_ffmpeg_flask(tmp_path, legacy_asr_route):
+    from recordian.arg_parser import build_parser
+
+    assert build_parser().parse_args([]).record_format == "ogg"
+    path = write_real_ogg(tmp_path)
+    provider, uploads, calls = legacy_asr_route
+    result = provider.transcribe_file(path, hotwords=["Recordian"])
+    assert result.text == "默认 OGG 识别成功"
+    assert uploads[0].startswith(b"RIFF") and uploads[0][8:12] == b"WAVE"
+    assert len(calls) == 1
+
+
+def test_audio_conversion_returns_finite_wav_header_real_ffmpeg(tmp_path):
+    from recordian.audio_budget import validate_wav
+
+    path = write_real_ogg(tmp_path)
+    provider = HttpCloudProvider("http://localhost/transcribe")
+    data, name, mime = provider._prepare_openai_audio_file(path)
+    validate_wav(data)
+    assert name == "recording.wav" and mime == "audio/wav"
+    with wave.open(io.BytesIO(data), "rb") as wav:
+        assert wav.getnframes() == 1920
+
+
+def test_legacy_converted_oversize_ogg_still_rejected_before_model(tmp_path, legacy_asr_route):
+    import requests
+
+    path = write_real_ogg(tmp_path, seconds=121)
+    provider, uploads, calls = legacy_asr_route
+    with pytest.raises(requests.HTTPError, match="400"):
+        provider.transcribe_file(path, hotwords=[])
+    with wave.open(io.BytesIO(uploads[0]), "rb") as wav:
+        assert wav.getnframes() > 16000 * 120
+    assert calls == []
+
+
+def test_legacy_malformed_audio_still_rejected_before_model(tmp_path, legacy_asr_route):
+    import requests
+
+    path = tmp_path / "malformed.ogg"
+    path.write_bytes(b"not an audio container")
+    provider, _uploads, calls = legacy_asr_route
+    with pytest.raises(requests.HTTPError, match="400"):
+        provider.transcribe_file(path, hotwords=[])
+    assert calls == []
+
+
+def test_audio_conversion_has_deadline_before_upload(monkeypatch, tmp_path):
+    path = tmp_path / "recording.ogg"
+    path.write_bytes(b"OggS synthetic input")
+    provider = HttpCloudProvider("http://localhost/transcribe", timeout_s=0.05)
+    monkeypatch.setattr("recordian.providers.http_cloud.which", lambda name: "/synthetic/ffmpeg")
+
+    def stalled_conversion(cmd, **kwargs):
+        assert kwargs.get("timeout") == 0.05
+        raise subprocess.TimeoutExpired(cmd, kwargs["timeout"])
+
+    def no_upload(*args, **kwargs):
+        pytest.fail("conversion failure must not upload an incomplete audio result")
+
+    monkeypatch.setattr("recordian.providers.http_cloud.subprocess.run", stalled_conversion)
+    monkeypatch.setattr("requests.post", no_upload)
+    with pytest.raises(subprocess.TimeoutExpired):
+        provider.transcribe_file(path, hotwords=[])
 
 
 @pytest.mark.parametrize("value", ["16000.0", "1.6e4"])

@@ -54,6 +54,8 @@ recordian-remote-paste-agent --host <服务端绑定地址> \
 - Confucius OpenAI bridge 最多接受 30 秒音频；过大请求返回 413、无效或超预算音频返回 400。
 - 未鉴权的回环 HTTP 服务拒绝外部网页 Origin 和非回环 Host，避免浏览器跨站请求和 DNS 重绑定。
 
+旧 `/transcribe` 客户端把支持的压缩录音转换为 PCM WAV，并写入可验证的有限长度头；服务器仍拒绝畸形或超预算 WAV。
+
 这里的文件上传与单个模型会话预算不等于桌面连续录音总时长。
 Confucius 连续听写会分段建立模型会话，仍可持续录音；25 秒保护用于不支持连续分段的回退路径。
 
