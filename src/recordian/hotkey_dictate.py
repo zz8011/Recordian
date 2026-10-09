@@ -93,6 +93,10 @@ def main() -> None:
 
     logger = logging.getLogger(__name__)
 
+    from recordian.native_core import load_library
+
+    load_library()
+
     try:
         from recordian.logging_config import setup_logging
 

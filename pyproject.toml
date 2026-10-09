@@ -39,7 +39,7 @@ package-dir = {"" = "src"}
 where = ["src"]
 
 [tool.setuptools.package-data]
-recordian = ["agent_panel.html", "native_settings.css", "ui_assets/*.png", "ui_assets/*.svg"]
+recordian = ["agent_panel.html", "native_settings.css", "ui_assets/*.png", "ui_assets/*.svg", "_native/librecordian_core.so", "_native/librecordian_core.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

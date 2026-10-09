@@ -4,6 +4,20 @@
 
 只有打上 `v*` 标签的版本才会通过 `release.yml` 发布到 PyPI。目前仅 `v0.1.0` 有标签，`0.1.1` 与 `0.1.2` 是 `pyproject.toml` 中的开发版本号，尚未发布。
 
+## [Unreleased]
+
+### 新增
+
+- Rust ABI1 运行时的离线 release 构建与原子安装脚本，附库 SHA256、编译器信息及相对路径的 Rust 源码哈希元数据。
+- `RECORDIAN_BUILD_NATIVE=1` 可选打包构建；包含 `.so` 的 wheel 使用 Linux 平台标签，sdist 包含 Rust 源码与构建脚本并排除原型和编译产物。
+- 原生 CI 覆盖 Cargo test/Clippy、构建失败与 ABI 拒绝行为、分发产物检查及 required-native Python 回归；新增中文构建、部署和回滚指南。
+
+### 说明
+
+- 默认自动选择可用原生库，缺库时使用 Python；部署使用 `RECORDIAN_NATIVE_CORE=required`，回滚显式选择 `python`。不在音频回调中构建。
+- Rust 范围是量化、RMS、PCM 有界 FIFO 与持久 GIO 调用；Python UI、Agent、纠词及 C++/CUDA 模型保留，推理调度保留 160 ms，拒绝未通过延迟门槛的 320 ms 候选。
+- 2026-10-09 的生产调用点 CPU 转换/RMS 微基准与 Python / required-native 全回归结果见 Rust 指南；合并前真实模型候选、GPU、输入窗口与自然麦克风验收尚待完成。
+
 ## [0.1.2] - 2026-10-07 · 未发布
 
 ### 新增
@@ -57,9 +71,9 @@
 - 每次录音时自动检查配置变化并热更新。
 - 智能规则检测，自动生成 Few-shot prompt。
 
+[Unreleased]: https://github.com/zz8011/Recordian/compare/v0.1.0...HEAD
 [0.1.2]: https://github.com/zz8011/Recordian/compare/v0.1.0...HEAD
 [0.1.1]: https://github.com/zz8011/Recordian/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/zz8011/Recordian/releases/tag/v0.1.0
 
 <!-- 0.1.1 与 0.1.2 尚无 tag，两条链接暂时指向同一范围；打 tag 后应改为逐版本对比。 -->
-

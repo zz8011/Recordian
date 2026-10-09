@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from shutil import which
 from typing import cast
 
+from . import native_bus
 from .exceptions import CommitError
 
 logger = logging.getLogger(__name__)
@@ -84,7 +85,8 @@ _FCITX_CALL_TIMEOUT_S = 2.0
 # stderr that still contained the name). Safety decisions below NEVER rely
 # on guessing English prose — only on this token or on fail-closed defaults.
 _DBUS_ERROR_NAME_RE = re.compile(
-    r"org\.fcitx\.Fcitx\.Recordian\.Error\.([A-Za-z0-9_]+)"
+    r"(?<![A-Za-z0-9_.])org\.fcitx\.Fcitx\.Recordian\.Error\."
+    r"([A-Za-z0-9_]+)(?![A-Za-z0-9_.])"
 )
 
 
@@ -98,8 +100,31 @@ def _parse_dbus_error_name(message: str) -> str:
     return match.group(1) if match else ""
 
 
+def _dbus_exception_error_name(error: Exception) -> str:
+    """Prefer the structured error name; only legacy errors use message text.
+
+    A present but empty, foreign or invalid structured field is unknown. It
+    must never inherit a safety classification from words in the message.
+    """
+    if hasattr(error, "dbus_error_name"):
+        name = error.dbus_error_name
+        prefix = "org.fcitx.Fcitx.Recordian.Error."
+        if isinstance(name, str) and name.startswith(prefix):
+            short = name[len(prefix):]
+            if re.fullmatch(r"[A-Za-z0-9_]+", short):
+                return short
+        return ""
+    return _parse_dbus_error_name(str(error))
+
+
 def _fcitx_channel_available() -> bool:
     """Return True when the Recordian fcitx addon is answering on the session bus."""
+    transport = native_bus.get_transport()
+    if transport is not None:
+        try:
+            return transport.call("Ping", "", [], timeout_ms=400) == "ok"
+        except (CommitError, OSError):
+            return False
     if not which("busctl"):
         return False
     try:
@@ -160,6 +185,11 @@ def _parse_busctl_string(output: str) -> str:
 
 def _fcitx_busctl_call(method: str, signature: str, args: Sequence[str]) -> str:
     """Call a method on the Recordian fcitx addon and return its stdout string."""
+    transport = native_bus.get_transport()
+    if transport is not None:
+        return transport.call(
+            method, signature, args, timeout_ms=int(_FCITX_CALL_TIMEOUT_S * 1000)
+        )
     if not which("busctl"):
         raise CommitError("busctl not found")
     cmd = ["busctl", "--user", "call", _FCITX_SERVICE, _FCITX_PATH, _FCITX_INTERFACE, method]
@@ -245,7 +275,7 @@ class FcitxStreamingSession:
             # of the bound context is unknown — the session is invalidated
             # and no later commit / fallback may write anywhere.
             message = str(exc)
-            reason = _parse_dbus_error_name(message) or "session_invalidated"
+            reason = _dbus_exception_error_name(exc) or "session_invalidated"
             with self._lock:
                 self._closed = True
             self._mark_stale(reason)
@@ -315,7 +345,7 @@ class FcitxStreamingSession:
             )
         except (CommitError, OSError) as exc:
             message = str(exc)
-            error_name = _parse_dbus_error_name(message)
+            error_name = _dbus_exception_error_name(exc)
             if error_name == "SegmentsUnsafe":
                 # The addon rejected this segment BEFORE commitString and
                 # retained the token. Keep the shown preedit and finish in
@@ -327,7 +357,7 @@ class FcitxStreamingSession:
                     backend="fcitx", committed=False,
                     detail="segments_unsafe_buffered", outcome="buffered",
                 )
-            stale = error_name == "StaleSession" or "StaleSession" in message
+            stale = error_name == "StaleSession"
             with self._lock:
                 self._closed = True
             if stale:
@@ -390,12 +420,12 @@ class FcitxStreamingSession:
             detail = _fcitx_busctl_call("CommitSession", "ss", [self.token, str(text)])
         except (CommitError, OSError) as exc:
             message = str(exc)
-            # Structured classification: the addon embeds its DBus error
-            # name in the message text (see _parse_dbus_error_name). Without
+            # Native structured names are authoritative. Legacy busctl uses
+            # the exact addon name embedded in its message. Without
             # a recognizable name the outcome stays "uncertain" — the reply
             # may have been lost after the write was applied — which
             # suppresses every fallback just like "stale".
-            stale = _parse_dbus_error_name(message) == "StaleSession" or "StaleSession" in message
+            stale = _dbus_exception_error_name(exc) == "StaleSession"
             self._mark_stale("session_invalidated" if stale else "commit_failed")
             if not stale:
                 # Uncertain transport failure: the addon-side session may
@@ -506,7 +536,7 @@ class FcitxCommitter(TextCommitter):
             descriptor = _fcitx_busctl_call("BeginSession", "s", [str(initial_preview)])
         except CommitError as exc:
             raise CompositionRefusedError(
-                f"fcitx BeginSession refused: {exc}", reason=_parse_dbus_error_name(str(exc))
+                f"fcitx BeginSession refused: {exc}", reason=_dbus_exception_error_name(exc)
             ) from exc
         parts = descriptor.split()
         if not parts:
@@ -528,7 +558,7 @@ class FcitxCommitter(TextCommitter):
     def commit(self, text: str) -> CommitResult:
         if text == "":
             return CommitResult(backend=self.backend_name, committed=True, detail="empty")
-        if not which("busctl"):
+        if native_bus.get_transport() is None and not which("busctl"):
             raise CommitError("busctl not found")
         if isinstance(self.target_window_id, int) and which("xdotool") and not (self.streaming and self._focused_once):
             # Focus once. Repeating it on every partial makes the caret stutter.

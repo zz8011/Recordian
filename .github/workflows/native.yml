@@ -1,0 +1,160 @@
+name: Rust native runtime
+
+on:
+  push:
+    branches: [main, master, develop]
+  pull_request:
+    branches: [main, master, develop]
+  workflow_dispatch:
+    inputs:
+      rust-gui:
+        description: Run isolated Rust GTK/Fcitx acceptance with Xvfb
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  native:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.10', '3.12']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - name: Install system GIO and isolated D-Bus fixture dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libglib2.0-dev pkg-config dbus python3-gi gir1.2-glib-2.0
+      - name: Install Python regression and packaging dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e '.[dev]' build wheel
+      - name: Install optional private GTK/Fcitx acceptance dependencies
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.rust-gui }}
+        run: |
+          sudo apt-get install -y build-essential cmake xvfb xdotool gir1.2-gtk-3.0 fcitx5 fcitx5-frontend-gtk3 libfcitx5core-dev libfcitx5utils-dev
+      - name: Rust tests and strict Clippy (offline, no Rust dependencies)
+        run: |
+          cargo test --manifest-path native/recordian-core/Cargo.toml --offline --locked
+          cargo clippy --manifest-path native/recordian-core/Cargo.toml --offline --locked --all-targets -- -D warnings
+      - name: Build and validate release ABI1 library
+        run: python scripts/build_native_core.py
+      - name: Build-helper failure preserves the installed library
+        run: |
+          python - <<'PY'
+          import hashlib
+          import json
+          from pathlib import Path
+          import runpy
+          import subprocess
+          import tempfile
+          from unittest.mock import patch
+
+          helper = runpy.run_path('scripts/build_native_core.py')
+          installed = Path('src/recordian/_native/librecordian_core.so')
+          metadata = installed.with_suffix('.json')
+          before = (installed.read_bytes(), metadata.read_bytes())
+          record = json.loads(before[1])
+          assert record['abi_version'] == 1
+          assert record['sha256'] == hashlib.sha256(before[0]).hexdigest()
+          for name, digest in record['source_sha256'].items():
+              assert not Path(name).is_absolute()
+              assert hashlib.sha256(Path(name).read_bytes()).hexdigest() == digest
+          with patch('subprocess.run', side_effect=subprocess.CalledProcessError(42, ['cargo'])):
+              try:
+                  helper['build']()
+              except subprocess.CalledProcessError:
+                  pass
+              else:
+                  raise AssertionError('failed build unexpectedly succeeded')
+          with tempfile.TemporaryDirectory() as directory:
+              path = Path(directory)
+              (path / 'bad.c').write_text('unsigned recordian_core_abi_version(void) { return 2; }')
+              subprocess.run(['cc', '-shared', '-fPIC', str(path / 'bad.c'), '-o', str(path / 'bad.so')], check=True)
+              try:
+                  helper['validate_library'](path / 'bad.so')
+              except RuntimeError:
+                  pass
+              else:
+                  raise AssertionError('ABI2 library accepted as ABI1')
+              # Force the install path to probe a wrong ABI after a real build.
+              probe = helper['validate_library']
+              with patch.dict(helper['build'].__globals__, validate_library=lambda _: probe(path / 'bad.so')):
+                  try:
+                      helper['build']()
+                  except RuntimeError:
+                      pass
+                  else:
+                      raise AssertionError('wrong ABI replaced the installed library')
+          assert (installed.read_bytes(), metadata.read_bytes()) == before
+          PY
+      - name: Source-only sdist and native wheel rebuilt from sdist
+        run: |
+          python -m build --sdist --outdir dist
+          mkdir -p .scratch/sdist
+          tar -xzf dist/recordian-*.tar.gz -C .scratch/sdist
+          RECORDIAN_BUILD_NATIVE=1 python -m build --wheel --outdir "$PWD/dist/native" .scratch/sdist/recordian-*
+          python -m build --wheel --outdir "$PWD/dist/python" .scratch/sdist/recordian-*
+      - name: Validate archive contents and wheel tags
+        run: |
+          python - <<'PY'
+          import json
+          import hashlib
+          from pathlib import Path
+          import tarfile
+          import zipfile
+
+          with tarfile.open(next(Path('dist').glob('*.tar.gz'))) as archive:
+              names = [name.split('/', 1)[1] for name in archive.getnames() if '/' in name]
+              for expected in ['scripts/build_native_core.py', 'native/recordian-core/Cargo.toml',
+                               'native/recordian-core/Cargo.lock', 'native/recordian-core/src/lib.rs']:
+                  assert expected in names, expected
+              assert not any('/target/' in name or name.startswith('native-prototype/') or name.endswith('.so') for name in names)
+          for kind in ['native', 'python']:
+              wheel = next(Path('dist', kind).glob('*.whl'))
+              with zipfile.ZipFile(wheel) as archive:
+                  descriptor = archive.read(next(name for name in archive.namelist() if name.endswith('.dist-info/WHEEL'))).decode()
+                  binaries = [name for name in archive.namelist() if name.endswith('.so')]
+                  if kind == 'native':
+                      assert '-py3-none-linux_' in wheel.name, wheel.name
+                      assert 'Root-Is-Purelib: false' in descriptor
+                      binary = archive.read('recordian/_native/librecordian_core.so')
+                      record = json.loads(archive.read('recordian/_native/librecordian_core.json'))
+                      assert record['sha256'] == hashlib.sha256(binary).hexdigest()
+                      assert binaries == ['recordian/_native/librecordian_core.so']
+                  else:
+                      assert wheel.name.endswith('-py3-none-any.whl')
+                      assert 'Root-Is-Purelib: true' in descriptor and not binaries
+          PY
+      - name: Install native wheel and check installed runtime outside checkout
+        run: |
+          python -m pip install --force-reinstall --no-deps dist/native/*.whl
+          cd /tmp
+          RECORDIAN_NATIVE_CORE=required python -c "from recordian.native_core import status; s = status(); assert s['backend'] == 'rust' and s['abi'] == 1, s"
+          RECORDIAN_NATIVE_CORE=python python -c "from recordian.native_core import status; assert status()['backend'] == 'python'"
+          RECORDIAN_NATIVE_LIBRARY=/tmp/recordian-no-library.so python -c "from recordian.native_core import status; assert status()['backend'] == 'python'"
+      - name: Required-native focused regression (isolated bus, no desktop writes)
+        env:
+          RECORDIAN_NATIVE_CORE: required
+        run: |
+          python -m pytest tests/test_native_core.py tests/test_native_bus_transport.py tests/test_native_server_buffer.py -v
+      - name: Required-native full regression
+        env:
+          RECORDIAN_NATIVE_CORE: required
+        run: python -m pytest tests/ -v
+      - name: Optional isolated Rust GTK/Fcitx acceptance
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.rust-gui }}
+        env:
+          RECORDIAN_NATIVE_CORE: required
+          RECORDIAN_RUST_GUI: '1'
+          RECORDIAN_NATIVE_BUILD: ${{ github.workspace }}/.scratch/native-build
+        run: python -m pytest tests/test_rust_fcitx_runtime.py -v

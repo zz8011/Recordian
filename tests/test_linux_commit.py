@@ -1,7 +1,20 @@
 import subprocess
 from unittest.mock import Mock
 
+import pytest
+
 from recordian import linux_commit
+
+
+@pytest.fixture(autouse=True)
+def _python_busctl_transport(monkeypatch):
+    """These adapter tests simulate busctl, even in the native full-suite run.
+
+    Isolate the process-wide selection per test; production selection stays
+    fixed so changing environment variables cannot migrate an open session.
+    """
+    monkeypatch.setenv("RECORDIAN_NATIVE_CORE", "python")
+    monkeypatch.setattr(linux_commit.native_bus, "_selection", linux_commit.native_bus._UNSET)
 
 
 def test_set_clipboard_text_prefers_xclip(monkeypatch) -> None:

@@ -1,0 +1,11 @@
+# Rust runtime integration
+
+The user authorizes completing the existing Rust optimization, publishing it to GitHub, merging main, cleaning its worktree and restarting Recordian with the new runtime. Earlier prototype prohibitions on publication and deployment are superseded by this instruction.
+
+Ship a Rust shared library behind the existing dictation interfaces. The desktop UI, voice wake, correction, agents and native CUDA recognizer retain their existing public behavior. Move float32 audio conversion, RMS, PCM decoding/buffering and the persistent Fcitx transport into the native core. Use an explicit ABI version and bounded memory; never compile on a running audio thread. Python remains available for installations without the library and for rollback. A native error after a possibly applied D-Bus write never triggers transport replay.
+
+Retain 160 ms inference cadence. The previous 320 ms adaptive candidate failed the long English character/tail latency gates and must not become the default. Improve buffering and avoid empty executor work while preserving every inference prefix, budget, EOS and cancellation ownership. Unsupported encoder/KV-cache reuse is excluded because it changes model semantics without an equivalence proof.
+
+Validate exact PCM quantization (including nonfinite values and partial frames), original RMS semantics, bounded server buffering, ordered same-token commits, unique Fcitx owner pinning, timeout and uncertain replies, complete admitted audio before EOS and the existing full regression suite. Measure the production bridge rather than extrapolating standalone prototype timings. Exercise publicly licensed short and long audio over the real model and an isolated native input window. Record any gap between test inputs and natural microphone use.
+
+Before deployment preserve the previous commit, native artifacts and service configuration. Merge only reviewed and passing code, build the native library for both desktop and ASR Python runtimes, activate the installed library, restart the explicitly authorized services and verify the new process mappings and request behavior. Archive the original prototype evidence before removing its worktree; preserve unrelated changes and other worktrees.

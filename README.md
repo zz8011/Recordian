@@ -119,6 +119,16 @@ pip install -e ".[gui,hotkey,qwen-asr,wake]"
 
 可用的 extras：`gui`、`hotkey`、`qwen-asr`、`confucius-asr`、`correction`、`wake`、`dev`。
 
+### 5. 可选 Rust 运行时
+
+Linux 上可在安装前运行 `python scripts/build_native_core.py`，或在构建 wheel 时设置
+`RECORDIAN_BUILD_NATIVE=1`。共享库负责音频量化、RMS、有界 PCM FIFO 与持久 GIO/Fcitx 调用；
+UI、Agent、纠词和 C++/CUDA 模型仍沿用现有实现，推理调度保留 160 ms。
+未安装库时默认使用 Python；原生部署应显式设置 `RECORDIAN_NATIVE_CORE=required`，
+回滚使用 `RECORDIAN_NATIVE_CORE=python`。构建不会发生在录音回调中。
+系统依赖、平台 wheel、双 Python 环境部署和待完成的真实模型验收见
+[`Rust 运行时指南`](docs/RUST-RUNTIME.zh-CN.md)。
+
 ## 快速开始
 
 启动托盘程序：
@@ -201,6 +211,7 @@ recordian-vllm-realtime-probe --wav /path/to/sample.wav --model Qwen3-ASR-0.6B -
 
 专项文档：
 
+- Rust 运行时构建、打包、部署与回滚：[`docs/RUST-RUNTIME.zh-CN.md`](docs/RUST-RUNTIME.zh-CN.md)（生产性能与自然麦克风验收仍待完成）
 - 本地 vLLM/OpenAI 兼容 ASR 配置示例：[`examples/hotkey.http-cloud.local-vllm.json`](examples/hotkey.http-cloud.local-vllm.json)
 - 本机 Confucius4-R2T2 流式 ASR：服务与实测限制见 [`server/README-confucius.md`](server/README-confucius.md)，配置示例 [`examples/hotkey.confucius-asr.local.json`](examples/hotkey.confucius-asr.local.json)（PTT：`Ctrl_R` 按住录音、松开结束；服务端单会话音频上限默认 30 秒，超限显式报错而非截断）
 - 流式输入法方案设计与验收：[`docs/STREAMING-IME-PLAN.zh-CN.md`](docs/STREAMING-IME-PLAN.zh-CN.md)；实测验证记录：[`docs/STREAMING-IME-VALIDATION.zh-CN.md`](docs/STREAMING-IME-VALIDATION.zh-CN.md)

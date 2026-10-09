@@ -261,8 +261,17 @@ class StreamingSession:
     finish_streaming_transcribe) so tests can inject a fake.
     """
 
-    def __init__(self, model, language: str | None, context: str) -> None:
+    def __init__(self, model, language: str | None, context: str,
+                 max_session_seconds: float = DEFAULT_MAX_SESSION_SECONDS) -> None:
+        from recordian.native_core import PcmBuffer
+
         self.model = model
+        # Pending PCM storage is independent of cumulative admission: retain
+        # at most the default 30 s bulk window even for longer sessions. This
+        # exceeds a partial first chunk plus the largest admitted frame, while
+        # preserving direct callers that feed an entire default session.
+        buffer_seconds = min(max_session_seconds, DEFAULT_MAX_SESSION_SECONDS)
+        self.buffer = PcmBuffer(max(2, int(buffer_seconds * SAMPLE_RATE) * 2))
         self.state = model.init_streaming_state(
             context=context,
             language=language,
@@ -279,12 +288,19 @@ class StreamingSession:
         self.last_fixed = ""
         self.last_text_tmp = ""
         self.total_new_asr_tokens: list[str] = []
-        self.buffer = bytearray()
         self.samples_fed = 0
 
     def feed(self, pcm_bytes: bytes) -> None:
-        self.buffer += pcm_bytes
+        self.buffer.feed(pcm_bytes)
         self.samples_fed += len(pcm_bytes) // 2
+
+    def has_ready_chunk(self) -> bool:
+        samples = self.step + self.look if self.is_first else self.step
+        return len(self.buffer) >= samples * 2
+
+    def close(self) -> None:
+        """Release PCM storage only after the session's inference is drained."""
+        self.buffer.close()
 
     def _adapt(self, text: str) -> None:
         # Adaptive max_new_tokens, verbatim semantics of upstream example.py.
@@ -306,16 +322,10 @@ class StreamingSession:
         """Decode every full chunk in the buffer; returns (delta, cost_ms)."""
         import time
 
-        import numpy as np
-
         out: list[tuple[str, float]] = []
-        while True:
-            need = (self.step + self.look if self.is_first else self.step) * 2
-            if len(self.buffer) < need:
-                return out
-            seg_bytes = bytes(self.buffer[:need])
-            del self.buffer[:need]
-            seg = np.frombuffer(seg_bytes, dtype=np.int16).astype(np.float32) / 32768.0
+        while self.has_ready_chunk():
+            samples = self.step + self.look if self.is_first else self.step
+            seg = self.buffer.pop_float(samples)
             if self.is_first:
                 self.state.chunk_size_sec = (self.step + self.look) / SAMPLE_RATE
                 self.state.chunk_size_samples = self.step + self.look
@@ -333,16 +343,16 @@ class StreamingSession:
                 self.last_fixed = fixed
             self._adapt((text or "").split("|")[0])
             out.append((delta, round(cost_ms, 1)))
+        return out
 
     def finish(self) -> tuple[str, float]:
         """Flush tail audio; returns (remaining fixed delta, cost_ms)."""
         import time
 
-        import numpy as np
-
         start = time.perf_counter()
-        if self.buffer:
-            seg = np.frombuffer(bytes(self.buffer), dtype=np.int16).astype(np.float32) / 32768.0
+        samples = len(self.buffer) // 2
+        if samples:
+            seg = self.buffer.pop_float(samples)
             self.buffer.clear()
             self.model.streaming_transcribe(seg, self.state, int(self.first_max_new_tokens))
         self.model.finish_streaming_transcribe(self.state, self.first_max_new_tokens)
@@ -376,6 +386,10 @@ async def _drain_inference(fut) -> None:
             await asyncio.wait_for(asyncio.shield(fut), timeout=5.0)
         except (asyncio.TimeoutError, asyncio.CancelledError):
             continue
+        except Exception:  # noqa: BLE001 - a failed inference is terminal too
+            # Recheck completion before retrieving the exception below; a
+            # failed await must not release ownership of a running inference.
+            continue
     if not fut.cancelled():
         fut.exception()  # retrieve so a failed call is not reported as lost
 
@@ -403,6 +417,7 @@ async def _handle_connection(ws, model, token: str, args, busy_lock) -> None:
     request_id = "unknown"
     pending_infer = None
     receiver = None
+    session = None
     try:
         raw = await asyncio.wait_for(ws.recv(), timeout=30)
         if not isinstance(raw, str):
@@ -424,7 +439,7 @@ async def _handle_connection(ws, model, token: str, args, busy_lock) -> None:
         await ws.send(json.dumps({"status": "connected", "requestId": request_id,
                                   "msg": "", "active_connections": 1}))
 
-        session = StreamingSession(model, language, context)
+        session = StreamingSession(model, language, context, args.max_session_seconds)
         loop = asyncio.get_running_loop()
         queue: asyncio.Queue = asyncio.Queue(maxsize=args.max_queued_frames)
         max_samples = int(args.max_session_seconds * SAMPLE_RATE)
@@ -493,6 +508,8 @@ async def _handle_connection(ws, model, token: str, args, busy_lock) -> None:
                 await ws.close(code=1008, reason="session audio budget exceeded")
                 return False
             session.feed(data)
+            if not session.has_ready_chunk():
+                return True
             pending_infer = loop.run_in_executor(None, session.process_ready)
             # shield: cancelling this handler must NOT cancel the future and
             # pretend the model thread stopped — it keeps running either way.
@@ -573,11 +590,17 @@ async def _handle_connection(ws, model, token: str, args, busy_lock) -> None:
                 await asyncio.wait_for(receiver, timeout=2.0)
             except BaseException:  # noqa: BLE001 - CancelledError/TimeoutError
                 pass
-        if pending_infer is not None:
-            # Model ownership is released only after the old inference has
-            # REALLY returned; cancelling this handler never stops the thread.
-            await _drain_inference(pending_infer)
-        busy_lock.release()
+        try:
+            if pending_infer is not None:
+                # Model ownership is released only after the old inference has
+                # REALLY returned; cancelling this handler never stops the thread.
+                await _drain_inference(pending_infer)
+        finally:
+            try:
+                if session is not None:
+                    session.close()
+            finally:
+                busy_lock.release()
 
 
 async def _serve(args, model, token: str) -> None:
@@ -625,10 +648,13 @@ def _warmup(model, warmup_wav: str) -> None:
 
     def _run(wav, language) -> None:
         session = StreamingSession(model, language, "")
-        pcm = (np.clip(wav, -1.0, 1.0) * 32768.0).astype(np.int16).tobytes()
-        session.feed(pcm)
-        session.process_ready()
-        session.finish()
+        try:
+            pcm = (np.clip(wav, -1.0, 1.0) * 32768.0).astype(np.int16).tobytes()
+            session.feed(pcm)
+            session.process_ready()
+            session.finish()
+        finally:
+            session.close()
 
     # Warm both language paths: forced Chinese and auto-detect (None).
     if warmup_wav:
@@ -742,6 +768,9 @@ def run_server(args, model=None) -> None:
     global active_model  # noqa: PLW0603
 
     validate_config(args)  # before any resource (token file, model, socket)
+    from recordian.native_core import load_library
+
+    load_library()  # required mode must fail before model startup / warmup
     token_file = args.token_file or default_token_path()
     token = load_or_create_token(token_file)
     _log(f"auth token file: {token_file} (value never logged)")
