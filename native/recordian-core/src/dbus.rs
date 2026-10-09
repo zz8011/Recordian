@@ -321,6 +321,23 @@ impl SessionBus {
                 if self.tokens.len() >= MAX_SESSIONS {
                     return Err(BusError::local("SessionBusy", "native token table is full"));
                 }
+                // Reserve a unique local ID before any remote BeginSession.
+                // Failed begins may leave gaps; IDs must never wrap or repeat.
+                let mut current = NEXT_TOKEN.load(Ordering::Relaxed);
+                let id = loop {
+                    let next = current.checked_add(1).ok_or_else(|| {
+                        BusError::local("SessionBusy", "native token IDs exhausted")
+                    })?;
+                    match NEXT_TOKEN.compare_exchange_weak(
+                        current,
+                        next,
+                        Ordering::Relaxed,
+                        Ordering::Relaxed,
+                    ) {
+                        Ok(_) => break current,
+                        Err(actual) => current = actual,
+                    }
+                };
                 let started = Instant::now();
                 let owner = self.invoke(
                     c"org.freedesktop.DBus",
@@ -354,11 +371,6 @@ impl SessionBus {
                 // Tokens are opaque to Python. A monotonically unique local
                 // token prevents a restarted addon reusing a raw token from
                 // redirecting an old session, even after a binding is removed.
-                let id = NEXT_TOKEN
-                    .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
-                        value.checked_add(1)
-                    })
-                    .map_err(|_| BusError::local("SessionBusy", "native token IDs exhausted"))?;
                 let token = format!("recordian-native-{id}");
                 let suffix = &descriptor[descriptor.find(remote).unwrap() + remote.len()..];
                 self.tokens.insert(
