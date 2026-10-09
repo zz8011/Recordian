@@ -153,6 +153,11 @@ def _split_held_tail(text: str, *, limit: int = CONTINUOUS_HELD_TAIL_CHARS) -> t
 
 
 def _pcm_rms(raw: bytes) -> float:
+    from .native_core import audio_rms
+
+    native = audio_rms(raw)
+    if native is not None:
+        return native
     usable = len(raw) - (len(raw) % 4)
     if usable <= 0:
         return 0.0

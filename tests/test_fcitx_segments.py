@@ -22,6 +22,12 @@ def _segment_call(cmd: list[str]) -> tuple[str, str, str]:
 
 
 def _install(monkeypatch, run) -> None:
+    from recordian import native_bus
+
+    # This suite asserts busctl's simulated wire protocol. A production native
+    # suite run must not send its test strings to the real session bus.
+    monkeypatch.setenv("RECORDIAN_NATIVE_CORE", "python")
+    monkeypatch.setattr(native_bus, "_selection", native_bus._UNSET)
     monkeypatch.setattr(
         "recordian.linux_commit.which",
         lambda name: "/usr/bin/" + name if name == "busctl" else None,

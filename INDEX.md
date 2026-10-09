@@ -16,6 +16,8 @@
 | `src/recordian/providers/refine/` | Text refinement LLMs | cloud LLM refine pipeline |
 | `server/` | Local ASR server processes | `confucius_streaming_server.py` (WebSocket v1, loopback), `qwen_streaming_server.py` (HTTP) |
 | `tests/` | Unit & integration tests | |
+| `native/recordian-core/` | Dependency-free Rust cdylib + rlib, C ABI1 | Audio conversion/RMS, bounded PCM FIFO, persistent GIO D-Bus transport |
+| `src/recordian/_native/` | Generated package-local shared library + SHA256 metadata | Gitignored; build before startup |
 | `docs/` | 用户手册、故障排查、功能专题 | 索引见 `docs/README.md`；历史文档在 `docs/archive/` |
 | `models/` | ASR model files (gitignored) | Do not commit large files |
 | `presets/` | 文本精炼 prompt 预设（`.md`） | 文件名即 preset 名 |
@@ -56,6 +58,9 @@
 | `agent_response_overlay.py` | Movable and resizable floating Agent replies; explicit close button or timeout dismisses without taking focus |
 | `desktop_control.py` | Compositor control socket, recording toggle and status stream |
 | `pyproject.toml` | Python package config (uv/pip) |
+| `scripts/build_native_core.py` | Offline release build, ABI1 validation and atomic library install |
+| `setup.py` / `MANIFEST.in` | Optional build-time native wheel with platform tag; source-only Rust sdist |
+| `native_core.py` / `native_bus.py` | Python adapters for Rust audio and persistent GIO transport; auto/required/python modes |
 
 ## Canonical Presets
 
@@ -76,6 +81,7 @@
 ## Where To Go
 
 - **文档导航** → `docs/README.md`（用户手册、故障排查、功能专题的完整索引）
+- **Rust runtime build/package/deployment** → `docs/RUST-RUNTIME.zh-CN.md` + `.github/workflows/native.yml`
 - **历史文档** → `docs/archive/`（已归档的研究与过程记录，不再维护）
 - **ASR provider changes** → `src/recordian/providers/INDEX.md`
 - **Text refinement** → `src/recordian/providers/` + `postprocess_pipeline.py`
@@ -114,6 +120,7 @@ limits in `server/README-confucius.md`; design/acceptance in `docs/STREAMING-IME
 - **Tray**: `tray_gui.py` is the `recordian-tray` entry point (compat shim); the implementation
   lives in `tray_app.py` plus the focused `tray_*` submodules; `native_settings.py` for the GTK preferences window
 - **Continuous capture**: Audio is assigned to bounded ASR sessions; committed input remains in the application. Correction context and in-memory history have explicit bounds.
+- **Rust runtime**: C ABI1 handles audio conversion/RMS, bounded PCM FIFO and persistent GIO calls. Python UI/agents/correction and C++/CUDA inference remain; retain 160 ms scheduling (320 ms candidate rejected). Build only before use; require native explicitly for deployment, or select Python for rollback.
 
 ## Common Tasks
 

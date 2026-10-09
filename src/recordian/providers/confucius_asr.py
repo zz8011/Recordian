@@ -206,6 +206,11 @@ def f32le_to_pcm16le(raw: bytes) -> bytes:
     to [-1, 1] so a bad frame can never poison the stream. ``raw`` must be a
     whole number of float32 samples.
     """
+    from recordian.native_core import convert_audio
+
+    native = convert_audio(raw)
+    if native is not None:
+        return native[0]
     if not raw:
         return b""
     if len(raw) % 4 != 0:

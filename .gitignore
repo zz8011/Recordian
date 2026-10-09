@@ -72,3 +72,7 @@ fcitx/**/librecordian-commit.so
 
 # 故障台账：仅本地保留，不公开（含内网地址与本机细节）
 FAILURES.md
+
+# Built Rust runtime; source and Cargo.lock remain versioned.
+/native/recordian-core/target/
+/src/recordian/_native/

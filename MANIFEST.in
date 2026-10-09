@@ -1,0 +1,10 @@
+include scripts/build_native_core.py
+include native/recordian-core/Cargo.toml
+include native/recordian-core/Cargo.lock
+recursive-include native/recordian-core/src *.rs
+recursive-include native/recordian-core/tests *.rs
+include docs/RUST-RUNTIME.zh-CN.md
+prune native/recordian-core/target
+prune native-prototype
+prune src/recordian/_native
+global-exclude __pycache__ *.py[cod]
