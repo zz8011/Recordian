@@ -52,7 +52,7 @@
 | `recommended_profile.py` | Local Confucius profile, display labels, and endpoint validation |
 | `waveform_renderer.py` | Recording overlay window + state machine (pyglet) |
 | `orb_shader.py` | Liquid-glass voice orb GLSL shader (voiceWave preset, ported from LerSent001/orb, MIT) |
-| `backend_manager.py` | Backend lifecycle management |
+| `backend_manager.py` / `backend_lifecycle.py` | Backend ownership and pipe-bound parent lifetime |
 | `output_mute.py` | Desktop recording output mute and crash recovery; enabled by RECORDIAN_MUTE_OUTPUT |
 | `agent_entry.py` / `agent_panel.py` / `agent_panel.html` | Agent voice routing, Hermes CLI/Gateway sessions, and local task panel |
 | `agent_response_overlay.py` | Movable and resizable floating Agent replies; explicit close button or timeout dismisses without taking focus |
