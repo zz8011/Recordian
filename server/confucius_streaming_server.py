@@ -557,7 +557,9 @@ async def _handle_connection(ws, model, token: str, args, busy_lock) -> None:
             pass
         _log(f"requestId={request_id}: rejected ({exc})")
     except Exception as exc:  # noqa: BLE001 - disconnects/timeouts land here
-        _log(f"requestId={request_id}: session ended ({type(exc).__name__})")
+        import traceback
+        _log(f"requestId={request_id}: session ended ({type(exc).__name__}): {exc}")
+        _log("TRACEBACK:\n" + traceback.format_exc())
         try:
             await ws.close(code=1011)
         except Exception:  # noqa: BLE001
