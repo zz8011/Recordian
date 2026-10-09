@@ -202,7 +202,7 @@ def test_apply_namespace_runtime_normalization_preserves_backend_only_values() -
 
 def test_correction_provider_defaults_and_separate_timeouts() -> None:
     defaults = normalize_runtime_config({})
-    assert defaults["correction_provider"] == "semif"
+    assert defaults["correction_provider"] == "jev"
     assert defaults["enable_semif_correction"] is False
     assert defaults["jev_timeout_s"] == 1.5
     assert defaults["semif_timeout_s"] == 0.12
@@ -217,7 +217,9 @@ def test_correction_provider_defaults_and_separate_timeouts() -> None:
     assert selected["correction_provider"] == "jev"
     assert selected["jev_timeout_s"] == 2.0
     assert selected["semif_timeout_s"] == 0.35
-    assert normalize_runtime_config({"correction_provider": "nope"})["correction_provider"] == "semif"
+    assert normalize_runtime_config({"correction_provider": "nope"})["correction_provider"] == "jev"
+    semif = normalize_runtime_config({"correction_provider": "semif"})
+    assert semif["correction_provider"] == "semif"
 
 
 def test_parse_args_round_trip_keeps_jev_provider_and_aliases(tmp_path, monkeypatch) -> None:
@@ -258,7 +260,7 @@ def test_parse_args_round_trip_keeps_jev_provider_and_aliases(tmp_path, monkeypa
     legacy.write_text(json.dumps({"enable_semif_correction": False, "asr_context": "日常"}), encoding="utf-8")
     monkeypatch.setattr("sys.argv", ["recordian", "--config-path", str(legacy)])
     old = _parse_args_with_config(build_parser())
-    assert old.correction_provider == "semif"
+    assert old.correction_provider == "jev"
     assert old.enable_semif_correction is False
     assert old.contextual_aliases == []
     assert old.jev_timeout_s == 1.5

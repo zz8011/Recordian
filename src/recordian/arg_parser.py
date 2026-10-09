@@ -416,14 +416,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--correction-provider",
-        default="semif",
+        default="jev",
         choices=("semif", "jev"),
-        help="Contextual correction provider: semif (default, needs an endpoint) or jev (installed jev CLI)",
+        help="Contextual correction provider: jev (default, installed jev CLI) or semif (needs an endpoint)",
     )
     parser.add_argument(
         "--semif-endpoint",
         default="",
-        help="SemIf service URL. Used only when the provider is semif; empty disables that provider",
+        help="Correction service URL. Used by semif; jev falls back to ~/.hermes/jev/plumb.json when empty",
     )
     parser.add_argument(
         "--semif-timeout-s",
@@ -587,7 +587,7 @@ def _parse_args_with_config(parser: argparse.ArgumentParser) -> argparse.Namespa
     except Exception:
         args.hotword_correction_edits = 1
     args.enable_semif_correction = _coerce_bool(getattr(args, "enable_semif_correction", False), default=False)
-    args.correction_provider = normalize_correction_provider(getattr(args, "correction_provider", "semif"))
+    args.correction_provider = normalize_correction_provider(getattr(args, "correction_provider", "jev"))
     args.semif_endpoint = str(getattr(args, "semif_endpoint", "") or "").strip()
     args.semif_timeout_s = normalize_semif_timeout_s(getattr(args, "semif_timeout_s", DEFAULT_SEMIF_TIMEOUT_S))
     args.jev_timeout_s = normalize_jev_timeout_s(getattr(args, "jev_timeout_s", DEFAULT_JEV_TIMEOUT_S))
@@ -731,7 +731,7 @@ def _save_runtime_config(args: argparse.Namespace) -> None:
         "enable_hotword_correction": getattr(args, "enable_hotword_correction", True),
         "hotword_correction_edits": getattr(args, "hotword_correction_edits", 1),
         "enable_semif_correction": getattr(args, "enable_semif_correction", False),
-        "correction_provider": normalize_correction_provider(getattr(args, "correction_provider", "semif")),
+        "correction_provider": normalize_correction_provider(getattr(args, "correction_provider", "jev")),
         "semif_endpoint": getattr(args, "semif_endpoint", ""),
         "semif_timeout_s": normalize_semif_timeout_s(getattr(args, "semif_timeout_s", DEFAULT_SEMIF_TIMEOUT_S)),
         "jev_timeout_s": normalize_jev_timeout_s(getattr(args, "jev_timeout_s", DEFAULT_JEV_TIMEOUT_S)),

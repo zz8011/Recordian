@@ -159,6 +159,8 @@ def _worker_args(**overrides: object) -> argparse.Namespace:
         "debug_diagnostics": False,
         "hotword": [],
         "asr_context": "",
+        # 这些用例走注入 session 的 SemIf 协议；显式声明，避免跟随默认值漂移。
+        "correction_provider": "semif",
     }
     values.update(overrides)
     return argparse.Namespace(**values)

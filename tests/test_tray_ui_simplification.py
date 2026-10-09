@@ -275,6 +275,16 @@ def _grid_sibling(root: Any, gtk: Any, label_text: str, kind: type) -> Any:
     raise AssertionError(f"missing {kind.__name__} beside {label_text}")
 
 
+def _select_combo_by_label(combo: Any, label: str) -> None:
+    # 按可见文本选中，避免依赖 PROVIDER_CHOICES 的当前顺序。
+    model = combo.get_model()
+    for index, row in enumerate(model):
+        if row[0] == label:
+            combo.set_active(index)
+            return
+    raise AssertionError(f"missing combo entry {label}")
+
+
 def _switch_for(root: Any, gtk: Any, label_text: str) -> Any:
     for label in _labels(root, gtk):
         if label.get_text() != label_text:
@@ -506,13 +516,15 @@ def test_settings_correction_provider_alias_and_recommend(tmp_path: Path) -> Non
     assert provider.get_active_text() == "官方Jev（沿用本机登录）"
     hint_text = " ".join(label.get_text() for label in _labels(window, gtk))
     assert "复用 jev 的登录，密钥由 jev 管理" in hint_text
-    assert "无需填写地址" in hint_text
+    assert "两种来源共用" in hint_text
     assert "本机已登录" not in hint_text
     assert "目前能登录" not in hint_text
     assert provider.get_visible()
     endpoint = _grid_sibling(window, gtk, "决策模型服务地址", gtk.Entry)
     assert endpoint.get_text() == "http://10.2.2.2:9/semif"
-    assert endpoint.get_visible() is False
+    # Jev 也经 Plumb 的 /v1/systemone 判词，地址在两种来源下都可见可改。
+    assert endpoint.get_visible() is True
+    assert endpoint.is_sensitive()
     jev_timeout = _grid_sibling(window, gtk, "Jev 等待 (秒)", gtk.Entry)
     assert jev_timeout.get_visible()
     assert jev_timeout.get_text() == "1.4"
@@ -522,12 +534,13 @@ def test_settings_correction_provider_alias_and_recommend(tmp_path: Path) -> Non
     assert "jeff→jev::软件工具" in alias_text
     assert _grid_sibling(window, gtk, "常用词", gtk.Entry).get_text() == "微信,编辑器"
 
-    provider.set_active(0)
+    # 按标签选，不按索引：下拉顺序以 jev 在前，索引会随默认值变化。
+    _select_combo_by_label(provider, "内网决策模型")
     _pump(glib)
     assert provider.get_active_text() == "内网决策模型"
     assert endpoint.get_visible() is True
     assert jev_timeout.get_visible() is False
-    provider.set_active(1)
+    _select_combo_by_label(provider, "官方Jev（沿用本机登录）")
     _pump(glib)
 
     _button(window, gtk, "使用本机推荐配置").clicked()

@@ -35,6 +35,7 @@ _CORRECTOR_ARGS = argparse.Namespace(
     semif_endpoint="",
     semif_timeout_s=0.12,
     enable_semif_correction=False,
+    correction_provider="semif",
     contextual_aliases=[],
 )
 
@@ -1022,6 +1023,7 @@ _SEMIF_ARGS = argparse.Namespace(
     semif_endpoint="http://127.0.0.1:9/v1/systemone",
     semif_timeout_s=0.5,
     enable_semif_correction=True,
+    correction_provider="semif",
     contextual_aliases=[],
 )
 
@@ -1139,6 +1141,7 @@ _ALIAS_SEMIF_ARGS = argparse.Namespace(
     semif_endpoint="http://127.0.0.1:9/v1/systemone",
     semif_timeout_s=0.35,
     enable_semif_correction=True,
+    correction_provider="semif",
     contextual_aliases=[{"heard": "jeff", "word": "jev", "meaning": "软件工具"}],
 )
 

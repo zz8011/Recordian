@@ -23,15 +23,15 @@ MAX_SEMIF_TIMEOUT_S = 0.35
 # gated judgment with margin; 2 s is the hard cap. SemIf stays at 0.35 s.
 DEFAULT_JEV_TIMEOUT_S = 1.5
 MAX_JEV_TIMEOUT_S = 2.0
-CORRECTION_PROVIDER_CHOICES = ("semif", "jev")
+CORRECTION_PROVIDER_CHOICES = ("jev", "semif")
 ASR_PROVIDER_CHOICES = ("qwen-asr", "http-cloud", "confucius-asr")
 
 
-def normalize_correction_provider(value: object, *, fallback: str = "semif") -> str:
-    """``semif`` (default, including old configs) or ``jev``."""
+def normalize_correction_provider(value: object, *, fallback: str = "jev") -> str:
+    """``jev`` (default, official CLI on the LAN Plumb service) or ``semif``."""
     return _normalize_choice(
         value,
-        fallback=fallback if fallback in CORRECTION_PROVIDER_CHOICES else "semif",
+        fallback=fallback if fallback in CORRECTION_PROVIDER_CHOICES else "jev",
         allowed=set(CORRECTION_PROVIDER_CHOICES),
     )
 
@@ -239,7 +239,7 @@ def normalize_runtime_config(
     normalized["asr_provider"] = normalize_asr_provider(normalized.get("asr_provider", "qwen-asr"))
     normalized["asr_realtime_endpoint"] = str(normalized.get("asr_realtime_endpoint") or "").strip()
     normalized["enable_semif_correction"] = bool(normalized.get("enable_semif_correction", False))
-    normalized["correction_provider"] = normalize_correction_provider(normalized.get("correction_provider", "semif"))
+    normalized["correction_provider"] = normalize_correction_provider(normalized.get("correction_provider", "jev"))
     normalized["semif_endpoint"] = str(normalized.get("semif_endpoint") or "").strip()
     normalized["semif_timeout_s"] = normalize_semif_timeout_s(normalized.get("semif_timeout_s", DEFAULT_SEMIF_TIMEOUT_S))
     normalized["jev_timeout_s"] = normalize_jev_timeout_s(normalized.get("jev_timeout_s", DEFAULT_JEV_TIMEOUT_S))

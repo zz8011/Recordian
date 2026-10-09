@@ -762,10 +762,10 @@ def open_settings_gtk(
             row,
             key="correction_provider",
             label="纠词来源",
-            value=current.get("correction_provider", "semif"),
+            value=current.get("correction_provider", "jev"),
             kind="mapped",
             choices=CORRECTION_PROVIDER_CHOICES,
-            hint="使用本机或内网的候选决策服务。官方 Jev 复用 jev 的登录，密钥由 jev 管理；选择 Jev 无需填写地址。",
+            hint="使用本机或内网的候选决策服务。官方 Jev 复用 jev 的登录，密钥由 jev 管理。",
         )
         row = _add_field(
             sec_asr,
@@ -773,7 +773,7 @@ def open_settings_gtk(
             key="semif_endpoint",
             label="决策模型服务地址",
             value=current.get("semif_endpoint", ""),
-            hint="选择内网决策模型时使用；切换到官方 Jev 后仍保留此地址。",
+            hint="两种来源共用，例如 http://192.168.5.111:42171/v1/systemone；Jev 留空时沿用 ~/.hermes/jev/plumb.json。",
         )
         row = _add_field(
             sec_asr,
@@ -1904,9 +1904,10 @@ def open_settings_gtk(
                 ("correction_provider", "contextual_aliases"),
                 correction_on,
             )
-            _set_rows_visible(("semif_endpoint", "semif_timeout_s"), semif_selected)
+            _set_rows_visible(("semif_timeout_s",), semif_selected)
             _set_rows_visible(("jev_timeout_s",), not semif_selected)
-            _set_rows_sensitive(("semif_endpoint", "semif_timeout_s"), correction_on and semif_selected)
+            _set_rows_sensitive(("semif_endpoint",), correction_on)
+            _set_rows_sensitive(("semif_timeout_s",), correction_on and semif_selected)
             _set_rows_sensitive(("jev_timeout_s",), correction_on and not semif_selected)
 
         def _reconcile_confucius_endpoint(*, announce: bool) -> None:
