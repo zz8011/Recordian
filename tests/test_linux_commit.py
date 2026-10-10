@@ -300,6 +300,40 @@ def test_send_hard_enter_prefers_backend_specific_path_over_pynput(monkeypatch) 
     assert called["xdotool"] is True
 
 
+def test_send_hard_enter_wayland_fallback_uses_wtype_before_pynput(monkeypatch) -> None:
+    import types
+
+    from recordian.linux_commit import send_hard_enter
+
+    calls: list[list[str]] = []
+    monkeypatch.setenv("XDG_SESSION_TYPE", "wayland")
+    monkeypatch.setattr("recordian.linux_commit.which", lambda x: "/usr/bin/" + x)
+    monkeypatch.setattr("recordian.linux_commit._run_command", lambda cmd: calls.append(cmd))
+    monkeypatch.setattr(
+        "recordian.linux_commit._send_hard_enter_via_pynput",
+        lambda: (_ for _ in ()).throw(AssertionError("pynput cannot reach native Wayland windows")),
+    )
+
+    result = send_hard_enter(types.SimpleNamespace(backend_name="custom"))
+    assert result.committed is True
+    assert result.detail == "hard_enter_sent:wayland-fallback"
+    assert calls == [["wtype", "-k", "Return"]]
+
+
+def test_send_hard_enter_wayland_without_wtype_keeps_pynput_xwayland_fallback(monkeypatch) -> None:
+    import types
+
+    from recordian.linux_commit import send_hard_enter
+
+    monkeypatch.setenv("XDG_SESSION_TYPE", "wayland")
+    monkeypatch.setattr("recordian.linux_commit.which", lambda x: None)
+    monkeypatch.setattr("recordian.linux_commit._send_hard_enter_via_pynput", lambda: True)
+
+    result = send_hard_enter(types.SimpleNamespace(backend_name="custom"))
+    assert result.committed is True
+    assert result.detail == "hard_enter_sent:pynput"
+
+
 def test_send_hard_enter_resolves_wrapped_fallback_committer(monkeypatch) -> None:
     from recordian.linux_commit import (
         CommitterWithFallback,
@@ -425,9 +459,16 @@ def test_paste_to_enter_delay_seconds_only_for_paste_style_commits() -> None:
 # Electron Detection Tests
 # ============================================================================
 
+def _set_x_display(monkeypatch) -> None:
+    # 结果不随当前会话（Wayland 或 X11）变化：Electron 检测只依赖 DISPLAY 与 xprop。
+    monkeypatch.setenv("DISPLAY", ":0")
+    monkeypatch.setenv("XDG_SESSION_TYPE", "x11")
+
 def test_is_electron_window_detects_wechat(monkeypatch):
     """测试检测微信 Electron 应用"""
     from recordian.linux_commit import _is_electron_window
+
+    _set_x_display(monkeypatch)
 
     def _fake_run(cmd, **kwargs):
         result = Mock()
@@ -448,6 +489,8 @@ def test_is_electron_window_detects_vscode(monkeypatch):
     """测试检测 VS Code Electron 应用"""
     from recordian.linux_commit import _is_electron_window
 
+    _set_x_display(monkeypatch)
+
     def _fake_run(cmd, **kwargs):
         result = Mock()
         result.stdout = "WM_CLASS(STRING) = \"code\", \"Code\"\n_NET_WM_NAME(UTF8_STRING) = \"Visual Studio Code\""
@@ -466,6 +509,8 @@ def test_is_electron_window_rejects_firefox(monkeypatch):
     """测试非 Electron 应用返回 False"""
     from recordian.linux_commit import _is_electron_window
 
+    _set_x_display(monkeypatch)
+
     def _fake_run(cmd, **kwargs):
         result = Mock()
         result.stdout = "WM_CLASS(STRING) = \"Navigator\", \"Firefox\"\n_NET_WM_NAME(UTF8_STRING) = \"Mozilla Firefox\""
@@ -483,6 +528,8 @@ def test_is_electron_window_rejects_firefox(monkeypatch):
 def test_is_electron_window_caches_result(monkeypatch):
     """测试检测结果被缓存"""
     from recordian.linux_commit import _is_electron_window
+
+    _set_x_display(monkeypatch)
 
     call_count = {"count": 0}
 
@@ -511,6 +558,8 @@ def test_is_electron_window_handles_xprop_failure(monkeypatch):
     """测试 xprop 失败时返回 False"""
     from recordian.linux_commit import _is_electron_window
 
+    _set_x_display(monkeypatch)
+
     def _fake_run(cmd, **kwargs):
         raise subprocess.TimeoutExpired(cmd, 2.0)
 
@@ -522,12 +571,41 @@ def test_is_electron_window_handles_xprop_failure(monkeypatch):
     assert _is_electron_window(12345) is False
 
 
-def test_is_electron_window_wayland_returns_false(monkeypatch):
-    """测试 Wayland 环境返回 False"""
-
+def test_is_electron_window_checks_xwayland_window_in_wayland_session(monkeypatch):
+    """Wayland 会话中的 XWayland 窗口（有 DISPLAY）仍由 xprop 识别"""
     from recordian.linux_commit import _is_electron_window
 
+    calls = []
+
+    def _fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        result = Mock()
+        result.stdout = "WM_CLASS(STRING) = \"wechat\", \"WeChatAppEx\""
+        result.returncode = 0
+        return result
+
     monkeypatch.setenv("XDG_SESSION_TYPE", "wayland")
+    monkeypatch.setenv("DISPLAY", ":0")
+    monkeypatch.setattr("recordian.linux_commit.which", lambda x: "/usr/bin/" + x)
+    monkeypatch.setattr("subprocess.run", _fake_run)
+
+    linux_commit._WINDOW_DETECTION_CACHE.clear()
+
+    assert _is_electron_window(12345) is True
+    assert calls == [["xprop", "-id", "12345", "WM_CLASS"]]
+
+
+def test_is_electron_window_without_x_display_never_queries_xprop(monkeypatch):
+    """没有 X 显示（纯 Wayland）时不启动 xprop，直接返回 False"""
+    from recordian.linux_commit import _is_electron_window
+
+    def _fail_run(cmd, **kwargs):
+        raise AssertionError("xprop must not run without DISPLAY")
+
+    monkeypatch.setenv("XDG_SESSION_TYPE", "wayland")
+    monkeypatch.delenv("DISPLAY", raising=False)
+    monkeypatch.setattr("recordian.linux_commit.which", lambda x: "/usr/bin/" + x)
+    monkeypatch.setattr("subprocess.run", _fail_run)
 
     linux_commit._WINDOW_DETECTION_CACHE.clear()
 
