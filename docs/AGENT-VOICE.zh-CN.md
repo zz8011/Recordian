@@ -1,6 +1,6 @@
 # Recordian Agent 语音入口
 
-第一版已接通本机 Hermes。Recordian 负责录音、实时识别、热词修正、实例选择和任务面板；Hermes 负责执行任务。Codex、Claude、Grok 的适配器尚未实现。回复目前显示为文字，尚未接入 TTS。
+已接通本机 Hermes CLI / Gateway 和 Claude Code CLI。Recordian 负责录音、实时识别、热词修正、实例选择和任务面板；所选 Agent 负责执行任务。Codex、OpenCode、Gemini CLI、Aider、Grok 的执行适配尚未实现。回复目前显示为文字，尚未接入 TTS。
 
 ## 使用
 
@@ -17,14 +17,14 @@
 
 ## Agent 开关与唤醒用途
 
-原生 **设置 → Agent 语音入口（开关立即生效）**，以及任务面板的 **Agent 设置**，都有以下开关：
+原生 **设置 → Agent**，以及任务面板的 **Agent 设置**，都有以下开关：
 
 - **启用 Agent**：总开关。关闭后拒绝新的语音/文字任务，尚未提交的 Agent 录音也不会发送。已运行的任务继续执行，可用“停止任务”单独停止。F9 普通输入始终可用。
 - **唤醒后交给 Agent**：开启时“hey 小二”进入 Agent；关闭时唤醒后普通语音输入。如果总开关关闭且此项开启，则不响应发任务的唤醒，不会把任务话语意外输入当前应用。
 
-两个入口共用热键配置文件里的 `enable_agent` 和 `wake_to_agent`（现有安装默认均为 true），切换立即保存，不需要点击底部保存或重启。唤醒用途对下一段录音生效，当前录音不会被改送到另一个目标；总开关会在最终发送前再检查。保存后重启仍保留设置。配置格式损坏时，Agent 发送关闭，F9 不受影响。
+两个入口共用热键配置文件里的 `enable_agent` 和 `wake_to_agent`（现有安装默认均为 true）。原生设置的修改需要点击底部保存；任务面板的开关立即保存。两者均不需要重启。唤醒用途对下一段录音生效，当前录音不会被改送到另一个目标；总开关会在最终发送前再检查。保存后重启仍保留设置。配置格式损坏时，Agent 发送关闭，F9 不受影响。
 
-Agent 面板的实例设置提供 **本机 Hermes CLI** 和 **常驻 Hermes Gateway** 两种连接方式。原生设置页可打开面板修改实例。Gateway 模式需要独立的 Hermes profile、仅监听本机的 API 地址，以及该 profile 的 `.env` 中的 `API_SERVER_KEY`；密钥不写入 Recordian 配置。
+原生设置及任务面板可配置 **Hermes CLI**、**Hermes Gateway**、**Claude Code CLI** 实例。程序发现和运行适配分别标识；没有适配的品牌不会作为可运行选项。Gateway 模式需要独立的 Hermes profile、仅监听本机的 API 地址，以及该 profile 的 `.env` 中的 `API_SERVER_KEY`；密钥不写入 Recordian 配置。
 
 ## 多个 Hermes
 
@@ -62,7 +62,7 @@ Gateway 实例把 `transport` 改成 `gateway`，将 `home` 设为独立 profile
                                                        进度 / 回复 / 会话
 ```
 
-- `agent_entry.py` 定义实例、录音目的地、任务历史和适配器。当前注册 Hermes 适配器；增加其他 Agent 应实现同样的执行、事件和取消接口。
+- `agent_entry.py` 定义实例、录音目的地、任务历史和适配器。当前注册 Hermes CLI/Gateway 和 Claude Code CLI 适配器；增加其他 Agent 应实现同样的执行、事件和取消接口。
 - CLI 模式使用官方 `chat --query-file - --oneshot --format stream-json`，指令经标准输入传递。Gateway 模式使用 `/v1/runs`、事件流、状态查询和停止接口；只提交完整识别结果，不会模拟向其他应用按键。每个实例仅恢复 Hermes 返回的确切会话 ID。
 - 语音指令模式使用内存 composition sink，支持连续录音分段；禁用远端粘贴和自动回车。识别中断、不确定或取消时不提交。
 - 最近 100 条任务和会话关联保存于 `agent-tasks.json`。重启时未完成任务标记中断，不会自动重放。手动提交使用请求编号去重；刷新页面不触发提交。
@@ -80,3 +80,13 @@ Gateway 实例把 `transport` 改成 `gateway`，将 `home` 设为独立 profile
 界面检查和实际 Hermes 执行分别验证；没有通过真实麦克风向用户工作目录发出测试任务。
 
 触发分流回归还覆盖：面板旧模式不影响唤醒/F9、Agent 忙时普通输入不被阻塞、唤醒使用内存预览而普通按键使用原有输入路径。
+
+## Claude Code CLI
+
+在原生设置或任务面板选择 Claude Code，填写存在的绝对程序路径和工作目录；不使用 Hermes profile 或 Gateway。原生设置保存后，运行层仅在没有捕获与正在执行任务的边界载入实例配置，保留其他实例。
+
+执行使用官方 `--print --output-format json`，指令只通过 stdin 传入，不拼 shell 命令。仅恢复该实例返回并保存的完整 UUID，未使用 `--continue` 或按名称搜索。成功要求退出码 0、最终 result/success、有效文本和会话编号；认证失败、缺少结果、工具权限拒绝、超时与停止都产生明确回执，不自动重新提交。工具权限、模型及登录仍由 Claude Code 自身管理；本轮没有验证真实登录或发出真实模型请求。
+
+此适配在完成时显示最终回复，尚不提供逐 token 流式回复。输出限制 1 MiB，停止/超时终止该任务的进程组，已经执行的操作不会撤销。执行目录是工作上下文，不是文件系统沙箱。
+
+协议依据：[官方非交互文档](https://code.claude.com/docs/en/headless)、[官方 CLI 参数](https://code.claude.com/docs/en/cli-reference)。验证仅使用临时合成 Python CLI、模拟配置和虚拟显示，不执行已安装的 Claude 或 Codex。

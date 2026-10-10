@@ -24,12 +24,19 @@ def open_speaker_enrollment_wizard(app: TrayApp) -> None:
     Gtk = app._gtk
 
     def _on_gtk_thread() -> bool:
-        dialog = Gtk.Dialog(title="声纹注册向导", transient_for=None, flags=0)
+        existing = getattr(app, "_gtk_speaker_window", None)
+        if existing is not None:
+            existing.present()
+            return False
+        from recordian.native_settings import apply_settings_style, styled
+        dialog = Gtk.Dialog(title="Recordian · 声纹注册", transient_for=getattr(app, "_gtk_settings_window", None), flags=0)
+        app._gtk_speaker_window = dialog
+        apply_settings_style(dialog)
+        dialog.connect("destroy", lambda *_: setattr(app, "_gtk_speaker_window", None))
         dialog.set_modal(True)
         dialog.set_default_size(650, 500)
-        dialog.set_keep_above(True)
         content = dialog.get_content_area()
-        content.set_border_width(12)
+        styled(content, "auxiliary")
 
         # State
         wizard_state: dict[str, object] = {
@@ -44,10 +51,13 @@ def open_speaker_enrollment_wizard(app: TrayApp) -> None:
 
         # UI elements
         title_label = Gtk.Label()
-        title_label.set_markup("<big><b>声纹注册向导</b></big>")
+        title_label.set_text("声纹注册")
+        title_label.set_xalign(0)
+        styled(title_label, "page-title")
         content.pack_start(title_label, False, False, 8)
 
         instruction_label = Gtk.Label()
+        styled(instruction_label, "row-hint")
         instruction_label.set_line_wrap(True)
         instruction_label.set_xalign(0.0)
         content.pack_start(instruction_label, False, False, 8)
@@ -70,7 +80,7 @@ def open_speaker_enrollment_wizard(app: TrayApp) -> None:
 
         status_label = Gtk.Label()
         status_label.set_xalign(0.0)
-        status_label.set_opacity(0.78)
+        styled(status_label, "status")
         content.pack_start(status_label, False, False, 4)
 
         # Progress bar
@@ -82,6 +92,7 @@ def open_speaker_enrollment_wizard(app: TrayApp) -> None:
         button_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         btn_record = Gtk.Button(label="开始录制")
         btn_next = Gtk.Button(label="下一步")
+        styled(btn_next, "primary")
         btn_next.set_sensitive(False)
         btn_cancel = Gtk.Button(label="取消")
         button_box.pack_start(btn_record, False, False, 0)
@@ -108,7 +119,7 @@ def open_speaker_enrollment_wizard(app: TrayApp) -> None:
                 # Sample 3: Varied pitch and emotion, questions and statements
                 "这是最后一段测试录音。声纹识别技术真的很神奇！它能区分不同人的声音特征吗？\n"
                 "当然可以。通过分析音色、音调、语速和发音习惯，系统可以建立独特的声纹模型。\n"
-                "完成注册后，只有我的声音才能激活语音输入功能。"
+                "完成注册后，系统会使用声纹档案验证唤醒声音。"
             ]
 
             if step == 0:
@@ -155,6 +166,10 @@ def open_speaker_enrollment_wizard(app: TrayApp) -> None:
                 btn_next.set_sensitive(True)
 
         def _start_recording(*_args: object) -> None:
+            from recordian.recommended_profile import DICTATION_BUSY_STATUSES
+            if str(getattr(app.state, "status", "")) in DICTATION_BUSY_STATUSES:
+                status_label.set_text("请先结束当前听写，再录制声纹样本。")
+                return
             if wizard_state.get("recording"):
                 return
 
@@ -293,16 +308,18 @@ def open_speaker_enrollment_wizard(app: TrayApp) -> None:
                 dialog.destroy()
                 return
 
+            if step == 3 and not _save_profile():
+                return
             wizard_state["step"] = step + 1
             wizard_state["chunks"] = []
 
-            if wizard_state["step"] == 4:
-                # Save profile
-                _save_profile()
-
             _update_ui()
 
-        def _save_profile() -> None:
+        def _save_profile() -> bool:
+            from recordian.recommended_profile import DICTATION_BUSY_STATUSES
+            if str(getattr(app.state, "status", "")) in DICTATION_BUSY_STATUSES:
+                status_label.set_text("请先结束当前听写，再保存声纹。")
+                return False
             try:
                 import numpy as np
 
@@ -315,7 +332,7 @@ def open_speaker_enrollment_wizard(app: TrayApp) -> None:
                 samples = wizard_state.get("samples", [])
                 if len(cast(list, samples)) < 3:
                     status_label.set_text("样本数量不足")
-                    return
+                    return False
 
                 # Save samples as WAV files
                 sample_paths = []
@@ -347,12 +364,16 @@ def open_speaker_enrollment_wizard(app: TrayApp) -> None:
                     apply_now=True,
                     restart_callback=lambda: app.root.after(0, app.backend.restart),
                 )
+                app._invalidate_config_cache()
+                app._update_tray_menu()
                 status_label.set_text(
                     f"声纹档案已保存: {profile_path}；{effect_status_message(effect, restarted=restarted)}"
                 )
+                return True
 
             except Exception as exc:  # noqa: BLE001
-                status_label.set_text(f"保存失败: {type(exc).__name__}: {exc}")
+                status_label.set_text(f"保存失败: {type(exc).__name__}")
+                return False
 
         def _cancel(*_args: object) -> None:
             if wizard_state.get("recording"):
@@ -364,8 +385,8 @@ def open_speaker_enrollment_wizard(app: TrayApp) -> None:
         btn_cancel.connect("clicked", _cancel)
         dialog.connect("delete-event", lambda *_: (_cancel(), False)[1])  # type: ignore[arg-type,func-returns-value]
 
-        _update_ui()
         dialog.show_all()
+        _update_ui()
         return False
 
     app._glib.idle_add(_on_gtk_thread)

@@ -90,11 +90,13 @@ def _detect_api_format(api_base: str) -> str:
     normalized = api_base.rstrip("/")
     lowered = normalized.lower()
 
-    if ":11434" in lowered:
-        return "ollama"
-
     parsed = urlparse(normalized)
     path = parsed.path.rstrip("/")
+    # An explicit OpenAI path takes precedence over a port heuristic.
+    if path == "/v1" or path.endswith("/v1"):
+        return "openai"
+    if parsed.port == 11434:
+        return "ollama"
     if (
         "groq.com" in lowered
         or "openai.com" in lowered

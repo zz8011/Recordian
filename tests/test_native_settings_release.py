@@ -220,16 +220,16 @@ def test_native_navigation_provider_validation_close_and_restore(tmp_path, monke
     )
     ui = NativeSettingsWindow(app, ConfigManager.load(path))
     ui.controls["sample_rate"][1].set_text("invalid")
-    assert not ui.save_changes() and ui.page_id == "advanced"
+    assert not ui.save_changes() and ui.page_id == "recording"
     assert path.read_bytes() == before
     ui.cancel_changes()
     ui.controls["asr_provider"][1].set_active_id("http-cloud")
     assert ui.asr_rows["ws"].get_visible() and ui.asr_rows["http"].get_visible()
     assert not ui.save_changes() and ui.page_id == "asr"
     ui.cancel_changes()
-    ui.controls["refine_provider"][1].set_active_id("cloud")
+    ui.changed("refine_provider", "cloud")
     assert ui.refine_rows["refine_api_model"].get_visible()
-    assert not ui.refine_rows["refine_model"].get_visible()
+    assert not ui.legacy_refine.get_visible()
     monkeypatch.setattr(Gtk.MessageDialog, "run", lambda _: Gtk.ResponseType.CANCEL)
     assert ui.close_request() is True
     monkeypatch.setattr(Gtk.MessageDialog, "run", lambda _: Gtk.ResponseType.OK)

@@ -144,7 +144,7 @@ def test_late_reply_cannot_apply_after_connection_edit_cancel_close_or_provider_
     elif action == "cancel":
         ui.cancel_changes()
     elif action == "provider":
-        ui.controls["refine_provider"][1].set_active_id("local")
+        ui.changed("refine_provider", "local")
     else:
         ui.window.destroy()
     gate.set()
@@ -152,3 +152,70 @@ def test_late_reply_cannot_apply_after_connection_edit_cancel_close_or_provider_
     pump_until(lambda: not ui.discovery_running)
     combo = ui.controls["refine_api_model"][1]
     assert "stale-fixture" not in [row[0] for row in combo.get_model()]
+
+
+@pytest.mark.parametrize("base", ["http://127.0.0.1:8123", "http://127.0.0.1:11434", "https://example.invalid"])
+def test_discovered_model_saved_and_consumed_by_real_runtime_refiner(ui, monkeypatch, base):
+    from recordian import native_settings, providers, recording_controller
+    from recordian.arg_parser import build_parser
+    from recordian.providers.cloud_llm_refiner import CloudLLMRefiner
+
+    calls = []
+    monkeypatch.setattr(native_settings, "fetch_model_list", lambda endpoint, key, **_: calls.append((endpoint, key)) or ["fixture-instruct"])
+    before = ui.app.config_path.read_bytes()
+    ui.controls["refine_api_base"][1].set_text(base)
+    ui.controls["refine_api_key"][1].set_text("synthetic-key")
+    ui.changed("enable_text_refine", True)
+    ui.discover_button.emit("clicked")
+    pump_until(lambda: bool(calls) and ui.discover_button.get_sensitive())
+    assert calls == [(base, "synthetic-key")]
+    assert ui.draft.values["refine_api_base"] == base + "/v1"
+    assert ui.app.config_path.read_bytes() == before
+    ui.controls["refine_api_model"][1].set_active(0)
+    assert ui.save_changes()
+    saved = ConfigManager.load(ui.app.config_path)
+    assert saved["refine_api_base"] == base + "/v1"
+    assert saved["refine_api_model"] == "fixture-instruct"
+    assert saved["refine_api_key"] == "synthetic-key" and saved["enable_text_refine"] is True
+
+    # Build the actual production handler's refiner, but replace every audio,
+    # ASR, input and HTTP boundary. No handler is invoked and no warmup occurs.
+    args = build_parser().parse_args([])
+    for key, value in saved.items():
+        setattr(args, key, value)
+    args.warmup = False
+    args.enable_auto_lexicon = False
+    args.refine_prompt = "{text}"
+    args.debug_diagnostics = False
+    monkeypatch.setattr(recording_controller, "ensure_ffmpeg_available", lambda: "fixture-ffmpeg")
+    monkeypatch.setattr(recording_controller, "choose_record_backend", lambda *_: "ffmpeg")
+    monkeypatch.setattr(recording_controller, "resolve_committer", lambda *_: SimpleNamespace())
+    monkeypatch.setattr(recording_controller, "create_provider", lambda *_: SimpleNamespace(provider_name="fixture ASR"))
+    constructed = []
+    def real_constructor(**kwargs):
+        result = CloudLLMRefiner(**kwargs)
+        constructed.append(result)
+        return result
+    monkeypatch.setattr(providers, "CloudLLMRefiner", real_constructor)
+    recording_controller.build_ptt_hotkey_handlers(args=args, on_result=lambda *_: None, on_error=lambda *_: None, on_busy=lambda *_: None, on_state=lambda *_: None)
+    refiner = constructed[0]
+    assert refiner.api_format == "openai" and refiner.model == "fixture-instruct"
+    posts = []
+    def post(url, headers, payload):
+        posts.append((url, headers, payload))
+        return SimpleNamespace(status_code=200, json=lambda: {"choices": [{"message": {"content": "优化后的合成示例"}, "finish_reason": "stop"}]})
+    monkeypatch.setattr(refiner, "_post_json", post)
+    assert refiner.refine("合成测试原文") == "优化后的合成示例"
+    assert posts[0][0] == base + "/v1/chat/completions"
+    assert posts[0][1]["Authorization"] == "Bearer synthetic-key"
+    assert posts[0][2]["model"] == "fixture-instruct"
+    assert posts[0][2]["messages"][-1]["content"] == "合成测试原文"
+
+
+def test_failed_discovery_does_not_migrate_endpoint(ui, monkeypatch):
+    from recordian import native_settings
+    monkeypatch.setattr(native_settings, "fetch_model_list", lambda *_args, **_kwargs: [])
+    ui.controls["refine_api_base"][1].set_text("http://example.invalid:8123")
+    ui.discover_button.emit("clicked")
+    pump_until(lambda: ui.discover_button.get_sensitive())
+    assert ui.draft.values["refine_api_base"] == "http://example.invalid:8123"

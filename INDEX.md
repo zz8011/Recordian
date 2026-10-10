@@ -54,7 +54,9 @@
 | `orb_shader.py` | Liquid-glass voice orb GLSL shader (voiceWave preset, ported from LerSent001/orb, MIT) |
 | `backend_manager.py` / `backend_lifecycle.py` | Backend ownership and pipe-bound parent lifetime |
 | `output_mute.py` | Desktop recording output mute and crash recovery; enabled by RECORDIAN_MUTE_OUTPUT |
-| `agent_entry.py` / `agent_panel.py` / `agent_panel.html` | Agent voice routing, Hermes CLI/Gateway sessions, and local task panel |
+| `agent_entry.py` / `agent_panel.py` / `agent_panel.html` | Agent voice routing, Hermes CLI/Gateway and Claude Code CLI sessions, and local task panel |
+| `claude_code_adapter.py` | Claude Code print/JSON protocol, exact UUID resume, bounded output and process cancellation |
+| `desktop_preferences.py` / `settings_catalog.py` | Native desktop preferences persistence and read-only program/device discovery |
 | `agent_response_overlay.py` | Movable and resizable floating Agent replies; explicit close button or timeout dismisses without taking focus |
 | `desktop_control.py` | Compositor control socket, recording toggle and status stream |
 | `local_auth.py` / `http_service.py` / `audio_budget.py` | Private token/TLS, bounded HTTP transport and uploaded-audio validation |
@@ -89,7 +91,7 @@
 - **Hotkey configuration** → `hotkey_dictate.py` + `recordian-hotkey-dictate --help`
 - **Continuous Alt dictation** → `continuous_dictation.py` + `docs/CONTINUOUS-DICTATION.zh-CN.md`
 - **Local streaming ASR server** → `server/confucius_streaming_server.py` + `server/README-confucius.md`
-- **Agent voice entry** → `agent_entry.py` + `docs/AGENT-VOICE.zh-CN.md` (Hermes implemented)
+- **Agent voice entry** → `agent_entry.py` + `docs/AGENT-VOICE.zh-CN.md` (Hermes + Claude Code implemented)
 - **Wake word** → `voice_wake.py`; local setup and validation: `docs/VOICE-WAKE.zh-CN.md`
 - **Config schema** → `runtime_config.py` + `pyproject.toml`
 - **Running the daemon** → `recordian-hotkey-dictate --help`

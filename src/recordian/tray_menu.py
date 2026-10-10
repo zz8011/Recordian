@@ -115,7 +115,7 @@ def build_appindicator_menu(
     Gtk: Any,
     GLib: Any,
 ) -> Any:
-    """Build the AppIndicator3 menu with daily actions and an advanced submenu."""
+    """Build the AppIndicator3 menu with daily actions; configuration lives in settings."""
     del AppIndicator3, GLib  # Kept so existing callers pass the GTK modules.
 
     menu = Gtk.Menu()
@@ -142,32 +142,8 @@ def build_appindicator_menu(
     menu.append(backend_toggle_item)
     app._appindicator_backend_toggle_item = backend_toggle_item
 
-    streaming_item = Gtk.CheckMenuItem(label="边说边出字")
-    streaming_enabled = bool(config.get("enable_streaming_commit", False))
-    _begin_menu_sync(app)
-    try:
-        streaming_item.set_active(streaming_enabled)
-    finally:
-        _end_menu_sync(app)
-
-    def _on_streaming_toggled(item: Any) -> None:
-        if _menu_syncing(app):
-            return
-        if _block_restart_while_busy(app):
-            wanted = bool(app._get_cached_config().get("enable_streaming_commit", False))
-            _queue_check_restore(app, item, wanted)
-            return
-        app.root.after(0, lambda: app.toggle_streaming_commit(bool(item.get_active())))
-
-    streaming_item.connect("toggled", _on_streaming_toggled)
-    menu.append(streaming_item)
-    app._appindicator_streaming_item = streaming_item
-
-    menu.append(Gtk.SeparatorMenuItem())
-
-    context_item = Gtk.MenuItem(label="常用词...")
-    context_item.connect("activate", lambda _: app.root.after(0, app.open_context_editor))
-    menu.append(context_item)
+    app._appindicator_streaming_item = None
+    app._appindicator_voice_wake_item = None
 
     agent_item = Gtk.MenuItem(label="Agent 语音任务...")
 
@@ -191,9 +167,6 @@ def build_appindicator_menu(
 
     menu.append(Gtk.SeparatorMenuItem())
 
-    more_item = Gtk.MenuItem(label="更多")
-    more_submenu = Gtk.Menu()
-
     text_refine_enabled = bool(config.get("enable_text_refine", False))
     text_refine_item = Gtk.CheckMenuItem(label="文字润色")
     _begin_menu_sync(app)
@@ -212,28 +185,8 @@ def build_appindicator_menu(
         app.root.after(0, lambda: app.toggle_text_refine(bool(item.get_active())))
 
     text_refine_item.connect("toggled", _on_refine_toggled)
-    more_submenu.append(text_refine_item)
+    menu.append(text_refine_item)
     app._appindicator_text_refine_item = text_refine_item
-
-    voice_wake_item = Gtk.CheckMenuItem(label="语音唤醒")
-    _begin_menu_sync(app)
-    try:
-        voice_wake_item.set_active(bool(config.get("enable_voice_wake", False)))
-    finally:
-        _end_menu_sync(app)
-
-    def _on_wake_toggled(item: Any) -> None:
-        if _menu_syncing(app):
-            return
-        if _block_restart_while_busy(app):
-            wanted = bool(app._get_cached_config().get("enable_voice_wake", False))
-            _queue_check_restore(app, item, wanted)
-            return
-        app.root.after(0, lambda: app.toggle_voice_wake(bool(item.get_active())))
-
-    voice_wake_item.connect("toggled", _on_wake_toggled)
-    more_submenu.append(voice_wake_item)
-    app._appindicator_voice_wake_item = voice_wake_item
 
     preset_menu_item = Gtk.MenuItem(label="润色风格")
     preset_submenu = Gtk.Menu()
@@ -241,21 +194,8 @@ def build_appindicator_menu(
     app._appindicator_preset_menu_item = preset_menu_item
     preset_menu_item.set_submenu(preset_submenu)
     preset_menu_item.set_sensitive(text_refine_enabled)
-    more_submenu.append(preset_menu_item)
+    menu.append(preset_menu_item)
     refresh_appindicator_preset_submenu(app, Gtk)
-
-    more_submenu.append(Gtk.SeparatorMenuItem())
-
-    speaker_enroll_item = Gtk.MenuItem(label="声纹注册...")
-    speaker_enroll_item.connect("activate", lambda _: app.root.after(0, app.open_speaker_enrollment_wizard))
-    more_submenu.append(speaker_enroll_item)
-
-    diagnostics_item = Gtk.MenuItem(label="诊断...")
-    diagnostics_item.connect("activate", lambda _: app.root.after(0, app.open_diagnostics))
-    more_submenu.append(diagnostics_item)
-
-    more_item.set_submenu(more_submenu)
-    menu.append(more_item)
 
     menu.append(Gtk.SeparatorMenuItem())
 

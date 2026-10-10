@@ -23,6 +23,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .claude_code_adapter import ClaudeCodeAdapter
 from .linux_commit import CommitResult
 
 MAX_TEXT = 60000
@@ -58,11 +59,12 @@ class AgentInstance:
         ident = str(data.get('id', ''))
         if not re.fullmatch(r'[a-z][a-z0-9_-]{0,39}', ident):
             raise ValueError('Agent 标识需为小写英文、数字、横线或下划线')
-        if data.get('kind', 'hermes') != 'hermes':
-            raise ValueError('当前版本已接通 Hermes，其他适配器尚未安装')
+        kind = str(data.get('kind', 'hermes'))
+        if kind not in {'hermes', 'claude'}:
+            raise ValueError('当前版本已接通 Hermes 和 Claude Code，其他适配器尚未安装')
         transport = str(data.get('transport', 'cli'))
-        if transport not in {'cli', 'gateway'}:
-            raise ValueError('Hermes 连接方式无效')
+        if transport not in {'cli', 'gateway'} or (kind != 'hermes' and transport != 'cli'):
+            raise ValueError('此 Agent 没有该连接方式；Gateway 仅用于 Hermes')
         api_url = str(data.get('api_url', '')).rstrip('/')
         if transport == 'gateway':
             parsed = urllib.parse.urlparse(api_url)
@@ -73,8 +75,10 @@ class AgentInstance:
         if not workspace.is_absolute() or not workspace.is_dir():
             raise ValueError('请选择存在的绝对工作目录')
         if not executable.is_absolute() or not executable.is_file() or not os.access(executable, os.X_OK):
-            raise ValueError('Hermes 启动程序不存在或不能执行')
+            raise ValueError('Agent 启动程序不存在或不能执行')
         home = str(data.get('home', '')).strip()
+        if kind == 'claude' and (home or api_url):
+            raise ValueError('Claude Code 使用其自身 CLI 配置，不使用 Hermes profile 或 Gateway 地址')
         if home:
             hp = Path(home).expanduser()
             if not hp.is_absolute() or not hp.is_dir():
@@ -82,7 +86,7 @@ class AgentInstance:
             home = str(hp.resolve())
         if transport == 'gateway' and (not home or not (Path(home) / '.env').is_file()):
             raise ValueError('Gateway 需要包含 .env 的 Hermes profile 目录')
-        return cls(ident, str(data.get('name', ident))[:80], 'hermes', str(executable.resolve()),
+        return cls(ident, str(data.get('name', ident))[:80], kind, str(executable.resolve()),
                    str(workspace.resolve()), home, max(30, min(7200, int(data.get('timeout_s', 1800)))),
                    transport, api_url)
 
@@ -335,7 +339,7 @@ class HermesGatewayAdapter:
             stop_stream.set()
 
 
-ADAPTERS = {'hermes': HermesAdapter, 'hermes-gateway': HermesGatewayAdapter}
+ADAPTERS = {'hermes': HermesAdapter, 'hermes-gateway': HermesGatewayAdapter, 'claude': ClaudeCodeAdapter}
 
 
 class AgentTranscript:
@@ -411,6 +415,8 @@ class AgentHub:
         self.wake_to_agent = True
         raw = json.loads(config_path.read_text())
         self.instances = {a.id: a for a in map(AgentInstance.parse, raw.get('instances', []))}
+        self._profile_revision = self._profile_stat()
+        self._profile_error = False
         if not self.instances:
             raise ValueError('尚未配置 Agent 实例')
         self.selected = raw.get('default_agent') or next(iter(self.instances))
@@ -448,8 +454,44 @@ class AgentHub:
         if instance is None:
             return None
         scope = [instance.executable, instance.workspace, instance.home]
+        if instance.kind != 'hermes':
+            scope.insert(0, instance.kind)
         # Preserve existing CLI session associations across this upgrade.
         return scope if instance.transport == 'cli' else scope + [instance.transport, instance.api_url]
+
+    def _profile_stat(self):
+        stat = self.config_path.stat()
+        return stat.st_mtime_ns, stat.st_size, stat.st_ino
+
+    def _refresh_instances(self):
+        # Existing work pins its instance. Apply settings only at an idle
+        # capture/submission boundary; no task is cancelled or replayed.
+        if self.capture is not None or self.cancels:
+            return
+        try:
+            revision = self._profile_stat()
+            if revision == self._profile_revision and not self._profile_error:
+                return
+            with self.config_path.open('rb') as source:
+                raw_bytes = source.read(1024 * 1024 + 1)
+            if len(raw_bytes) > 1024 * 1024:
+                raise ValueError('Agent 配置过大')
+            raw = json.loads(raw_bytes)
+            instances = {a.id: a for a in map(AgentInstance.parse, raw.get('instances', []))}
+            selected = raw.get('default_agent')
+            if not instances or selected not in instances:
+                raise ValueError('Agent 默认实例无效')
+        except (OSError, ValueError, TypeError, AttributeError):
+            self._profile_error = True
+            self.enabled = False
+            self.notice = 'Agent 配置无效；任务不会执行，请检查设置。'
+            return
+        previous = {key: self._scope(key) for key in self.instances}
+        self.instances, self.selected = instances, selected
+        self.sessions = {key: session for key, session in self.sessions.items()
+                         if previous.get(key) == self._scope(key) and key in instances}
+        self._profile_revision, self._profile_error = revision, False
+        self._save()
 
     def _refresh_preferences(self):
         # Read at capture/submission boundaries and when showing settings.
@@ -459,8 +501,12 @@ class AgentHub:
             self.enabled = data.get('enable_agent', True) is True
             self.wake_to_agent = data.get('wake_to_agent', True) is True
         except FileNotFoundError:
-            pass
+            self.enabled = True
+            self.wake_to_agent = True
         except (OSError, ValueError, AttributeError):
+            self.enabled = False
+        self._refresh_instances()
+        if self._profile_error:
             self.enabled = False
 
     def set_preferences(self, data):
@@ -598,7 +644,7 @@ class AgentHub:
             if agent_id not in self.instances or agent_id in self.cancels:
                 raise ValueError('Agent 不存在或仍在执行上一项任务')
             task = {'id': uuid.uuid4().hex, 'agent_id': agent_id, 'prompt': text, 'status': 'running',
-                    'reply': '', 'error': '', 'activity': '正在连接 Hermes', 'created': time.time(),
+                    'reply': '', 'error': '', 'activity': '正在连接 ' + self.instances[agent_id].name, 'created': time.time(),
                     'session_id': self.sessions.get(agent_id, ''), 'request_id': request_id or uuid.uuid4().hex}
             cancel = threading.Event()
             self.tasks.append(task)

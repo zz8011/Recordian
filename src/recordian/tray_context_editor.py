@@ -44,20 +44,23 @@ def open_context_editor(app: TrayApp) -> None:
 
         # 创建窗口
         win = Gtk.Window(title="常用词管理")
-        win.set_default_size(600, 400)
+        win.set_default_size(780, 680)
         win.set_position(Gtk.WindowPosition.CENTER)
-        win.set_keep_above(True)
+        from recordian.native_settings import apply_settings_style, styled
+        apply_settings_style(win)
+        win.set_transient_for(getattr(app, "_gtk_settings_window", None))
         app._gtk_context_window = win
 
         # 主容器
         root_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
-        root_box.set_border_width(12)
+        styled(root_box, "auxiliary")
         win.add(root_box)
 
         # 标题
         title_label = Gtk.Label()
         title_label.set_xalign(0.0)
-        title_label.set_markup("<b>常用词管理</b>")
+        title_label.set_text("自动词库与常用词")
+        styled(title_label, "page-title")
         root_box.pack_start(title_label, False, False, 0)
 
         # 说明

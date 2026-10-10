@@ -390,19 +390,18 @@ def test_menu_refresh_does_not_mutate_or_restart(tmp_path: Path) -> None:
     labels = _menu_labels(menu)
     assert "开始听写" not in labels
     assert any(label == "暂停听写" for label in labels)
-    assert "边说边出字" in labels
-    assert "常用词..." in labels
+    assert "边说边出字" not in labels
+    assert "常用词..." not in labels
     assert "设置..." in labels
     assert "复制上次文字" in labels
-    assert "文字润色" not in labels
+    assert "文字润色" in labels
     assert "语音唤醒" not in labels
     assert app._appindicator_status_item.get_label() == "就绪 · 按住 右 Ctrl 说话"
 
-    more = next(child for child in menu.get_children() if getattr(child, "get_label", lambda: "")() == "更多")
-    more_labels = _menu_labels(more.get_submenu())
-    assert "文字润色" in more_labels
-    assert "语音唤醒" in more_labels
-    assert "润色风格" in more_labels
+    assert "更多" not in labels
+    assert "润色风格" in labels
+    assert "声纹注册..." not in labels
+    assert "诊断..." not in labels
     assert app._appindicator_preset_menu_item.get_sensitive()
 
     app._config["enable_text_refine"] = False
@@ -424,9 +423,9 @@ def test_menu_refresh_does_not_mutate_or_restart(tmp_path: Path) -> None:
     _pump(glib)
     assert app.calls == []
     assert app.backend.restart_calls == 0
-    assert app._appindicator_streaming_item.get_active()
+    assert app._appindicator_streaming_item is None
     assert not app._appindicator_text_refine_item.get_active()
-    assert app._appindicator_voice_wake_item.get_active()
+    assert app._appindicator_voice_wake_item is None
     assert not app._appindicator_preset_menu_item.get_sensitive()
 
     app._config["enable_text_refine"] = True
@@ -750,20 +749,20 @@ def test_save_and_menu_do_not_restart_while_dictating(tmp_path: Path) -> None:
     try:
         app.state.status = "recording"
         app.calls.clear()
-        app._appindicator_streaming_item.set_active(True)
+        app._appindicator_text_refine_item.set_active(True)
         _pump(glib)
         assert app.calls == []
         assert app.backend.restart_calls == 0
-        assert not app._appindicator_streaming_item.get_active()
+        assert not app._appindicator_text_refine_item.get_active()
         assert any("请先结束当前听写" in str(item.get("message", "")) for item in app.events.items)
 
         app.events.items.clear()
         app.state.status = "busy"
-        app._appindicator_streaming_item.set_active(True)
+        app._appindicator_text_refine_item.set_active(True)
         _pump(glib)
         assert app.calls == []
         assert app.backend.restart_calls == 0
-        assert not app._appindicator_streaming_item.get_active()
+        assert not app._appindicator_text_refine_item.get_active()
         assert any("请先结束当前听写" in str(item.get("message", "")) for item in app.events.items)
     finally:
         menu.destroy()
