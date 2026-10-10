@@ -68,6 +68,21 @@ def test_native_conversion_matches_python_on_random_samples(native, monkeypatch)
     assert got == f32le_to_pcm16le(raw)
 
 
+def test_float32_to_pcm16le_is_byte_identical_on_native_and_python_paths(native, monkeypatch):
+    from recordian.providers.confucius_asr import f32le_to_pcm16le
+
+    # 舍入边界（±0.5 LSB）、削波、非有限值与随机样本一起比较，三条路径必须逐字节一致。
+    edges = [0.0, 0.5 / 32767, -0.5 / 32767, 1.5 / 32767, -1.5 / 32767, 0.5, -0.5, 1.0, -1.0, 1.2, -1.2, math.nan, math.inf, -math.inf]
+    samples = np.concatenate(
+        [np.array(edges, dtype="<f4"), np.random.default_rng(11).uniform(-1.1, 1.1, 10001).astype("<f4")]
+    )
+    got = native.float32_to_pcm16le(samples)
+    monkeypatch.setenv("RECORDIAN_NATIVE_CORE", "python")
+    assert native.float32_to_pcm16le(samples) == got
+    assert got == f32le_to_pcm16le(samples.tobytes())
+    assert native.float32_to_pcm16le(np.empty(0, dtype="<f4")) == b""
+
+
 def test_python_buffer_fallback_is_bounded_and_equivalent(monkeypatch):
     from recordian.native_core import PcmBuffer
 

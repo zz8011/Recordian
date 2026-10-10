@@ -90,6 +90,27 @@ def convert_audio(raw: bytes) -> tuple[bytes, float] | None:
     return ctypes.string_at(buffer, size), level.value
 
 
+def float32_to_pcm16le(samples: Any) -> bytes:
+    """float32 → PCM16 LE，与 ``f32le_to_pcm16le`` 同一约定：削波到 [-1, 1]、NaN 记为 0、四舍五入（远离零）。
+
+    优先走原生；原生不可用时用 numpy 按同一公式计算，两条路径逐字节一致。
+    """
+    import numpy as np
+
+    data = np.ascontiguousarray(samples, dtype="<f4").reshape(-1)
+    if data.size == 0:
+        return b""
+    native = convert_audio(data.tobytes())
+    if native is not None:
+        return native[0]
+    # 先升到 float64 再乘 32767，与 Rust 的 f64 计算保持同一舍入位置。
+    values = np.clip(data.astype(np.float64), -1.0, 1.0)
+    values = np.where(np.isnan(values), 0.0, values)
+    scaled = values * 32767.0
+    rounded = np.where(scaled >= 0.0, np.floor(scaled + 0.5), np.ceil(scaled - 0.5))
+    return rounded.astype("<i2").tobytes()
+
+
 def audio_rms(raw: bytes) -> float | None:
     library = load_library()
     if library is None:

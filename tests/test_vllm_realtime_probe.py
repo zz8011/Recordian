@@ -25,7 +25,8 @@ def test_normalize_realtime_url_appends_path_and_upgrades_scheme() -> None:
 def test_float_to_pcm16le_and_append_event_roundtrip() -> None:
     samples = np.array([0.0, 0.5, -1.0], dtype=np.float32)
     pcm = _float_to_pcm16le(samples)
-    assert pcm == b"\x00\x00\xff?\x01\x80"
+    # 与 ASR / 唤醒路径一致：0.5 × 32767 = 16383.5 四舍五入为 16384（0x4000）。
+    assert pcm == b"\x00\x00\x00@\x01\x80"
 
     event = _build_append_event(samples)
     assert event["type"] == "input_audio_buffer.append"

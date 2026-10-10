@@ -707,6 +707,12 @@ def send_hard_enter(committer: TextCommitter) -> CommitResult:
                 detail += f" focus_before:{focused_before}"
             return CommitResult(backend=backend, committed=True, detail=detail)
 
+        # Wayland 原生窗口不接收 X 服务器（XTEST）按键，pynput 会报告成功却送不到编辑器，
+        # 因此 Wayland 会话优先用 wtype；pynput 只作为无 wtype 时的 XWayland 兜底。
+        if _is_wayland_session() and which("wtype"):
+            _run_command(["wtype", "-k", "Return"])
+            return CommitResult(backend=backend, committed=True, detail="hard_enter_sent:wayland-fallback")
+
         # Fall back to a global physical-like keypress only when backend-specific
         # injection is unavailable. This avoids focus/race issues after paste.
         if _send_hard_enter_via_pynput():
@@ -774,6 +780,10 @@ def _extract_window_id_from_detail(detail: str) -> int | None:
             except ValueError:
                 return None
     return None
+
+
+def _is_wayland_session() -> bool:
+    return os.environ.get("XDG_SESSION_TYPE") == "wayland" or bool(os.environ.get("WAYLAND_DISPLAY"))
 
 
 def _send_hard_enter_via_pynput() -> bool:
@@ -1264,7 +1274,8 @@ def _is_electron_window(window_id: int) -> bool:
         True if the window is an Electron app, False otherwise
 
     Note:
-        - Returns False on Wayland sessions (xprop unavailable)
+        - Returns False when no X display is available (DISPLAY unset)
+        - Native Wayland windows are not X windows; XWayland windows are checked
         - Returns False if xprop is not installed
         - Returns False on timeout or error (fail-safe)
         - Uses LRU cache with 5s TTL and 100 entry limit
@@ -1278,8 +1289,8 @@ def _is_electron_window(window_id: int) -> bool:
         # Cache expired, remove it
         del _WINDOW_DETECTION_CACHE[window_id]
 
-    # Check if running on Wayland (xprop doesn't work)
-    if os.environ.get("XDG_SESSION_TYPE") == "wayland":
+    # 没有 X 显示时无法读取 WM_CLASS；XWayland 窗口在 Wayland 会话中同样可以被 xprop 查询。
+    if not os.environ.get("DISPLAY"):
         result = False
         _WINDOW_DETECTION_CACHE[window_id] = (result, current_time)
         return result

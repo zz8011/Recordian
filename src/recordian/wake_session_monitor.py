@@ -25,14 +25,9 @@ def _vad_frame_bytes(sample_rate: int, frame_ms: int) -> int:
 
 
 def _float_to_pcm16le(samples: Any) -> bytes:
-    import numpy as np
+    from .native_core import float32_to_pcm16le
 
-    data = np.asarray(samples, dtype=np.float32)
-    if data.size == 0:
-        return b""
-    clipped = np.clip(data, -1.0, 1.0)
-    pcm = (clipped * 32767.0).astype(np.int16)
-    return pcm.tobytes()
+    return float32_to_pcm16le(samples)
 
 
 def _resample_audio_for_vad(samples: Any, *, src_rate: int, dst_rate: int) -> Any:

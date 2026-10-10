@@ -738,8 +738,9 @@ class VoiceWakeService:
                 cpu_process = None
 
         def _to_pcm16le(chunk: object) -> bytes:
-            clipped = np.clip(np.asarray(chunk, dtype=np.float32), -1.0, 1.0)
-            return (clipped * 32767.0).astype(np.int16, copy=False).tobytes()
+            from .native_core import float32_to_pcm16le
+
+            return float32_to_pcm16le(chunk)
 
         try:
             with sd.InputStream(

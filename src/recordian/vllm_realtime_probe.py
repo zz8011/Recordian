@@ -104,9 +104,9 @@ def _compute_websocket_accept(key: str) -> str:
 
 
 def _float_to_pcm16le(samples: np.ndarray) -> bytes:
-    clipped = np.clip(samples, -1.0, 1.0)
-    pcm = (clipped * 32767.0).astype("<i2", copy=False)
-    return cast(bytes, pcm.tobytes())
+    from .native_core import float32_to_pcm16le
+
+    return cast(bytes, float32_to_pcm16le(samples))
 
 
 def _build_append_event(samples: np.ndarray) -> dict[str, object]:
