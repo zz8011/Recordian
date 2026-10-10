@@ -1,6 +1,6 @@
 # Rust runtime delivery plan
 
-Implement inline with independent workers for the persistent D-Bus adapter and server buffer integration. The parent owns the Rust audio ABI, Python loader, packaging, final review, remote merge and deployment. Track execution in beads; this document records implementation and acceptance design.
+Implement inline with independent workers for the persistent D-Bus adapter and server buffer integration. The parent owns the Rust audio ABI, Python loader, packaging, final review, remote merge and deployment. This document records implementation and acceptance design.
 
 The production crate is `native/recordian-core`, exposing a versioned C ABI. Tests precede implementation for audio edge equivalence, raw RMS, PCM decoding and bounded buffering. `src/recordian/native_core.py` loads the installed package library and reports selected backend; audio callers retain their pure Python fallback. Build/release tooling installs the library atomically and packaging includes it in platform-specific wheels.
 

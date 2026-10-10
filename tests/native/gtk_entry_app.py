@@ -93,8 +93,8 @@ def main() -> int:
     window.show_all()
 
     # Exit when the driver closes stdin (kept open for the process lifetime).
-    # "SET <text>" line = programmatic GtkEntry.set_text(). NOTE (measured,
-    # Recordian-22t): GTK3 set_text does NOT emit InputContext1.Reset on the
+    # "SET <text>" line = programmatic GtkEntry.set_text(). NOTE (measured):
+    # GTK3 set_text does NOT emit InputContext1.Reset on the
     # fcitx D-Bus protocol (only SetCursorRect) — s7 stays a LIMITATION.
     channel = GLib.IOChannel.unix_new(0)
 
