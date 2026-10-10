@@ -80,7 +80,7 @@
  * goes through the session bound at Begin time (or a strictly focused
  * CommitText), superseded/stale/foreign sessions are refused rather than
  * rolled back everywhere. Universal preedit rollback is a known platform
- * limitation (Recordian-22t).
+ * limitation.
  *
  * ERROR PROTOCOL: every MethodCallError message embeds its full DBus error
  * name in parentheses ("... (org.fcitx.Fcitx.Recordian.Error.StaleSession)").

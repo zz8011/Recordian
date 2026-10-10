@@ -10,7 +10,7 @@
 
 ## 任务完成情况
 
-### ✅ Recordian-ge3.1: 修复资源泄漏问题
+### ✅ 修复资源泄漏问题
 **交付成果**:
 - 音频流资源管理（PyAudio 流正确关闭）
 - 线程池清理（ThreadPoolExecutor 正确关闭）
@@ -24,7 +24,7 @@
 
 ---
 
-### ✅ Recordian-ge3.2: 修复线程安全问题
+### ✅ 修复线程安全问题
 **交付成果**:
 - 识别并发问题（PresetManager, ConfigManager, BackendManager）
 - 添加线程锁保护共享资源（threading.Lock）
@@ -39,7 +39,7 @@
 
 ---
 
-### ✅ Recordian-ge3.3: 建立 CI/CD 流水线
+### ✅ 建立 CI/CD 流水线
 **交付成果**:
 - 创建 GitHub Actions 工作流
 - 多 Python 版本测试 (3.10, 3.11, 3.12)
@@ -53,7 +53,7 @@
 
 ---
 
-### ✅ Recordian-ge3.4: 集成错误追踪系统
+### ✅ 集成错误追踪系统
 **交付成果**:
 - 创建 error_tracker.py 模块
 - 集成 Sentry SDK
@@ -76,7 +76,7 @@
 
 ---
 
-### ✅ Recordian-ge3.5: 补充关键路径测试
+### ✅ 补充关键路径测试
 **交付成果**:
 - ASR 识别集成测试 (10+ 用例)
 - 文本精炼集成测试 (20+ 用例)

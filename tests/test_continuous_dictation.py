@@ -1178,7 +1178,7 @@ class _RoleJudgeSession:
 def test_segment_with_twin_software_clauses_commits_jev_at_the_real_boundary(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Recordian-7bv at the real commit boundary: the 31 s fixture shape has
+    """At the real commit boundary: the 31 s fixture shape has
     two identical software clauses in one segment. The old global uniqueness
     filter sent zero requests and committed raw "jeff" twice; one
     clause-scoped verdict must now cover both spans before commit."""

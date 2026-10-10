@@ -1,6 +1,6 @@
 # Recordian 流式输入法验证记录
 
-验证日期：2026-09-24。目标平台为当前 Linux/Fcitx5 环境，用户优先场景为中文夹英文，以及浏览器、微信、编辑器。此文件记录可复查的实现与运行证据；任务状态以 beads 为准。
+验证日期：2026-09-24。目标平台为当前 Linux/Fcitx5 环境，用户优先场景为中文夹英文，以及浏览器、微信、编辑器。此文件记录可复查的实现与运行证据。
 
 ## 本轮实现与分工
 
@@ -28,7 +28,7 @@
 - Cursor 3.18.9：实际编辑区，通过已知种子文件、窗口标题和读回值先确认焦点，之后经真实输入法通道提交混合文本，最终逐字相等。
 - 微信：本轮未验证，不能用 Chrome 或 Cursor 结果替代。
 
-必须保留两个平台限制。GTK 在失焦或鼠标点击时可能自行把客户端预编辑写入正文；这不是 addon 再次调用 CommitSession。GtkEntry.set_text 的程序化改写实测未发送 Reset/SurroundingText 更新，addon 无法可靠观察该变化。两项均记录在 `Recordian-22t`；测试结果显式标记 LIMITATION/INFO，不改写成 PASS。当前不承诺所有应用都能撤回工具包自行提交的草稿。120 秒 inactivity TTL 的服务端清理经源码审阅，未进行真实等待 120 秒的原生计时验收。
+必须保留两个平台限制。GTK 在失焦或鼠标点击时可能自行把客户端预编辑写入正文；这不是 addon 再次调用 CommitSession。GtkEntry.set_text 的程序化改写实测未发送 Reset/SurroundingText 更新，addon 无法可靠观察该变化。两项均属于已知平台限制；测试结果显式标记 LIMITATION/INFO，不改写成 PASS。当前不承诺所有应用都能撤回工具包自行提交的草稿。120 秒 inactivity TTL 的服务端清理经源码审阅，未进行真实等待 120 秒的原生计时验收。
 
 ## 交叉审查与反例
 
@@ -67,7 +67,7 @@ Grok 使用真实 loopback 复现并复查 ASR 结束判定。普通 reset 后�
 
 官方6.74秒中文公开样本按真实时间配速输入，最终冻结产品服务（`kimi-packaging-r4.report.md`，auto语言）测得首个稳定增量1.677秒、EOS后49毫秒、14条增量，最终reset+close1000通过客户端合同。较早的Chinese语言产品测试为1.683秒/52毫秒；原型、上游、不同语言和不同版本结果分别记录，不能混成一个性能样本。首个可见结果 p95 ≤800 毫秒仍是优化目标；单个中文样本不证明 p95、噪声条件或中英混输准确率。
 
-当前服务每次音频明确限制 30 秒，超限报错；长篇听写需松键分段，自动分段另记 `Recordian-dfs`。取消不能杀死已经执行的模型线程，服务必须等真实推理返回后才释放单模型占用；这与承诺任意挂死推理都能限时回收不同。
+当前服务每次音频明确限制 30 秒，超限报错；长篇听写需松键分段，自动分段不在本次验收范围内。取消不能杀死已经执行的模型线程，服务必须等真实推理返回后才释放单模型占用；这与承诺任意挂死推理都能限时回收不同。
 
 [Qwen3-ASR](https://github.com/QwenLM/Qwen3-ASR)、[FunASR 两遍识别](https://github.com/modelscope/FunASR/blob/main/runtime/quick_start.md) 和 [sherpa-onnx 解码热词偏置](https://k2-fsa.github.io/sherpa/onnx/hotwords/index.html) 是后续同语料比较路线。当前没有证据证明替换其中任何一个就一定比本机 Confucius 更快或更准。
 
@@ -75,7 +75,7 @@ Grok 使用真实 loopback 复现并复查 ASR 结束判定。普通 reset 后�
 
 确定性显式替换和英文名称规范化覆盖 9/9 控制例。SemIf 使用 192.168.5.111:42032 的现有服务，实际 health 为 semif-qwen35-4b / semif-direct-options-v1。同一组 12 句中，5 句应改、7 句应留；裸词候选修对 0/5，加入完整候选句后修对 2/5，误改均 0/7。样本很小，不能推广为生产准确率。
 
-因此 SemIf 默认关闭，最高概率至少0.70、领先至少0.20只是保守判定门槛。超时默认120ms、上限350ms，一次快照最多8个选项、词表最多64项、最多一个在途请求加一个最新请求。缓存有界且取消后失效。自动学习只有 user_confirmed 来源计为确认；ASR/refined/corrected 只累计观察次数。详情见 [热词策略](HOTWORD-POLICY.md)。质量语料和延迟分位数工作保留为 `Recordian-cie`。
+因此 SemIf 默认关闭，最高概率至少0.70、领先至少0.20只是保守判定门槛。超时默认120ms、上限350ms，一次快照最多8个选项、词表最多64项、最多一个在途请求加一个最新请求。缓存有界且取消后失效。自动学习只有 user_confirmed 来源计为确认；ASR/refined/corrected 只累计观察次数。详情见 [热词策略](HOTWORD-POLICY.md)。质量语料和延迟分位数工作尚未完成。
 
 ## 最终仓库检查与版本边界
 
@@ -89,7 +89,7 @@ Grok 使用真实 loopback 复现并复查 ASR 结束判定。普通 reset 后�
 
 类型整理补充了动态调用和候选跨度的类型边界，将两处保序去重推导式改成等价循环，并显式标注close code。协调者审阅了这些局部差异，未发现业务行为改变。其后全量回归复验通过；没有重跑GPU性能测量，真实模型/输入框的测量证据仍明确对应R4/R8版本。服务端与C++源码在这一轮没有变化。
 
-当前mypy仍报告10项，不能写成类型检查全通过：缺少requests类型存根3处（含新SemIf导入处）、Gtk动态类型名称6处、旧绘图字体参数1处。CI对mypy配置为continue-on-error。类型报告的临时目录基线没有携带同一份pyproject配置，因此9/10的基线差异不作为最终增量判定依据；最终结论采用当前逐条原始输出。剩余质量工作记录为 `Recordian-ded`。
+当前mypy仍报告10项，不能写成类型检查全通过：缺少requests类型存根3处（含新SemIf导入处）、Gtk动态类型名称6处、旧绘图字体参数1处。CI对mypy配置为continue-on-error。类型报告的临时目录基线没有携带同一份pyproject配置，因此9/10的基线差异不作为最终增量判定依据；最终结论采用当前逐条原始输出。剩余质量工作尚未完成。
 
 过程中曾发现一个开发CLI把共享editable导入指向候选树；协调者已恢复源项目映射，并将后续验证切换到独立环境。最终日志记录了私有环境路径和实际导入文件；没有用环境名来代替隔离验证。相关审计保留在运行目录的 `environment-isolation-audit.json`、`environment-restore.log`。
 
@@ -116,7 +116,7 @@ Grok 使用真实 loopback 复现并复查 ASR 结束判定。普通 reset 后�
 - 原生插件构建、安装和回滚：[fcitx/recordian-commit/README.md](../fcitx/recordian-commit/README.md)。
 - 配置样例：[hotkey.confucius-asr.local.json](../examples/hotkey.confucius-asr.local.json)。样例显式设置 `qwen_language="auto"`、右Ctrl按住说话、右Alt切换录音、自动回车关闭。热键入口是 `recordian-hotkey-dictate --config-path <私有配置>`，不是 `recordian --config-path`。
 - 本机原始 CLI 报告、日志、公开样本和模型运行数据在 `/home/zz8011/文档/Develop/Recordian-control/.runs/20260924-streaming/`。认证值和模型权重不纳入 git。
-- 本轮尚未安装到用户日常 Fcitx 会话，也没有启动常驻麦克风或输入守护进程；桌面激活与微信体验验收保留为 `Recordian-91k`。
+- 本轮尚未安装到用户日常 Fcitx 会话，也没有启动常驻麦克风或输入守护进程；桌面激活与微信体验验收尚未完成。
 
 ## 当前机器的运行入口
 

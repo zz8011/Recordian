@@ -28,7 +28,7 @@
 - **验收**: 切换语音唤醒后收到桌面通知
 
 #### R4: 语音唤醒页瘦身 + 移除死代码 UX (#5)
-- **现状**: 语音唤醒 Tab ~40 字段；semantic gate 系列 6 字段在 bd 审查中标记"应移除"
+- **现状**: 语音唤醒 Tab ~40 字段；semantic gate 系列 6 字段在审查中标记"应移除"
 - **修复**:
   - 模型路径（Encoder/Decoder/Joiner/Tokens）移入"高级调优"section
   - semantic gate 字段（wake_use_semantic_gate + 5 子字段）从设置面板**隐藏**，但保留在 save payload 中向后兼容
@@ -84,7 +84,7 @@
 - 仅修改 `src/recordian/tray_gui.py` 和 `tests/test_tray_gui.py`
 - 不修改 backend 核心逻辑（hotkey_dictate.py 等）
 - 保持四门全绿（pytest / ruff / mypy / compileall）
-- tray_gui.py 当前 3635 行，本次不拆分文件（拆分计划已记录在 bd issue Recordian-8ff）
+- tray_gui.py 当前 3635 行，本次不拆分文件。
 - 所有 UI 文本为中文
 - 不硬编码 API key、路径等
 
