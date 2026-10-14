@@ -80,6 +80,7 @@ def run_continuous_dictation(
     from .linux_commit import paste_to_enter_delay_seconds, send_hard_enter
 
     worker.continuous = True
+    backend_name = str(getattr(session, "backend_name", "fcitx"))
     bps = 4 * max(1, int(channels))
     rate = max(1, int(sample_rate))
     held_raw = ""
@@ -137,7 +138,7 @@ def run_continuous_dictation(
         worker.outcome = outcome
         prefix_kept = int(getattr(worker, "segments_committed", 0) or 0) > 0
         worker.commit_info = {
-            "backend": "fcitx",
+            "backend": backend_name,
             "committed": prefix_kept,
             "detail": reason if not prefix_kept else f"continuous_prefix_kept;{reason}",
             "outcome": outcome,
@@ -449,7 +450,7 @@ def run_continuous_dictation(
             worker.composition_session = session
             worker.outcome = "released_for_refine"
             worker.commit_info = {
-                "backend": "fcitx",
+                "backend": backend_name,
                 "committed": False,
                 "detail": "realtime_preedit_released_for_refine",
                 "outcome": "released_for_refine",
@@ -464,7 +465,7 @@ def run_continuous_dictation(
             if int(worker.segments_committed) > 0:
                 worker.outcome = "committed"
                 worker.commit_info = {
-                    "backend": "fcitx",
+                    "backend": backend_name,
                     "committed": True,
                     "detail": "continuous_tail_empty",
                     "outcome": "committed",
@@ -473,7 +474,7 @@ def run_continuous_dictation(
             else:
                 worker.outcome = "cancelled"
                 worker.commit_info = {
-                    "backend": "fcitx",
+                    "backend": backend_name,
                     "committed": False,
                     "detail": "realtime_empty_final",
                     "outcome": "cancelled",
@@ -509,7 +510,7 @@ def run_continuous_dictation(
             detail = "continuous_final;continuous_refine_suppressed"
         worker.outcome = "committed"
         worker.commit_info = {
-            "backend": "fcitx",
+            "backend": backend_name,
             "committed": True,
             "detail": detail,
             "outcome": "committed",

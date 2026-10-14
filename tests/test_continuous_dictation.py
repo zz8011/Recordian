@@ -1401,3 +1401,52 @@ def test_short_read_trailing_partial_frame_is_dropped_not_padded() -> None:
     assert h.session.commits == []
     assert h.worker.outcome == "cancelled"
     assert h.fatals == []
+
+
+@pytest.mark.parametrize("refine_enabled", [False, True])
+def test_wayland_clipboard_worker_rotates_65_seconds_and_pastes_once(monkeypatch, refine_enabled):
+    """Missing buffered capability used to keep one socket and stop at 25s."""
+    from pathlib import Path
+
+    from recordian import realtime_asr
+    from recordian import wayland_desktop as desktop
+    from recordian.providers.base import ASRProviderCapabilities
+
+    reader = _Reader(_speech(65))
+    provider = _FakeProvider(["开头。", "中间。", "结尾。"])
+    provider.capabilities = ASRProviderCapabilities(supports_realtime=True)
+    monkeypatch.setattr(realtime_asr, "open_monitor_stream_reader", lambda _: reader)
+    monkeypatch.setattr(desktop, "desktop_query", lambda _: {"address": "target"})
+    calls = []
+    monkeypatch.setattr(desktop.subprocess, "run", lambda cmd, **kw: calls.append((cmd, kw)))
+    args = argparse.Namespace(**vars(_CORRECTOR_ARGS), enable_streaming_commit=True)
+    worker = realtime_asr._start_realtime_asr_worker(
+        args=args, provider=provider,
+        record_handle=SimpleNamespace(monitor_sample_rate=RATE, monitor_channels=1),
+        committer=desktop.WaylandClipboardCommitter("target"),
+        enable_local_commit=True, auto_hard_enter=False, resolve_hotwords=lambda: [],
+        normalize_final_text=_normalize_final_text, on_state=lambda _: None,
+        refine_enabled=refine_enabled,
+    )
+    assert worker is not None
+    worker.thread.join(timeout=5)
+    try:
+        assert not worker.thread.is_alive()
+        assert worker.continuous
+        assert [s.samples for s in provider.sessions] == [384000, 384000, 272000]
+        assert reader.bytes_read == 4160000
+        assert worker.error == ""
+        if refine_enabled:
+            assert worker.outcome == "released_for_refine"
+            assert calls == []
+            assert worker.final_text == "开头。中间。结尾。"
+            assert worker.composition_session.commit(worker.final_text).committed
+        else:
+            assert worker.outcome == "committed"
+        assert worker.commit_info["backend"] == "wayland-clipboard"
+        assert worker.segments_committed == 0
+        assert calls[0][1]["input"] == "开头。中间。结尾。"
+        assert len(calls) == 2
+    finally:
+        if worker.transcript_path:
+            Path(worker.transcript_path).unlink(missing_ok=True)

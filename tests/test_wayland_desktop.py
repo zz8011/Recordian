@@ -80,6 +80,66 @@ def test_clipboard_paste_preserves_chinese_and_never_sends_enter(monkeypatch):
     assert calls[1][0] == ["wtype", "-M", "ctrl", "-k", "v", "-m", "ctrl"]
 
 
+def test_buffered_session_pastes_only_final_text_once(monkeypatch):
+    from recordian.linux_commit import open_composition_session
+
+    monkeypatch.setattr(desktop, "desktop_query", lambda _: {"address": "target"})
+    monkeypatch.setattr(desktop.time, "sleep", lambda _: None)
+    calls = []
+    monkeypatch.setattr(desktop.subprocess, "run", lambda cmd, **kw: calls.append((cmd, kw)))
+    session = open_composition_session(desktop.WaylandClipboardCommitter("target"))
+    assert session is not None
+    assert session.update_preedit("中途文字").committed
+    assert session.commit_segment("第一段。").outcome == "buffered"
+    assert calls == []
+    assert session.commit("第一段。完整结尾。").committed
+    assert calls[0][1]["input"] == "第一段。完整结尾。"
+    assert not session.commit("不能重复").committed
+    assert len(calls) == 2
+
+
+@pytest.mark.parametrize("terminal", ["focus", "cancel", "query_failure"])
+def test_buffered_session_never_pastes_after_invalidation(monkeypatch, terminal):
+    from recordian.linux_commit import open_composition_session
+
+    active = {"address": "target"}
+    monkeypatch.setattr(desktop, "desktop_query", lambda _: active)
+    calls = []
+    monkeypatch.setattr(desktop.subprocess, "run", lambda cmd, **kw: calls.append(cmd))
+    session = open_composition_session(desktop.WaylandClipboardCommitter("target"))
+    assert session is not None
+    if terminal == "cancel":
+        session.cancel()
+    elif terminal == "focus":
+        active["address"] = "other"
+    else:
+        def unavailable(_):
+            raise OSError("compositor unavailable")
+        monkeypatch.setattr(desktop, "desktop_query", unavailable)
+    assert not session.update_preedit("暂存").committed
+    active["address"] = "target"
+    monkeypatch.setattr(desktop, "desktop_query", lambda _: active)
+    assert not session.commit("不能补打").committed
+    assert calls == []
+
+
+def test_buffered_session_failed_paste_cannot_be_retried(monkeypatch):
+    monkeypatch.setattr(desktop, "desktop_query", lambda _: {"address": "target"})
+    monkeypatch.setattr(desktop.time, "sleep", lambda _: None)
+    calls = []
+
+    def run(cmd, **kwargs):
+        calls.append(cmd)
+        if cmd[0] == "wtype":
+            raise subprocess.TimeoutExpired(cmd, 2)
+
+    monkeypatch.setattr(desktop.subprocess, "run", run)
+    session = desktop.WaylandClipboardCommitter("target").begin_composition()
+    assert session.commit("发送结果不确定").outcome == "uncertain"
+    assert not session.commit("不能重复粘贴").committed
+    assert len(calls) == 2
+
+
 def test_orb_uses_active_window_monitor_and_logical_scale(monkeypatch):
     monkeypatch.setenv("HYPRLAND_INSTANCE_SIGNATURE", "test")
     data = {

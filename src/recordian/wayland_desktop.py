@@ -9,7 +9,7 @@ import time
 from pathlib import Path
 
 from .exceptions import CommitError
-from .linux_commit import CommitResult, FcitxCommitter, TextCommitter
+from .linux_commit import CommitResult, CompositionRefusedError, FcitxCommitter, TextCommitter
 
 
 def desktop_query(subject: str):
@@ -35,6 +35,13 @@ class WaylandClipboardCommitter(TextCommitter):
         if not self.address or desktop_query("activewindow").get("address") != self.address:
             raise CommitError("输入窗口已经改变，未粘贴识别结果")
 
+    def begin_composition(self, initial_preview: str = "") -> WaylandBufferedSession:
+        session = WaylandBufferedSession(self)
+        result = session.update_preedit(initial_preview)
+        if not result.committed:
+            raise CompositionRefusedError(result.detail)
+        return session
+
     def commit(self, text: str) -> CommitResult:
         self._check_focus()
         subprocess.run(
@@ -47,6 +54,59 @@ class WaylandClipboardCommitter(TextCommitter):
             ["wtype", "-M", "ctrl", "-k", "v", "-m", "ctrl"], check=True, timeout=2,
         )
         return CommitResult(backend=self.backend_name, committed=True, detail="paste:ctrl+v")
+
+
+class WaylandBufferedSession:
+    """Let ASR rotate while buffering text for one final, focus-checked paste.
+
+    Preview acceptance never writes to the application or clipboard. The
+    continuous worker owns the bounded transcript; this session only guards
+    delivery to the original window and permanently latches invalidation.
+    """
+
+    backend_name = "wayland-clipboard"
+    supports_segments = False
+    supports_buffered_continuous = True
+
+    def __init__(self, committer: WaylandClipboardCommitter):
+        self.committer = committer
+        self.active = True
+        self.stale_reason = ""
+
+    def update_preedit(self, text: str) -> CommitResult:
+        if not self.active:
+            return CommitResult(self.backend_name, False, "session_closed", "cancelled")
+        try:
+            self.committer._check_focus()
+        except (CommitError, OSError, ValueError, subprocess.SubprocessError) as exc:
+            self.active = False
+            self.stale_reason = str(exc)
+            return CommitResult(self.backend_name, False, "window_unavailable", "stale")
+        return CommitResult(self.backend_name, True, "preview_buffered", "buffered")
+
+    def commit_segment(self, text: str) -> CommitResult:
+        result = self.update_preedit(text)
+        if not result.committed:
+            return result
+        return CommitResult(self.backend_name, False, "final_paste_only", "buffered")
+
+    def commit(self, text: str) -> CommitResult:
+        result = self.update_preedit(text)
+        if not result.committed:
+            return result
+        # Consume before invoking external tools: a lost reply must never
+        # permit a second paste, even if the first one reached the editor.
+        self.active = False
+        try:
+            return self.committer.commit(text)
+        except CommitError:
+            return CommitResult(self.backend_name, False, "window_changed", "stale")
+        except (OSError, subprocess.SubprocessError):
+            return CommitResult(self.backend_name, False, "paste_failed", "uncertain")
+
+    def cancel(self) -> CommitResult:
+        self.active = False
+        return CommitResult(self.backend_name, False, "cancelled", "cancelled")
 
 
 def select_desktop_committer(committer: TextCommitter) -> TextCommitter:
