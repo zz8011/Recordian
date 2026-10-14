@@ -410,3 +410,29 @@ def test_same_backend_cancel_does_not_start_inventory(ui, device_jobs):
     ui.cancel_changes()
     assert not device_jobs
     assert ui.controls['input_device'][1].get_active_id() == 'saved-missing-device'
+
+
+def test_thread_start_failure_releases_busy_state_for_retry(ui, device_jobs, monkeypatch):
+    from recordian import native_settings
+
+    deferred_thread = native_settings.Thread
+
+    class RefusedThread:
+        def __init__(self, **kwargs):
+            pass
+
+        def start(self):
+            raise RuntimeError("can't start new thread")
+
+    monkeypatch.setattr(native_settings, 'Thread', RefusedThread)
+    ui.refresh_microphones()
+    assert not ui.inventory_running
+    assert ui.microphone_refresh.get_sensitive()
+    assert ui.controls['input_device'][1].get_active_id() == 'saved-missing-device'
+    assert not ui.draft.dirty
+    monkeypatch.setattr(native_settings, 'Thread', deferred_thread)
+    ui.refresh_microphones()
+    assert len(device_jobs) == 1
+    finish_device_job(device_jobs)
+    assert 'ffmpeg-pulse-mic' in device_ids(ui)
+    assert ui.microphone_refresh.get_sensitive()

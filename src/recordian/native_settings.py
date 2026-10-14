@@ -658,7 +658,14 @@ class NativeSettingsWindow:
                     self.set_choices("input_device", choices, value)
                 return False
             GLib.idle_add(apply)
-        Thread(target=fetch, daemon=True, name="recordian-device-inventory").start()
+        try:
+            Thread(target=fetch, daemon=True, name="recordian-device-inventory").start()
+        except RuntimeError:
+            # Thread creation can fail under resource pressure. No worker will
+            # deliver apply(), so release the UI state here and allow retry.
+            self.inventory_running = False
+            self.microphone_refresh.set_sensitive(True)
+            self.microphone_refresh.set_label("刷新失败 · 重试")
 
     def set_choices(self, key, choices, value):
         widget = self.controls[key][1]
