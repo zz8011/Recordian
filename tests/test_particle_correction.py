@@ -37,9 +37,11 @@ def wrapper(monkeypatch, choice="地", **kwargs):
 
 def test_strict_particle_gate_keeps_existing_alias_gate():
     options = {"的": "a", "地": "b", "得": "c"}
-    reply = {"choice": "地", "probabilities": {"的": 0.12, "地": 0.8, "得": 0.08}}
+    reply = {"choice": "地", "probabilities": {"的": 0.20, "地": 0.72, "得": 0.08}}
     assert interpret_choice(options, reply) == "地"
-    assert interpret_choice(options, reply, min_top=0.85, min_margin=0.35) is None
+    assert interpret_choice(options, reply, min_top=pc.MIN_TOP, min_margin=pc.MIN_MARGIN) is None
+    calibrated = {"choice": "地", "probabilities": {"的": 0.12, "地": 0.8, "得": 0.08}}
+    assert interpret_choice(options, calibrated, min_top=pc.MIN_TOP, min_margin=pc.MIN_MARGIN) == "地"
 
 
 def test_final_only_equal_length_repeated_clause_edits(monkeypatch):
@@ -48,11 +50,96 @@ def test_final_only_equal_length_repeated_clause_edits(monkeypatch):
     assert corrector.submit(text) == corrector.poll(text) == text
     assert calls == []
     result = corrector.finish(text)
-    assert result == "认真仔细地检查，认真仔细地检查。"
+    assert result == "认真仔细地检查，认真仔细的检查。"
     assert len(calls) == 1 and len(calls[0][1]) == 1
-    assert calls[0][2]["min_top"] == 0.85
+    assert calls[0][2]["min_top"] > 0.70
     assert corrector.finish(text) == corrector.poll(text) == result
     assert len(calls) == 1
+
+
+def test_fluent_candidate_context_keeps_original_edit_offsets(monkeypatch):
+    """The judge must see fluent words as well as the exact character it may edit."""
+    def ask(timeout, state, questions, **options):
+        answers = {}
+        for name, question in questions.items():
+            candidate = question["criteria"]["得"]
+            assert candidate == "她把流程讲得很清楚"
+            assert "她把流程讲【的】很清楚" in question["instructions"]
+            answers[name] = "得"
+        return answers
+
+    monkeypatch.setattr(pc, "request_jev_choices", ask)
+    corrector = pc.ParticleCorrector(Identity(), timeout_s=1.5)
+    assert corrector.finish("她把流程讲的很清楚；她把流程讲的很清楚。") == (
+        "她把流程讲得很清楚；她把流程讲的很清楚。"
+    )
+
+
+@pytest.mark.parametrize("text", ["稳妥的安排", "深入的研究。", "我跑的快！"])
+def test_context_poor_fragments_are_preserved_without_judgment(monkeypatch, text):
+    corrector, calls = wrapper(monkeypatch)
+    assert corrector.finish(text) == text
+    assert calls == []
+
+
+def test_judge_receives_neighboring_clauses_for_nominal_context(monkeypatch):
+    text = "先分配值班人员，细心的负责复核记录，其他人整理仓库。"
+    def ask(timeout, state, questions, **options):
+        context = next(iter(questions.values()))["instructions"]
+        assert "先分配值班人员" in context
+        assert "其他人整理仓库" in context
+        return dict.fromkeys(questions, "的")
+    monkeypatch.setattr(pc, "request_jev_choices", ask)
+    corrector = pc.ParticleCorrector(Identity(), timeout_s=1.5)
+    assert corrector.finish(text) == text
+
+
+def test_long_context_is_bounded_and_keeps_late_candidate(monkeypatch):
+    text = "资料已经归档。" * 200 + "她把流程讲的很清楚。" * 200
+    def ask(timeout, state, questions, **options):
+        assert len(state) < 700
+        assert len(questions) == 1
+        context = next(iter(questions.values()))["instructions"]
+        assert len(context) < 700
+        assert "她把流程讲【的】很清楚" in context
+        return dict.fromkeys(questions, "得")
+    monkeypatch.setattr(pc, "request_jev_choices", ask)
+    corrector = pc.ParticleCorrector(Identity(), timeout_s=1.5)
+    assert corrector.finish(text) == (
+        "资料已经归档。" * 200 + "她把流程讲的很清楚。" * 2
+        + "她把流程讲得很清楚。" * 196 + "她把流程讲的很清楚。" * 2
+    )
+
+
+def test_repeated_clause_does_not_apply_a_choice_to_other_contexts(monkeypatch):
+    text = "请你，仔细的检查，然后提交报告。" + "材料已经归档。" * 80 + "这里缺少，仔细的检查，只有敷衍应付。"
+    def ask(timeout, state, questions, **options):
+        assert len(questions) == 1
+        answers = {}
+        for name, question in questions.items():
+            context = question["instructions"]
+            if "请你" in context:
+                answers[name] = "地"
+            else:
+                assert "这里缺少" in context
+                answers[name] = "的"
+        return answers
+    monkeypatch.setattr(pc, "request_jev_choices", ask)
+    corrector = pc.ParticleCorrector(Identity(), timeout_s=1.5)
+    assert corrector.finish(text) == text.replace("仔细的检查", "仔细地检查", 1)
+
+
+def test_adjacent_repetitions_across_sentences_do_not_share_a_choice(monkeypatch):
+    text = "这里缺少，仔细的检查。仔细的检查，才能发现问题。"
+    def ask(timeout, state, questions, **options):
+        assert len(questions) == 1
+        return {
+            name: "的" if "这里缺少，仔细【的】检查。" in question["instructions"] else "地"
+            for name, question in questions.items()
+        }
+    monkeypatch.setattr(pc, "request_jev_choices", ask)
+    corrector = pc.ParticleCorrector(Identity(), timeout_s=1.5)
+    assert corrector.finish(text) == text
 
 
 @pytest.mark.parametrize(
