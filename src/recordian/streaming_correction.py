@@ -841,7 +841,10 @@ def corrector_from_args(
     )
 
     if provider == "jev" and bool(getattr(args, "enable_particle_correction", False)):
-        return ParticleCorrector(corrector, timeout_s=timeout_s, endpoint=str(getattr(args, "semif_endpoint", "") or ""))
+        return ParticleCorrector(
+            corrector, timeout_s=timeout_s,
+            endpoint=str(getattr(args, "semif_endpoint", "") or ""), context=context,
+        )
     return corrector
 
 

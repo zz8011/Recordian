@@ -15,15 +15,19 @@ from typing import Any
 from .hotword_corrector import _protected_spans
 from .jev_judge import request_jev_choices
 
-MIN_TOP = 0.75
+MIN_TOP = 0.85
 MIN_MARGIN = 0.35
 MAX_QUESTIONS = 8
 MAX_CLAUSE_CHARS = 64
 MIN_CONTEXT_HAN = 7
 CONTEXT_FLANK_CHARS = 16
+SENTENCE_FLANK_CHARS = 80
+MAX_TRANSCRIPT_CHARS = 512
+PREVIOUS_CONTEXT_CHARS = 64
 _BOUNDARY = re.compile(r"[，。！？；：、,.!?;:\n]+")
+_SENTENCE_BOUNDARY = re.compile(r"[。！？!?\n]")
 _LITERAL = re.compile(r"[A-Za-z_`\"'“”‘’「」『』【】/\\]|改成|写成|这个字|这个词")
-_STATE = "Chinese dictation orthography. Select only the one marked character; all other characters remain unchanged."
+_STATE = "Chinese dictation transcript (may contain particle errors):\n"
 _INSTRUCTIONS = (
     "Select the most natural and grammatically correct Chinese phrase. "
     "The candidates differ only in the marked character. Use standard written Chinese. "
@@ -32,11 +36,23 @@ _INSTRUCTIONS = (
 )
 
 
+def _sentence_context(text: str, position: int) -> str:
+    """Keep sentence boundaries around the target without unbounded prompts."""
+    begin = max(0, position - SENTENCE_FLANK_CHARS)
+    starts = [match.end() for match in _SENTENCE_BOUNDARY.finditer(text[begin:position])]
+    if starts:
+        begin += starts[-1]
+    right = text[position:position + SENTENCE_FLANK_CHARS]
+    stop = _SENTENCE_BOUNDARY.search(right)
+    end = position + (stop.end() if stop else len(right))
+    return text[begin:position] + "【?】" + text[position + 1:end]
+
+
 def particle_questions(text: str) -> tuple[dict[str, dict[str, Any]], dict[str, list[int]]]:
     """Bounded candidates; share a vote only within equivalent local context."""
     questions: dict[str, dict[str, Any]] = {}
     positions: dict[str, list[int]] = {}
-    groups: dict[tuple[str, int], dict[tuple[str, str], list[int]]] = {}
+    groups: dict[tuple[str, int], dict[tuple[str, str, str], list[int]]] = {}
     # Quoted dictation may deliberately discuss an incorrect spelling.
     # Skip the snapshot, including clauses inside an unfinished quote.
     if any(char in text for char in "`\"'“”‘’「」『』【】"):
@@ -68,16 +84,16 @@ def particle_questions(text: str) -> tuple[dict[str, dict[str, Any]], dict[str, 
                 if len(groups) >= MAX_QUESTIONS:
                     continue
                 groups[key] = {}
-            groups[key].setdefault((left, right), []).append(begin + index)
+            context = _sentence_context(text, begin + index)
+            groups[key].setdefault((left, right, context), []).append(begin + index)
     for (clause, index), contexts in groups.items():
         # Preserve one question per distinct target clause. Spend it on the
         # most common exact context; other contexts conservatively abstain.
-        (left, right), indexes = max(contexts.items(), key=lambda item: len(item[1]))
+        (_, _, context), indexes = max(contexts.items(), key=lambda item: len(item[1]))
         name = f"p{len(questions)}"
-        context = left + clause[:index] + "【的】" + clause[index + 1 :] + right
         questions[name] = {
             "type": "choice",
-            "instructions": _INSTRUCTIONS + "\nContext:\n" + context,
+            "instructions": _INSTRUCTIONS + "\nTarget context:\n" + context,
             "criteria": {
                 option: clause[:index] + option + clause[index + 1 :] for option in "的地得"
             },
@@ -89,10 +105,11 @@ def particle_questions(text: str) -> tuple[dict[str, dict[str, Any]], dict[str, 
 class ParticleCorrector:
     """Decorate an existing corrector; one batch at final, with shared timeout."""
 
-    def __init__(self, base: Any, *, timeout_s: float, endpoint: str = "") -> None:
+    def __init__(self, base: Any, *, timeout_s: float, endpoint: str = "", context: str = "") -> None:
         self.base = base
         self.timeout_s = timeout_s
         self.endpoint = endpoint
+        self._context = context[-PREVIOUS_CONTEXT_CHARS:]
         self._lock = threading.Lock()
         self._generation = 0
         self._closed = False
@@ -120,9 +137,12 @@ class ParticleCorrector:
                 return original
         remaining = deadline - time.monotonic()
         if questions and remaining >= 0.15:
+            state = _STATE + original[:MAX_TRANSCRIPT_CHARS]
+            if self._context:
+                state = "Previous segment (read only):\n" + self._context + "\n" + state
             answers = request_jev_choices(
                 remaining,
-                _STATE,
+                state,
                 questions,
                 endpoint=self.endpoint,
                 min_top=MIN_TOP,

@@ -28,6 +28,7 @@
 | `QUICK-REFERENCE-CPU-OPTIMIZATION.md` | 优化速查卡 |
 | `onnx-quantization-guide.md` | Sherpa-ONNX 模型量化指南 |
 | `python-performance-optimization-research.md` | Python 侧性能优化调研 |
+| [2026-10-14-particle-context-evaluation.md](2026-10-14-particle-context-evaluation.md) | 未发布的助词上下文候选、独立语料误改和发布否决依据 |
 
 ### 历史设计
 

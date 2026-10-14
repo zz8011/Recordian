@@ -41,7 +41,68 @@ def test_strict_particle_gate_keeps_existing_alias_gate():
     assert interpret_choice(options, reply) == "地"
     assert interpret_choice(options, reply, min_top=pc.MIN_TOP, min_margin=pc.MIN_MARGIN) is None
     calibrated = {"choice": "地", "probabilities": {"的": 0.12, "地": 0.8, "得": 0.08}}
-    assert interpret_choice(options, calibrated, min_top=pc.MIN_TOP, min_margin=pc.MIN_MARGIN) == "地"
+    assert interpret_choice(options, calibrated, min_top=pc.MIN_TOP, min_margin=pc.MIN_MARGIN) is None
+
+
+def test_complete_sentence_keeps_distant_nominal_subject(monkeypatch):
+    text = "参与值班的人员先按照安排来到大厅，然后领取各自需要使用的记录工具，细心的负责核对资料。"
+    def ask(timeout, state, questions, **options):
+        assert text in state
+        return {
+            name: "的" if not question["criteria"]["的"].startswith("细心的")
+            or "参与值班的人员" in question["instructions"] else "地"
+            for name, question in questions.items()
+        }
+    monkeypatch.setattr(pc, "request_jev_choices", ask)
+    corrector = pc.ParticleCorrector(Identity(), timeout_s=1.5)
+    assert corrector.finish(text) == text
+
+
+def test_previous_segment_context_informs_choice_but_never_enters_output(monkeypatch):
+    previous = "这些人员按工作方式分工。"
+    text = "细心的负责整理材料。"
+    def ask(timeout, state, questions, **options):
+        return dict.fromkeys(questions, "的" if previous in state else "地")
+    monkeypatch.setattr(pc, "request_jev_choices", ask)
+    args = SimpleNamespace(correction_provider="jev", enable_particle_correction=True)
+    corrector = corrector_from_args(args, [], context=previous)
+    try:
+        assert corrector.finish(text) == text
+    finally:
+        corrector.close()
+
+
+def test_repetition_reuse_includes_the_expanded_sentence_context(monkeypatch):
+    middle = "请结合前面已经说明的完整语境理解，细心的负责记录，后续安排会在会议结束之后再次确认。"
+    text = "这一句说的是如何工作，" + middle + "下一句说的是哪类人员，" + middle
+    def ask(timeout, state, questions, **options):
+        return {
+            name: "地" if question["criteria"]["的"].startswith("细心的")
+            and "如何工作" in question["instructions"] else "的"
+            for name, question in questions.items()
+        }
+    monkeypatch.setattr(pc, "request_jev_choices", ask)
+    corrector = pc.ParticleCorrector(Identity(), timeout_s=1.5)
+    assert corrector.finish(text) == text.replace("细心的负责记录", "细心地负责记录", 1)
+
+
+def test_sentence_lookup_only_scans_its_bounded_neighborhood(monkeypatch):
+    scanned = []
+    real = pc._SENTENCE_BOUNDARY
+    class TrackedBoundaries:
+        def finditer(self, text):
+            scanned.append(len(text))
+            return real.finditer(text)
+
+        def search(self, text, pos=0):
+            scanned.append(len(text))
+            return real.search(text, pos)
+
+    monkeypatch.setattr(pc, "_SENTENCE_BOUNDARY", TrackedBoundaries())
+    text = "这一句已经结束。" * 1000 + "她把流程讲的很清楚。"
+    position = len(text) - len("的很清楚。")
+    assert pc._sentence_context(text, position) == "她把流程讲【?】很清楚。"
+    assert sum(scanned) <= 160
 
 
 def test_final_only_equal_length_repeated_clause_edits(monkeypatch):
@@ -64,7 +125,7 @@ def test_fluent_candidate_context_keeps_original_edit_offsets(monkeypatch):
         for name, question in questions.items():
             candidate = question["criteria"]["得"]
             assert candidate == "她把流程讲得很清楚"
-            assert "她把流程讲【的】很清楚" in question["instructions"]
+            assert "她把流程讲【?】很清楚" in question["instructions"]
             answers[name] = "得"
         return answers
 
@@ -101,7 +162,7 @@ def test_long_context_is_bounded_and_keeps_late_candidate(monkeypatch):
         assert len(questions) == 1
         context = next(iter(questions.values()))["instructions"]
         assert len(context) < 700
-        assert "她把流程讲【的】很清楚" in context
+        assert "她把流程讲【?】很清楚" in context
         return dict.fromkeys(questions, "得")
     monkeypatch.setattr(pc, "request_jev_choices", ask)
     corrector = pc.ParticleCorrector(Identity(), timeout_s=1.5)
@@ -134,7 +195,7 @@ def test_adjacent_repetitions_across_sentences_do_not_share_a_choice(monkeypatch
     def ask(timeout, state, questions, **options):
         assert len(questions) == 1
         return {
-            name: "的" if "这里缺少，仔细【的】检查。" in question["instructions"] else "地"
+            name: "的" if "这里缺少，仔细【?】检查。" in question["instructions"] else "地"
             for name, question in questions.items()
         }
     monkeypatch.setattr(pc, "request_jev_choices", ask)
