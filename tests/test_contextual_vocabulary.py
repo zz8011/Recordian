@@ -38,125 +38,75 @@ def test_candidate_list_is_bounded_and_keeps_original_option():
     assert choice.edits['keep'] == ()
 
 
-@pytest.mark.parametrize('separator', list('，。！？；：、,.!?;:\n') + ['？！\n'])
-@pytest.mark.parametrize('target', ['first', 'second'])
-def test_repeated_surface_in_other_clause_has_target_only_payload(separator, target):
-    first, second = '园内张贴公示', '学徒抄写公示计算面积'
-    text = first + separator + second
-    start = text.index('公示') if target == 'first' else text.rindex('公示')
-    focus = first if target == 'first' else second
-    changed = '园内张贴公式' if target == 'first' else '学徒抄写公式计算面积'
-    state, choice = vocabulary_choice(
-        text, {'start': start, 'end': start + 2, 'surface': '公示', 'candidates': ['公式']},
+def test_instructions_require_clear_evidence_and_preserve_reasonable_original():
+    text = '窗边传来琴声。'
+    _, choice = vocabulary_choice(
+        text, {'start': 4, 'end': 6, 'surface': '琴声', 'candidates': ['禽声']},
     )
-    assert state == focus + '\n只判断这个跨度：「公示」'
-    assert choice.question == {
-        'type': 'choice',
-        'instructions': '这是整句识别假设。只能选择一个候选条件。不要改条件以外的字，不要删字。',
-        'criteria': {
-            'keep': '原句中的公示在此语境正确，保持原文。' + focus,
-            'c0': '此语境应该使用公式，应把公示替换为公式，其余不变。' + changed,
-        },
-    }
-    assert choice.edits == {'keep': (), 'c0': (CandidateEdit(start, start + 2, '公示', '公式'),)}
-    expected = changed + separator + second if target == 'first' else first + separator + changed
-    assert apply_choices(text, [choice], {'pick': 'c0'}) == expected
+    assert choice.question['instructions'] == (
+        '这是整句识别假设。只有证据明确表明原词有误且候选正确时才替换；'
+        '原词有合理解释或证据不足时必须保持。只能选择一个候选条件，不要改条件以外的字，不要删字。'
+    )
+
+
+def test_keep_explicitly_represents_insufficient_evidence_and_is_noop():
+    text = '窗边传来琴声。'
+    _, choice = vocabulary_choice(
+        text, {'start': 4, 'end': 6, 'surface': '琴声', 'candidates': ['禽声']},
+    )
+    assert choice.question['criteria']['keep'] == (
+        '原句中的琴声有合理解释，或者没有足够证据排除原词，应保持原文。窗边传来琴声。'
+    )
+    assert choice.edits['keep'] == ()
+    assert apply_choices(text, [choice], {'pick': 'keep'}) == text
 
 
 @pytest.mark.parametrize('target', ['first', 'second'])
-def test_repeated_surface_in_same_clause_keeps_legacy_window(target):
-    text = '庭院灯光亮起，学徒对照公示抄写公示计算面积，窗外落叶飘散。'
-    start = text.index('公示') if target == 'first' else text.rindex('公示')
+def test_repeated_surface_retains_full_cross_clause_window_and_absolute_edit(target):
+    text = '长廊尽头传来琴声，学徒记录琴声的节拍。'
+    start = text.index('琴声') if target == 'first' else text.rindex('琴声')
     changed = (
-        '庭院灯光亮起，学徒对照公式抄写公示计算面积，窗外落叶飘散。'
-        if target == 'first' else
-        '庭院灯光亮起，学徒对照公示抄写公式计算面积，窗外落叶飘散。'
+        '长廊尽头传来禽声，学徒记录琴声的节拍。' if target == 'first'
+        else '长廊尽头传来琴声，学徒记录禽声的节拍。'
     )
     state, choice = vocabulary_choice(
-        text, {'start': start, 'end': start + 2, 'surface': '公示', 'candidates': ['公式']},
+        text, {'start': start, 'end': start + 2, 'surface': '琴声', 'candidates': ['禽声']},
     )
-    assert state == text + '\n只判断这个跨度：「公示」'
+    assert state == text + '\n只判断这个跨度：「琴声」'
     assert choice.question['criteria'] == {
-        'keep': '原句中的公示在此语境正确，保持原文。' + text,
-        'c0': '此语境应该使用公式，应把公示替换为公式，其余不变。' + changed,
+        'keep': '原句中的琴声有合理解释，或者没有足够证据排除原词，应保持原文。' + text,
+        'c0': '此语境应该使用禽声，应把琴声替换为禽声，其余不变。' + changed,
     }
+    assert choice.edits['c0'] == (CandidateEdit(start, start + 2, '琴声', '禽声'),)
     assert apply_choices(text, [choice], {'pick': 'c0'}) == changed
 
 
-@pytest.mark.parametrize('side', ['before', 'after'])
-def test_repetition_outside_visible_window_preserves_ordinary_payload(side):
-    text = '庭院安静。' + '林' * 180 + '学徒抄写公示计算面积。' + '云' * 180 + '仓门关闭。'
-    start = text.index('公示')
-    span = {'start': start, 'end': start + 2, 'surface': '公示', 'candidates': ['公式']}
-    repeated = text.replace('庭院' if side == 'before' else '仓门', '公示')
-    baseline_state, baseline_choice = vocabulary_choice(text, span, context='讲义留待明日复核。')
-    state, choice = vocabulary_choice(repeated, span, context='讲义留待明日复核。')
-    assert state == baseline_state
-    assert choice == baseline_choice
-
-
-def test_single_occurrence_retains_exact_legacy_payload_and_context_tail():
-    text = '雨声渐歇，学徒抄写公示计算面积，窗边放着墨盒。'
-    start = text.index('公示')
+def test_focus_flanks_and_previous_tail_remain_bounded_without_localization():
+    text = '林' * 200 + '琴声' + '云' * 200
     state, choice = vocabulary_choice(
-        text, {'start': start, 'end': start + 2, 'surface': '公示', 'candidates': ['公式']},
-        context='旧' * 300 + '讲义已装订。',
+        text, {'start': 200, 'end': 202, 'surface': '琴声', 'candidates': ['禽声']},
+        context='旧' * 300 + '钟声渐歇。',
     )
-    assert state == '上一段：' + '旧' * 250 + '讲义已装订。\n' + text + '\n只判断这个跨度：「公示」'
-    assert choice.question == {
-        'type': 'choice',
-        'instructions': '这是整句识别假设。只能选择一个候选条件。不要改条件以外的字，不要删字。',
-        'criteria': {
-            'keep': '原句中的公示在此语境正确，保持原文。雨声渐歇，学徒抄写公示计算面积，窗边放着墨盒。',
-            'c0': '此语境应该使用公式，应把公示替换为公式，其余不变。雨声渐歇，学徒抄写公式计算面积，窗边放着墨盒。',
-        },
-    }
-
-
-@pytest.mark.parametrize('side', ['left', 'right'])
-def test_narrowed_clause_stays_inside_original_focus(side):
-    if side == 'left':
-        text = '林' * 200 + '公示记录了面积，学徒校对公示。'
-        start = 200
-        focus = '林' * 160 + '公示记录了面积'
-        changed = '林' * 160 + '公式记录了面积'
-    else:
-        text = '园内张贴公示，学徒抄写公示' + '云' * 200
-        start = text.rindex('公示')
-        focus = '学徒抄写公示' + '云' * 160
-        changed = '学徒抄写公式' + '云' * 160
-    state, choice = vocabulary_choice(
-        text, {'start': start, 'end': start + 2, 'surface': '公示', 'candidates': ['公式']},
-        context='旧' * 300 + '公示来自前段。',
+    focus = '林' * 160 + '琴声' + '云' * 160
+    assert state == '上一段：' + '旧' * 251 + '钟声渐歇。\n' + focus + '\n只判断这个跨度：「琴声」'
+    assert choice.question['criteria']['c0'] == (
+        '此语境应该使用禽声，应把琴声替换为禽声，其余不变。' + '林' * 160 + '禽声' + '云' * 160
     )
-    assert state == '上一段：' + '旧' * 249 + '公示来自前段。\n' + focus + '\n只判断这个跨度：「公示」'
-    assert choice.question['criteria'] == {
-        'keep': '原句中的公示在此语境正确，保持原文。' + focus,
-        'c0': '此语境应该使用公式，应把公示替换为公式，其余不变。' + changed,
-    }
+    assert apply_choices(text, [choice], {'pick': 'c0'}) == '林' * 200 + '禽声' + '云' * 200
 
 
-def test_short_unique_target_clause_is_narrowed_without_length_heuristic():
-    text = '公示，学徒抄写公示计算面积。'
-    state, choice = vocabulary_choice(
-        text, {'start': 0, 'end': 2, 'surface': '公示', 'candidates': ['公式']},
+def test_keep_retains_option_slot_and_candidate_length_deduplication_bounds():
+    text = '窗边传来琴声。'
+    _, choice = vocabulary_choice(
+        text,
+        {'start': 4, 'end': 6, 'surface': '琴声',
+         'candidates': ['', None, '琴声', '羽' * 33, '禽声', '禽声', '羽' * 32,
+                        '甲声', '乙声', '丙声', '丁声', '戊声', '己声']},
     )
-    assert state == '公示\n只判断这个跨度：「公示」'
-    assert choice.question['criteria']['c0'] == '此语境应该使用公式，应把公示替换为公式，其余不变。公式'
-
-
-@pytest.mark.parametrize('suffix', ['，大家都认识多多。', '，随后休息。'])
-@pytest.mark.parametrize('start,changed_prefix', [(0, '朵朵多练习'), (1, '多朵朵练习')])
-def test_overlapping_occurrences_preserve_window_and_absolute_target(suffix, start, changed_prefix):
-    text = '多多多练习' + suffix
-    changed = changed_prefix + suffix
-    state, choice = vocabulary_choice(
-        text, {'start': start, 'end': start + 2, 'surface': '多多', 'candidates': ['朵朵']},
-    )
-    assert state == text + '\n只判断这个跨度：「多多」'
-    assert choice.question['criteria'] == {
-        'keep': '原句中的多多在此语境正确，保持原文。' + text,
-        'c0': '此语境应该使用朵朵，应把多多替换为朵朵，其余不变。' + changed,
-    }
-    assert choice.edits['c0'] == (CandidateEdit(start, start + 2, '多多', '朵朵'),)
-    assert apply_choices(text, [choice], {'pick': 'c0'}) == changed
+    assert list(choice.question['criteria']) == ['keep', 'c0', 'c1', 'c2', 'c3', 'c4', 'c5', 'c6']
+    assert choice.edits['keep'] == ()
+    assert [choice.edits[key][0].replacement for key in list(choice.edits)[1:]] == [
+        '禽声', '羽' * 32, '甲声', '乙声', '丙声', '丁声', '戊声',
+    ]
+    assert apply_choices(text, [choice], {'pick': 'c1'}) == '窗边传来' + '羽' * 32 + '。'
+    assert apply_choices(text, [choice], {'pick': 'c7'}) == text

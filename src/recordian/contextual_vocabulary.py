@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 from typing import Any
 
 from .contextual_choice import CandidateEdit, Choice
@@ -14,8 +13,7 @@ MIN_MARGIN = 0.20
 CONTEXT_FLANK = 160
 PREVIOUS_LIMIT = 256
 MAX_OPTIONS = 8
-_INSTRUCTIONS = "这是整句识别假设。只能选择一个候选条件。不要改条件以外的字，不要删字。"
-_BOUNDARY = re.compile(r"[，。！？；：、,.!?;:\n]+")
+_INSTRUCTIONS = "这是整句识别假设。只有证据明确表明原词有误且候选正确时才替换；原词有合理解释或证据不足时必须保持。只能选择一个候选条件，不要改条件以外的字，不要删字。"
 
 
 def vocabulary_choice(
@@ -33,17 +31,10 @@ def vocabulary_choice(
     begin, stop = max(0, start - CONTEXT_FLANK), min(len(text), end + CONTEXT_FLANK)
     before, after = text[begin:start], text[end:stop]
     focus = before + surface + after
-    if focus.find(surface) != focus.rfind(surface):
-        clause_before = _BOUNDARY.split(before)[-1]
-        clause_after = _BOUNDARY.split(after)[0]
-        clause = clause_before + surface + clause_after
-        if clause.find(surface) == clause.rfind(surface):
-            before, after = clause_before, clause_after
-            focus = clause
     state = focus + f"\n只判断这个跨度：「{surface}」"
     if context:
         state = f"上一段：{context[-PREVIOUS_LIMIT:]}\n{state}"
-    options = {"keep": f"原句中的{surface}在此语境正确，保持原文。{focus}"}
+    options = {"keep": f"原句中的{surface}有合理解释，或者没有足够证据排除原词，应保持原文。{focus}"}
     edits: dict[str, tuple[CandidateEdit, ...]] = {"keep": ()}
     seen = {surface}
     for candidate in span.get("candidates", []):
