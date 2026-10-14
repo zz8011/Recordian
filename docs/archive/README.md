@@ -14,6 +14,7 @@
 | --- | --- |
 | `sprint1-delivery.md` / `sprint2-delivery.md` / `sprint3-progress.md` | 2026 年初三轮迭代的过程记录 |
 | `GIT_HISTORY_3DAYS.md` | 2026-02-28 至 03-03 的提交清单快照 |
+| [逐位置上下文纠错验证](2026-10-15-occurrence-context-evaluation.md) | 2026-10-15 独立语料与延迟门禁；实验候选未替换正式版 |
 
 ### 技术研究
 

@@ -21,7 +21,7 @@ from typing import Any, cast
 from .contextual_choice import CandidateEdit, Choice, apply_choices, judge_choices
 from .contextual_vocabulary import MIN_MARGIN as WORD_MIN_MARGIN
 from .contextual_vocabulary import MIN_TOP as WORD_MIN_TOP
-from .contextual_vocabulary import vocabulary_choice
+from .contextual_vocabulary import vocabulary_occurrence_choice
 from .hotword_corrector import (
     _parse_replacement_pair,
     _protected_spans,
@@ -786,7 +786,14 @@ class StreamingHotwordCorrector:
             state = self._state(job, surface)
             policy: dict[str, float] = {}
             if self._provider == "jev":
-                built = vocabulary_choice(deterministic, span, context=job.context)
+                protected = self.semantic_protected_spans(deterministic)
+                built = vocabulary_occurrence_choice(
+                    deterministic, span, context=job.context, aliases=job.aliases,
+                    is_eligible=lambda left, right: (
+                        not _meta_mention(deterministic, left, right)
+                        and not _overlaps_span(left, right, protected)
+                    ),
+                )
                 if built is not None:
                     state, choice = built
                 policy = {"min_top": WORD_MIN_TOP, "min_margin": WORD_MIN_MARGIN}
