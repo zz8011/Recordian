@@ -2,7 +2,7 @@
 
 这里的文档**不再维护**，保留原因只有两个：记录当时的决策过程，或提供仍可能有参考价值的技术细节。
 
-它们的内容大多基于 2026-02 至 2026-03 的代码状态，其中的文件路径、命令、默认值可能已经和当前版本不一致。**不要把这些文档当作当前行为的依据**，需要准确信息请回到 [`../README.md`](../README.md)（文档索引）或直接看代码。
+它们的内容大多基于 2026-02 至 2026-10 的代码状态，其中的文件路径、命令、默认值可能已经和当前版本不一致。**不要把这些文档当作当前行为的依据**，需要准确信息请回到 [`../README.md`](../README.md)（文档索引）或直接看代码。
 
 ## 内容分类
 
@@ -28,6 +28,7 @@
 | `QUICK-REFERENCE-CPU-OPTIMIZATION.md` | 优化速查卡 |
 | `onnx-quantization-guide.md` | Sherpa-ONNX 模型量化指南 |
 | `python-performance-optimization-research.md` | Python 侧性能优化调研 |
+| [2026-10-15-contextual-precision-evaluation.md](2026-10-15-contextual-precision-evaluation.md) | 上下文纠错根因、独立语料验证及未发布实验的否决依据 |
 
 ### 历史设计
 
