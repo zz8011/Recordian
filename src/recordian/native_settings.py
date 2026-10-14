@@ -116,6 +116,8 @@ class NativeSettingsWindow:
         self.extension_controls = {}
         self.agent_candidates = discover_agents()
         self.inventory_generation = 0
+        self.inventory_running = False
+        self.inventory_backend = self.draft.values["record_backend"]
         self.saved_refine_key = str(current.get("refine_api_key") or "").strip()
         self.discovery_generation = 0
         self.discovery_running = False
@@ -379,7 +381,7 @@ class NativeSettingsWindow:
         self.row(s, "input_device", "麦克风", "选择当前录音后端的输入；默认项跟随系统。", "combo",
                  [("default", "跟随系统默认麦克风"), *([(self.draft.values["input_device"], "已配置 · 本次未检测到")]
                    if self.draft.values["input_device"] != "default" else [])])
-        self.action_row(s, "设备列表", "只枚举设备，不打开麦克风。", "刷新设备", lambda _: self.refresh_microphones())
+        self.microphone_refresh = self.action_row(s, "设备列表", "只枚举设备，不打开麦克风。", "刷新设备", lambda _: self.refresh_microphones())
         self.row(s, "qwen_language", "识别语言", "随识别服务调整；网络服务的旧语言值保留。", "combo",
                  language_choices(self.draft.values["asr_provider"], self.draft.values["qwen_language"]))
         s = self.section("daily", "文字上屏")
@@ -612,19 +614,48 @@ class NativeSettingsWindow:
         self.status.set_text("已检查本机 Agent 程序路径 · 未启动任何 CLI")
 
     def refresh_microphones(self):
+        if self.closed:
+            return
         self.inventory_generation += 1
         generation = self.inventory_generation
         backend = self.draft.values["record_backend"]
         current = self.draft.values["input_device"]
+        if backend != self.inventory_backend:
+            self.inventory_backend = backend
+            choices = [("default", "跟随系统默认麦克风")]
+            if current != "default":
+                choices.append((current, "已配置 · 本次未检测到"))
+            self.set_choices("input_device", choices, current)
+        # A burst becomes one follow-up for the latest draft. Never queue an
+        # unbounded number of workers/subprocesses on repeated refresh clicks.
+        if self.inventory_running:
+            return
+        self.inventory_running = True
+        self.microphone_refresh.set_sensitive(False)
+        self.microphone_refresh.set_label("正在刷新…")
+
         def fetch():
-            choices = microphone_choices(backend, current)
+            try:
+                choices = microphone_choices(backend, current)
+            except Exception:
+                # Keep the existing selection and allow retry even if a device
+                # backend fails unexpectedly. Do not expose raw device errors.
+                choices = None
+
             def apply():
-                if self.closed or generation != self.inventory_generation:
+                self.inventory_running = False
+                if self.closed:
                     return False
-                value = self.draft.values["input_device"]
-                if value not in dict(choices):
-                    choices.append((value, "已配置 · 本次未检测到"))
-                self.set_choices("input_device", choices, value)
+                if generation != self.inventory_generation:
+                    self.refresh_microphones()
+                    return False
+                self.microphone_refresh.set_sensitive(True)
+                self.microphone_refresh.set_label("刷新设备" if choices is not None else "刷新失败 · 重试")
+                if choices is not None:
+                    value = self.draft.values["input_device"]
+                    if value not in dict(choices):
+                        choices.append((value, "已配置 · 本次未检测到"))
+                    self.set_choices("input_device", choices, value)
                 return False
             GLib.idle_add(apply)
         Thread(target=fetch, daemon=True, name="recordian-device-inventory").start()
@@ -819,6 +850,16 @@ class NativeSettingsWindow:
                 w.set_text(val)
         self.syncing = False
         self.set_choices("qwen_language", language_choices(self.draft.values["asr_provider"], self.draft.values["qwen_language"]), self.draft.values["qwen_language"])
+        if self.draft.values["record_backend"] != self.inventory_backend:
+            self.refresh_microphones()
+        else:
+            # Cancel/defaults may restore a disconnected device not present in
+            # the most recently enumerated model. Keep draft and display equal.
+            value = self.draft.values["input_device"]
+            choices = [(row[1], row[0]) for row in self.controls["input_device"][1].get_model()]
+            if value not in dict(choices):
+                choices.append((value, "已配置 · 本次未检测到"))
+            self.set_choices("input_device", choices, value)
         self.update()
 
     def save_changes(self):
