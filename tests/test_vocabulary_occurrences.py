@@ -10,7 +10,7 @@ from recordian import streaming_correction as sc
 from recordian.contextual_choice import CandidateEdit, apply_choices, question_payload
 
 ALIASES = [{"heard": "jeff", "word": "jev", "meaning": "软件工具"}]
-NOTE = "\n编号只标记位置，不属于原文。逐处依据完整语境判断。"
+INSTRUCTIONS = "判断哪个候选句在完整上下文中各处用词都正确。保留或替换须符合各处语义，其他文字不变。"
 
 
 def span_for(text, surface="食盐", candidates=None, start=None):
@@ -44,14 +44,14 @@ def test_two_positions_have_every_assignment_and_exact_absolute_edits():
     span = span_for(text)
     original_span = deepcopy(span)
     state, choice = build(text, span, context="前段" * 200)
-    assert state == "上一段：" + ("前段" * 128) + "\n前言。〔1：食盐〕结果，〔2：食盐〕用量。" + NOTE
+    assert state == "上一段：" + ("前段" * 128) + "\n" + text
     assert choice.question == {
-        "type": "choice", "instructions": cv._INSTRUCTIONS + "候选按编号给出各处用词。",
+        "type": "choice", "instructions": INSTRUCTIONS,
         "criteria": {
-            "keep": "1：食盐；2：食盐",
-            "c0": "1：食盐；2：实验",
-            "c1": "1：实验；2：食盐",
-            "c2": "1：实验；2：实验",
+            "keep": text,
+            "c0": "前言。食盐结果，实验用量。",
+            "c1": "前言。实验结果，食盐用量。",
+            "c2": "前言。实验结果，实验用量。",
         },
     }
     first = CandidateEdit(3, 5, "食盐", "实验")
@@ -69,12 +69,53 @@ def test_two_positions_have_every_assignment_and_exact_absolute_edits():
 def test_three_binary_positions_include_all_eight_assignments():
     text = "食盐，食盐，食盐。"
     state, choice = build(text)
-    assert state == "〔1：食盐〕，〔2：食盐〕，〔3：食盐〕。" + NOTE
+    assert state == text
     assert list(choice.edits) == ["keep", "c0", "c1", "c2", "c3", "c4", "c5", "c6"]
     assert [apply_choices(text, [choice], {"pick": key}) for key in choice.edits] == [
         "食盐，食盐，食盐。", "食盐，食盐，实验。", "食盐，实验，食盐。", "食盐，实验，实验。",
         "实验，食盐，食盐。", "实验，食盐，实验。", "实验，实验，食盐。", "实验，实验，实验。",
     ]
+
+
+@pytest.mark.parametrize("count", [2, 3])
+@pytest.mark.parametrize("layout", ["compact", "padded", "clipped"])
+@pytest.mark.parametrize("surface,replacement", [("食盐", "实验"), ("公示", "公式")], ids=["salt", "notice"])
+@pytest.mark.parametrize("context", ["", "旧段\n" * 100 + "尾行\n末行\n"], ids=["no-context", "multiline"])
+def test_natural_criteria_equal_applied_bundles_in_original_window(
+    count, layout, surface, replacement, context,
+):
+    """Catch lost characters/newlines, wrong window offsets and partial assignments."""
+    core = "\n，\t".join([surface] * count)
+    if layout == "compact":
+        text, start, begin = "\n " + core + " \n", 2, 0
+        stop = len(text)
+    elif layout == "padded":
+        text = "前" * 200 + "\n " + core + " \n" + "后" * 200
+        start, begin, stop = 202, 42, 364
+    else:
+        # A partial surface at each edge must survive, but never become an edit.
+        text = surface + "，" * 159 + core + "，" * (161 - len(core)) + surface + "尾"
+        start, begin, stop = 161, 1, 323
+    state, choice = build(
+        text, span_for(text, surface=surface, candidates=[replacement], start=start),
+        context=context,
+    )
+    focus = text[begin:stop]
+    criteria = choice.question["criteria"]
+    assert len(criteria) == 2 ** count
+    assert list(criteria) == ["keep", *(f"c{i}" for i in range(2 ** count - 1))]
+    assert criteria["keep"] == focus
+    assert state == (f"上一段：{context[-256:]}\n" if context else "") + focus
+    assert choice.question["instructions"] == INSTRUCTIONS
+    assert len(set(criteria.values())) == 2 ** count
+    for key, criterion in criteria.items():
+        result = apply_choices(text, [choice], {"pick": key})
+        assert criterion == result[begin:stop]
+        assert result[:begin] == text[:begin]
+        assert result[stop:] == text[stop:]
+        assert isinstance(choice.edits[key], tuple)
+        changed = {i for edit in choice.edits[key] for i in range(edit.start, edit.end)}
+        assert all(result[i] == char for i, char in enumerate(text) if i not in changed)
 
 
 @pytest.mark.parametrize("text,candidates", [
@@ -103,7 +144,7 @@ def test_protected_or_meta_second_position_falls_back(text):
 def test_protected_position_is_excluded_without_hiding_other_eligible_positions():
     text = "食盐，不要食盐。然后记录食盐。"
     state, choice = build(text)
-    assert state == "〔1：食盐〕，不要食盐。然后记录〔2：食盐〕。" + NOTE
+    assert state == text
     assert apply_choices(text, [choice], {"pick": "c2"}) == "实验，不要食盐。然后记录实验。"
 
 
@@ -136,7 +177,7 @@ def test_reserved_markers_veto_joint_choice(marker, location):
 def test_window_is_anchored_to_original_span_with_absolute_offsets():
     text = "前" * 200 + "食盐，食盐。" + "后" * 200
     state, choice = build(text)
-    assert state == "前" * 160 + "〔1：食盐〕，〔2：食盐〕。" + "后" * 156 + NOTE
+    assert state == "前" * 160 + "食盐，食盐。" + "后" * 156
     assert choice.edits["c2"] == (CandidateEdit(200, 202, "食盐", "实验"), CandidateEdit(203, 205, "食盐", "实验"))
     assert apply_choices(text, [choice], {"pick": "c0"}) == "前" * 200 + "食盐，实验。" + "后" * 200
 
@@ -155,11 +196,11 @@ def test_occurrence_exactly_inside_right_window_is_included():
 def test_left_window_scans_before_original_span_but_excludes_clipped_occurrence():
     text = "食盐" + "，" * 159 + "食盐，食盐"
     state, choice = build(text, span_for(text, start=161))
-    assert state == "盐" + "，" * 159 + "〔1：食盐〕，〔2：食盐〕" + NOTE
+    assert state == "盐" + "，" * 159 + "食盐，食盐"
     assert choice.edits["c2"] == (CandidateEdit(161, 163, "食盐", "实验"), CandidateEdit(164, 166, "食盐", "实验"))
     text = "食盐，食盐"
     state, choice = build(text, span_for(text, start=3))
-    assert state == "〔1：食盐〕，〔2：食盐〕" + NOTE
+    assert state == text
     assert choice.edits["c1"] == (CandidateEdit(0, 2, "食盐", "实验"),)
 
 
@@ -201,12 +242,12 @@ def test_jev_actual_request_one_atomic_bundle_and_no_weak_retry(monkeypatch, sel
         assert len(calls) == 1
         timeout, state, questions, policy = calls[0]
         assert 0 < timeout <= 1.5
-        assert state == "上一段：" + "前段" * 128 + "\n〔1：食盐〕结果，〔2：食盐〕用量。" + NOTE
+        assert state == "上一段：" + "前段" * 128 + "\n" + text
         assert set(questions) == {"pick"}
         assert questions["pick"] == {
-            "type": "choice", "instructions": cv._INSTRUCTIONS + "候选按编号给出各处用词。",
-            "criteria": {"keep": "1：食盐；2：食盐", "c0": "1：食盐；2：实验",
-                         "c1": "1：实验；2：食盐", "c2": "1：实验；2：实验"},
+            "type": "choice", "instructions": INSTRUCTIONS,
+            "criteria": {"keep": text, "c0": "食盐结果，实验用量。",
+                         "c1": "实验结果，食盐用量。", "c2": "实验结果，实验用量。"},
         }
         assert policy["min_top"] == 0.70
         assert policy["min_margin"] == 0.20
@@ -311,7 +352,7 @@ def test_joint_timeout_cache_survives_late_alias_until_invalidated(monkeypatch, 
         assert c.finish(text) == bundle
         assert c.poll(text) == bundle
         assert [set(q) for q in calls] == [{"pick"}, {"role"}]
-        assert calls[0]["pick"]["criteria"]["c2"] == "1：实验；2：实验"
+        assert calls[0]["pick"]["criteria"]["c2"] == bundle
 
         if after_timeout == "cancel":
             c.cancel()
@@ -382,7 +423,7 @@ def test_late_old_joint_bundle_cannot_publish_after_invalidation(monkeypatch, in
         assert c.poll(target) == expected
         assert c.finish(target) == expected
         assert len(calls) == (1 if invalidate == "close" else 2)
-        assert calls[0][1]["pick"]["criteria"]["c2"] == "1：实验；2：实验"
+        assert calls[0][1]["pick"]["criteria"]["c2"] == "实验旧记录，实验旧用量。"
         if invalidate == "new_snapshot":
             assert c.poll(old) == old
             assert "新记录" in calls[1][0]

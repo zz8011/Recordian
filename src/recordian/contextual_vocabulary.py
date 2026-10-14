@@ -17,6 +17,7 @@ CONTEXT_FLANK = 160
 PREVIOUS_LIMIT = 256
 MAX_OPTIONS = 8
 _INSTRUCTIONS = "这是整句识别假设。只能选择一个候选条件。不要改条件以外的字，不要删字。"
+_OCCURRENCE_INSTRUCTIONS = "判断哪个候选句在完整上下文中各处用词都正确。保留或替换须符合各处语义，其他文字不变。"
 
 
 def vocabulary_choice(
@@ -107,13 +108,7 @@ def vocabulary_occurrence_choice(
     if len(positions) <= 1 or len(words) ** len(positions) > MAX_OPTIONS:
         return baseline
 
-    chunks: list[str] = []
-    cursor = begin
-    for index, (left, right) in enumerate(positions, 1):
-        chunks.extend((text[cursor:left], f"〔{index}：{surface}〕"))
-        cursor = right
-    chunks.append(text[cursor:stop])
-    state = "".join(chunks) + "\n编号只标记位置，不属于原文。逐处依据完整语境判断。"
+    state = focus
     if context:
         state = f"上一段：{context[-PREVIOUS_LIMIT:]}\n{state}"
 
@@ -121,9 +116,13 @@ def vocabulary_occurrence_choice(
     edits: dict[str, tuple[CandidateEdit, ...]] = {}
     for index, assignment in enumerate(product(words, repeat=len(positions))):
         key = "keep" if index == 0 else f"c{index - 1}"
-        options[key] = "；".join(
-            f"{number}：{word}" for number, word in enumerate(assignment, 1)
-        )
+        chunks: list[str] = []
+        cursor = begin
+        for (left, right), word in zip(positions, assignment, strict=True):
+            chunks.extend((text[cursor:left], word))
+            cursor = right
+        chunks.append(text[cursor:stop])
+        options[key] = "".join(chunks)
         edits[key] = tuple(
             CandidateEdit(left, right, surface, word)
             for (left, right), word in zip(positions, assignment, strict=True)
@@ -132,7 +131,7 @@ def vocabulary_occurrence_choice(
     return state, Choice(
         "pick", {
             "type": "choice",
-            "instructions": _INSTRUCTIONS + "候选按编号给出各处用词。",
+            "instructions": _OCCURRENCE_INSTRUCTIONS,
             "criteria": options,
         }, edits,
     )
