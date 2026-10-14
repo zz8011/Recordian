@@ -375,7 +375,7 @@ def test_loopback_hotwords_reach_model_and_full_eos(srv, tmp_path):
     init = model.init_calls[0]
     assert init["context"] == "热词参考: 孔子、孟子"
     assert init["language"] == "Chinese"
-    assert init["unfixed_token_num"] == 1
+    assert init["unfixed_token_num"] == 2
     assert init["unfixed_chunk_num"] == 0
     # full protocol: deltas -> final reset -> CLOSE 1000
     assert close_code == 1000

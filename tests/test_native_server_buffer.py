@@ -89,17 +89,17 @@ def test_every_sample_and_inference_prefix_preserved(srv, samples, split):
     assert model.finish_budgets == [4]
     assert model.init_calls == [{
         "context": "public test context", "language": "English",
-        "unfixed_chunk_num": 0, "unfixed_token_num": 1, "chunk_size_sec": 0.16,
+        "unfixed_chunk_num": 0, "unfixed_token_num": 2, "chunk_size_sec": 0.16,
     }]
     full_calls = len(expected_sizes) - bool(remaining)
-    assert model.budgets[:full_calls] == ([4] + [2] * (full_calls - 1) if full_calls else [])
+    assert model.budgets[:full_calls] == ([4] * full_calls)
     if remaining:
         assert model.budgets[-1] == 4
     if full_calls:
         assert model.chunk_sizes[:full_calls] == [(5120, 0.32)] + [(2560, 0.16)] * (full_calls - 1)
 
 
-def test_fixed_deltas_and_adaptive_token_budgets_remain_original(srv):
+def test_fixed_deltas_remain_aligned_with_rollback_budget(srv):
     model = RecordingModel(replies=[
         ("hello|metadata", "he|metadata"),
         ("hello|metadata", "hell|metadata"),
@@ -112,8 +112,8 @@ def test_fixed_deltas_and_adaptive_token_budgets_remain_original(srv):
     session.feed(_pcm(5120 + 5 * 2560))
     deltas = session.process_ready()
     assert [delta for delta, _ in deltas] == ["he", "ll", "", "o", "", " world"]
-    assert model.budgets == [4, 2, 3, 4, 4, 4]
-    assert session.max_new_tokens == 2
+    assert model.budgets == [4, 4, 4, 4, 4, 4]
+    assert session.max_new_tokens == 4
     assert session.last_fixed == "hello world"
     assert session.finish()[0] == "。"
     assert model.finish_budgets == [4]
@@ -126,6 +126,76 @@ def test_chinese_token_adaptation_keeps_original_floor(srv):
     assert session.max_new_tokens == 4
     session._adapt("中文")
     assert session.max_new_tokens == 4
+
+
+@pytest.mark.parametrize("rollback", [2, 3, 5])
+def test_decode_budget_covers_rollback_and_forward_progress(srv, monkeypatch, rollback):
+    monkeypatch.setattr(srv, "UNFIX_TOKEN_NUM", rollback)
+    model = RecordingModel()
+    session = srv.StreamingSession(model, None, "")
+    session.feed(_pcm(5120 + 5 * 2560 + 1))
+    session.process_ready()
+    # Growth, a stalled partial, and a shorter partial must all retain enough
+    # budget to regenerate the revisable tail and produce new speech tokens.
+    for partial in ("hello", "hello", "hell", "hello world"):
+        session._adapt(partial)
+        assert session.max_new_tokens >= rollback + 2
+    session.finish()
+    assert all(budget >= rollback + 2 for budget in model.budgets + model.finish_budgets)
+
+
+def test_non_transcript_fixed_prefix_does_not_consume_speech(srv):
+    # A larger upstream rollback can expose language metadata as `fixed`
+    # before the ASR tag itself becomes fixed. It is not spoken text.
+    model = RecordingModel(replies=[
+        ("今天", "language None"),
+        ("今天早上", "今天"),
+        ("今天早上好", "今天早上"),
+    ])
+    session = srv.StreamingSession(model, None, "")
+    session.feed(_pcm(5120 + 2 * 2560))
+    deltas = [delta for delta, _ in session.process_ready()]
+    assert deltas == ["", "今天", "早上"]
+    assert "".join(deltas) + session.finish()[0] == "今天早上好。"
+
+
+def test_spoken_language_word_is_not_filtered_as_metadata(srv):
+    model = RecordingModel(replies=[("language English is useful", "language English")])
+    session = srv.StreamingSession(model, None, "")
+    session.feed(_pcm(5120))
+    assert session.process_ready()[0][0] == "language English"
+
+
+def test_revised_fixed_prefix_fails_instead_of_slicing_by_length(srv):
+    model = RecordingModel(replies=[("我去公园", "我去"), ("你去公园", "你去公")])
+    session = srv.StreamingSession(model, None, "")
+    session.feed(_pcm(5120))
+    assert session.process_ready()[0][0] == "我去"
+    session.feed(_pcm(2560))
+    with pytest.raises(RuntimeError, match="fixed transcript revised"):
+        session.process_ready()
+
+
+def test_revised_final_prefix_fails_instead_of_corrupting_transcript(srv):
+    class Model(RecordingModel):
+        def finish_streaming_transcribe(self, state, max_new_tokens):
+            state.text = "你去公园。"
+
+    model = Model(replies=[("我去公园", "我去")])
+    session = srv.StreamingSession(model, None, "")
+    session.feed(_pcm(5120))
+    assert session.process_ready()[0][0] == "我去"
+    with pytest.raises(RuntimeError, match="final transcript revised"):
+        session.finish()
+
+
+def test_final_tail_is_decoded_as_an_actual_short_chunk(srv):
+    model = RecordingModel()
+    session = srv.StreamingSession(model, None, "")
+    session.feed(_pcm(5121))
+    session.process_ready()
+    session.finish()
+    assert model.chunk_sizes == [(5120, 0.32), (1, 1 / 16000)]
 
 
 def test_final_odd_sample_tail_reaches_model_in_full(srv):
@@ -385,12 +455,34 @@ def test_one_hour_admission_streams_beyond_thirty_second_buffer(srv, monkeypatch
         assert not lock.locked()
         assert sessions[0].samples_fed == 496000
         np.testing.assert_array_equal(np.concatenate(model.segments), np.frombuffer(pcm, dtype="<i2") / 32768.0)
-        assert model.budgets == [4] + [2] * 191 + [4]
+        assert model.budgets == [4] * 193
         assert [len(segment) for segment in model.segments] == [5120] + [2560] * 191 + [1920]
         assert model.finish_budgets == [4]
         messages = [json.loads(frame) for frame in ws.sent]
         assert sum(frame.get("msg", {}).get("reset", False) for frame in messages if isinstance(frame.get("msg"), dict)) == 1
         with pytest.raises(RuntimeError, match="closed"):
             len(sessions[0].buffer)
+
+    asyncio.run(scenario())
+
+
+def test_incomplete_auto_language_eos_never_sends_success_reset(srv):
+    class IncompleteModel(FakeModel):
+        def finish_streaming_transcribe(self, state, max_new_tokens):
+            state.force_language = None
+            state._raw_decoded = "language Chinese"
+            state.text = ""
+
+    async def scenario():
+        ws = FakeWS()
+        for frame in [json.dumps({"requestId": "incomplete-eos", "secret_key": TOKEN}), b"\0\0", srv.EOS_MESSAGE]:
+            ws.incoming.put_nowait(frame)
+        args = srv.build_parser().parse_args([])
+        lock = asyncio.Lock()
+        await asyncio.wait_for(srv._handle_connection(ws, IncompleteModel(), TOKEN, args, lock), timeout=3)
+        assert ws.closed[0] == 1011
+        assert not lock.locked()
+        messages = [json.loads(frame) for frame in ws.sent]
+        assert not any(isinstance(frame.get("msg"), dict) and frame["msg"].get("reset") for frame in messages)
 
     asyncio.run(scenario())

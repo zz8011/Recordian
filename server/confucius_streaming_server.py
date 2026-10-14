@@ -27,7 +27,8 @@ import secrets
 SAMPLE_RATE = 16000
 STEP_MS = 160
 LOOKAHEAD_MS = 160
-UNFIX_TOKEN_NUM = 1
+# Keep two decoder tokens revisable until the next audio chunk arrives.
+UNFIX_TOKEN_NUM = 2
 EOS_MESSAGE = "YOUDAO_ONETIME_ASR_STREAM_EOS"
 
 # Upstream resolve_system_prompt budget (pinned ws_server.py @ c4611929).
@@ -255,7 +256,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 class StreamingSession:
-    """One ASR stream; official example.py chunking + adaptive token logic.
+    """One ASR stream with bounded rollback and forward decode progress.
 
     ``model`` is duck-typed (init_streaming_state / streaming_transcribe /
     finish_streaming_transcribe) so tests can inject a fake.
@@ -282,9 +283,12 @@ class StreamingSession:
         self.step = SAMPLE_RATE * STEP_MS // 1000
         self.look = SAMPLE_RATE * LOOKAHEAD_MS // 1000
         self.is_first = True
-        self.max_new_tokens = max(1, (self.step + self.look) // 1280)
+        # Each call regenerates the revisable tail. Reserve two additional
+        # tokens so a larger rollback cannot consume the entire decode budget.
+        self.minimum_new_tokens = UNFIX_TOKEN_NUM + 2
+        self.max_new_tokens = max(self.minimum_new_tokens, (self.step + self.look) // 1280)
         self.first_max_new_tokens = self.max_new_tokens
-        self.floor = min(32, max(4, 2 * (self.step // 1280)))
+        self.floor = max(self.minimum_new_tokens, min(32, max(4, 2 * (self.step // 1280))))
         self.last_fixed = ""
         self.last_text_tmp = ""
         self.total_new_asr_tokens: list[str] = []
@@ -303,7 +307,7 @@ class StreamingSession:
         self.buffer.close()
 
     def _adapt(self, text: str) -> None:
-        # Adaptive max_new_tokens, verbatim semantics of upstream example.py.
+        # Retain upstream adaptation, bounded below by rollback plus progress.
         last_is_chinese = any(
             "\u4e00" <= ch <= "\u9fff" for ch in (self.total_new_asr_tokens[-1] if self.total_new_asr_tokens else "")
         )
@@ -316,7 +320,7 @@ class StreamingSession:
             self.max_new_tokens += 1
         if last_is_chinese:
             self.max_new_tokens *= 2
-        self.max_new_tokens = min(self.floor, self.max_new_tokens)
+        self.max_new_tokens = max(self.minimum_new_tokens, min(self.floor, self.max_new_tokens))
 
     def process_ready(self) -> list[tuple[str, float]]:
         """Decode every full chunk in the buffer; returns (delta, cost_ms)."""
@@ -336,12 +340,22 @@ class StreamingSession:
             start = time.perf_counter()
             text, fixed = self.model.streaming_transcribe(seg, self.state, int(self.max_new_tokens))
             cost_ms = (time.perf_counter() - start) * 1000
+            text = (text or "").split("|")[0]
             fixed = (fixed or "").split("|")[0]
+            # Upstream rollback can leave language metadata before the ASR
+            # tag in `fixed`, while `text` already contains clean speech.
+            # Only a prefix of that speech can consume transcript positions.
+            if not text.startswith(fixed):
+                fixed = ""
             delta = ""
             if len(fixed) > len(self.last_fixed):
+                if not fixed.startswith(self.last_fixed):
+                    raise RuntimeError("fixed transcript revised an emitted prefix")
                 delta = fixed[len(self.last_fixed):]
                 self.last_fixed = fixed
-            self._adapt((text or "").split("|")[0])
+            elif fixed and not self.last_fixed.startswith(fixed):
+                raise RuntimeError("fixed transcript revised an emitted prefix")
+            self._adapt(text)
             out.append((delta, round(cost_ms, 1)))
         return out
 
@@ -354,10 +368,31 @@ class StreamingSession:
         if samples:
             seg = self.buffer.pop_float(samples)
             self.buffer.clear()
-            self.model.streaming_transcribe(seg, self.state, int(self.first_max_new_tokens))
+            # The upstream EOS decoder truncates token IDs without the
+            # streaming decoder's complete-character and language-tag checks.
+            # Decode the exact tail as one short streaming chunk instead.
+            self.state.chunk_size_samples = samples
+            self.state.chunk_size_sec = samples / SAMPLE_RATE
+            budget = self.first_max_new_tokens
+            tokenizer = getattr(getattr(self.model, "processor", None), "tokenizer", None)
+            raw = getattr(self.state, "_raw_decoded", "")
+            if tokenizer is not None and raw:
+                ids = tokenizer.encode(raw.split("|")[0])
+                rollback = int(self.state.unfixed_token_num)
+                while rollback < len(ids) and "\ufffd" in tokenizer.decode(ids[:-rollback]):
+                    rollback += 1
+                budget = max(budget, rollback + 2)
+            self.model.streaming_transcribe(seg, self.state, int(budget))
         self.model.finish_streaming_transcribe(self.state, self.first_max_new_tokens)
         cost_ms = (time.perf_counter() - start) * 1000
+        raw = getattr(self.state, "_raw_decoded", None)
+        if (self.samples_fed and isinstance(raw, str)
+                and getattr(self.state, "force_language", None) is None
+                and "<asr_text>" not in raw):
+            raise RuntimeError("incomplete automatic-language transcript at end of stream")
         final = (self.state.text or "").split("|")[0]
+        if not final.startswith(self.last_fixed):
+            raise RuntimeError("final transcript revised an emitted prefix")
         delta = ""
         if len(final) > len(self.last_fixed):
             delta = final[len(self.last_fixed):]
