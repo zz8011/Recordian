@@ -1,0 +1,321 @@
+{
+  "status": "known failures; not deployed; gold unchanged",
+  "baseline_commit": "f74a8942d3fe668ecf225bef5c0bdbfdde109f6e",
+  "candidate_source_sha256": {
+    "src/recordian/contextual_vocabulary.py": "395eddb9745d743398667824576ae046228ae6b139d9c68d9bcf797e06e1a2f6",
+    "src/recordian/contextual_choice.py": "b8a05b7571fcea7d2d1ee00890e5b23ec76bb1f7851aa95b463ccac6f67407c0",
+    "src/recordian/streaming_correction.py": "4660cdce961030928c5c915d47464ef8c38a0bf1fe56b2f6cb73f5860634022a",
+    "src/recordian/particle_correction.py": "936e37cdfdb84922c39186b6bd1903706916e79b1b1067126fab243f045e13b4",
+    "src/recordian/jev_judge.py": "e8da695f67fc812491df0561e37d27f71696cf1e824c733bf41c62a17e51225f",
+    "src/recordian/semif_judge.py": "c4b2a565bb4bc3777898b1edde0470fa0e889b349abb7a00cb206af9f72fa5c1"
+  },
+  "cases": [
+    {
+      "id": "OE_SEALED:H002",
+      "category": "homophone",
+      "input": "这份调查如实反应了居民的困难，居委会收到报告后很快作出反应。",
+      "expected": "这份调查如实反映了居民的困难，居委会收到报告后很快作出反应。",
+      "context": "志愿者走访了老旧小区，把漏水和照明问题写进报告。居委会当天下午就安排了维修人员。",
+      "hotwords": [
+        "反应",
+        "反映"
+      ],
+      "source_dataset": "regression",
+      "baseline_actual": "这份调查如实反应了居民的困难，居委会收到报告后很快作出反应。",
+      "candidate_actual": "这份调查如实反应了居民的困难，居委会收到报告后很快作出反映。",
+      "new_false_positions": [
+        28
+      ],
+      "lost_correction_positions": []
+    },
+    {
+      "id": "OE_SEALED:N001",
+      "category": "proper_name",
+      "input": "财务林青先核对报销单，摄影师林青随后去拍合影。",
+      "expected": "财务林清先核对报销单，摄影师林青随后去拍合影。",
+      "context": "林清负责这次活动的财务，报销材料都由她审核。摄影师林青今天也会到场，他负责最后的集体合影。",
+      "hotwords": [
+        "林青",
+        "林清"
+      ],
+      "source_dataset": "regression",
+      "baseline_actual": "财务林青先核对报销单，摄影师林青随后去拍合影。",
+      "candidate_actual": "财务林青先核对报销单，摄影师林清随后去拍合影。",
+      "new_false_positions": [
+        15
+      ],
+      "lost_correction_positions": []
+    },
+    {
+      "id": "OE_SEALED:N005",
+      "category": "proper_name",
+      "input": "南边的青河村先修水渠，北边的青河村下周再开工。",
+      "expected": "南边的清河村先修水渠，北边的青河村下周再开工。",
+      "context": "这次水利工程涉及两个村子，南边叫清河村，北边叫青河村。施工队安排先南后北，以免两条道路同时封闭。",
+      "hotwords": [
+        "青河",
+        "清河"
+      ],
+      "source_dataset": "regression",
+      "baseline_actual": "南边的清河村先修水渠，北边的青河村下周再开工。",
+      "candidate_actual": "南边的清河村先修水渠，北边的清河村下周再开工。",
+      "new_false_positions": [
+        14
+      ],
+      "lost_correction_positions": []
+    },
+    {
+      "id": "OE_SEALED:N015",
+      "category": "proper_name",
+      "input": "工程师周航检查了传感器，维修单上也由周航签字。",
+      "expected": "工程师周航检查了传感器，维修单上也由周航签字。",
+      "context": "周航负责展厅恒温设备的维护。策展人周杭今天外出借展，不参与设备维修。",
+      "hotwords": [
+        "周航",
+        "周杭"
+      ],
+      "source_dataset": "regression",
+      "baseline_actual": "工程师周航检查了传感器，维修单上也由周航签字。",
+      "candidate_actual": "工程师周航检查了传感器，维修单上也由周杭签字。",
+      "new_false_positions": [
+        19
+      ],
+      "lost_correction_positions": []
+    },
+    {
+      "id": "OE_SEALED:N017",
+      "category": "proper_name",
+      "input": "北边的青河村已经备好石料，施工队明天进青河村修渠。",
+      "expected": "北边的青河村已经备好石料，施工队明天进青河村修渠。",
+      "context": "清河村位于南边，水渠已经修完。接下来要施工的是北边的青河村，村里今天正在备料。",
+      "hotwords": [
+        "青河",
+        "清河"
+      ],
+      "source_dataset": "regression",
+      "baseline_actual": "北边的青河村已经备好石料，施工队明天进青河村修渠。",
+      "candidate_actual": "北边的青河村已经备好石料，施工队明天进清河村修渠。",
+      "new_false_positions": [
+        19
+      ],
+      "lost_correction_positions": []
+    },
+    {
+      "id": "OE_SEALED:N018",
+      "category": "proper_name",
+      "input": "启明项目今晚测试路灯，居民可以向启明项目的值班人员反映亮度问题。",
+      "expected": "启明项目今晚测试路灯，居民可以向启明项目的值班人员反映亮度问题。",
+      "context": "启明项目负责路灯改造，今晚安排试亮。负责旧档案的启铭项目白天已经下班，夜间不设值班岗。",
+      "hotwords": [
+        "启铭",
+        "启明"
+      ],
+      "source_dataset": "regression",
+      "baseline_actual": "启明项目今晚测试路灯，居民可以向启明项目的值班人员反映亮度问题。",
+      "candidate_actual": "启明项目今晚测试路灯，居民可以向启铭项目的值班人员反映亮度问题。",
+      "new_false_positions": [
+        17
+      ],
+      "lost_correction_positions": []
+    },
+    {
+      "id": "OE_SEALED:N023",
+      "category": "proper_name",
+      "input": "东岸的新州镇今天封桥，去新州镇的班车改走北边公路。",
+      "expected": "东岸的新州镇今天封桥，去新州镇的班车改走北边公路。",
+      "context": "新州镇在东岸，今天因桥梁施工调整进镇路线。西岸的新洲镇道路照常通行，班车也不改线。",
+      "hotwords": [
+        "新州",
+        "新洲"
+      ],
+      "source_dataset": "regression",
+      "baseline_actual": "东岸的新洲镇今天封桥，去新州镇的班车改走北边公路。",
+      "candidate_actual": "东岸的新洲镇今天封桥，去新洲镇的班车改走北边公路。",
+      "new_false_positions": [
+        13
+      ],
+      "lost_correction_positions": []
+    },
+    {
+      "id": "OE_SEALED:N042",
+      "category": "proper_name",
+      "input": "远航项目先修复壁画，远航项目月底办展，远航项目则继续培训船员。",
+      "expected": "远杭项目先修复壁画，远杭项目月底办展，远航项目则继续培训船员。",
+      "context": "远杭项目围绕古壁画修复展开，修复后会举办成果展。远航项目负责船员培训，两个项目的结项日期不同。",
+      "hotwords": [
+        "远杭",
+        "远航"
+      ],
+      "source_dataset": "regression",
+      "baseline_actual": "远航项目先修复壁画，远航项目月底办展，远航项目则继续培训船员。",
+      "candidate_actual": "远航项目先修复壁画，远航项目月底办展，远杭项目则继续培训船员。",
+      "new_false_positions": [
+        20
+      ],
+      "lost_correction_positions": []
+    },
+    {
+      "id": "OE_SEALED:N060",
+      "category": "proper_name",
+      "input": "远航项目公布了船员培训名单，学员向远航项目提交体检表，通过后参加远航项目的航海课程。",
+      "expected": "远航项目公布了船员培训名单，学员向远航项目提交体检表，通过后参加远航项目的航海课程。",
+      "context": "远航项目负责船员培训，报到前需要提交体检表。远杭项目专门修复古壁画，参与者不参加航海课程。",
+      "hotwords": [
+        "远杭",
+        "远航"
+      ],
+      "source_dataset": "regression",
+      "baseline_actual": "远杭项目公布了船员培训名单，学员向远航项目提交体检表，通过后参加远航项目的航海课程。",
+      "candidate_actual": "远杭项目公布了船员培训名单，学员向远杭项目提交体检表，通过后参加远杭项目的航海课程。",
+      "new_false_positions": [
+        18,
+        33
+      ],
+      "lost_correction_positions": []
+    },
+    {
+      "id": "OE_STRUCT:SO018",
+      "category": "homophone",
+      "input": "来信里提到了那项权力，但没有交代究竟归谁负责；聊完出差安排，他又让我把那项权力记下来，等对方补充说明再讨论。",
+      "expected": "来信里提到了那项权力，但没有交代究竟归谁负责；聊完出差安排，他又让我把那项权力记下来，等对方补充说明再讨论。",
+      "context": "来信只是泛称相关事项，未说明是组织的职权还是个人享有的权利，转述也未作解释。",
+      "hotwords": [
+        "权利",
+        "来信"
+      ],
+      "source_dataset": "regression",
+      "baseline_actual": "来信里提到了那项权力，但没有交代究竟归谁负责；聊完出差安排，他又让我把那项权力记下来，等对方补充说明再讨论。",
+      "candidate_actual": "来信里提到了那项权力，但没有交代究竟归谁负责；聊完出差安排，他又让我把那项权利记下来，等对方补充说明再讨论。",
+      "new_false_positions": [
+        38
+      ],
+      "lost_correction_positions": []
+    },
+    {
+      "id": "OE_STRUCT:SO019",
+      "category": "homophone",
+      "input": "他觉得这个形式还得再看看，暂时不愿当场作结论；谈完人员安排以后，主持人又提到这个形式，说等相关同事到齐再说明。",
+      "expected": "他觉得这个形式还得再看看，暂时不愿当场作结论；谈完人员安排以后，主持人又提到这个形式，说等相关同事到齐再说明。",
+      "context": "发言只笼统指代上周讨论的事情，无法确认是表达方式还是局面，主持人也没有解释。",
+      "hotwords": [
+        "形势",
+        "主持人"
+      ],
+      "source_dataset": "regression",
+      "baseline_actual": "他觉得这个形式还得再看看，暂时不愿当场作结论；谈完人员安排以后，主持人又提到这个形式，说等相关同事到齐再说明。",
+      "candidate_actual": "他觉得这个形式还得再看看，暂时不愿当场作结论；谈完人员安排以后，主持人又提到这个形势，说等相关同事到齐再说明。",
+      "new_false_positions": [
+        41
+      ],
+      "lost_correction_positions": []
+    },
+    {
+      "id": "names001",
+      "category": "proper_name",
+      "input": "林舟把核完的账本交给了林舟。",
+      "expected": "林洲把核完的账本交给了林舟。",
+      "context": "项目会计林洲刚完成核账，档案员林舟在柜台接收账本。这次账本由会计亲手交给档案员。",
+      "hotwords": [
+        "林舟",
+        "林洲"
+      ],
+      "source_dataset": "sealed",
+      "baseline_actual": "林洲把核完的账本交给了林舟。",
+      "candidate_actual": "林洲把核完的账本交给了林洲。",
+      "new_false_positions": [
+        12
+      ],
+      "lost_correction_positions": []
+    },
+    {
+      "id": "names002",
+      "category": "proper_name",
+      "input": "邵晴向邵晴演示了新的打光方法。",
+      "expected": "邵清向邵晴演示了新的打光方法。",
+      "context": "摄影师邵清负责现场示范，服装师邵晴第一次学习布光。刚才的演示由摄影师操作，服装师在旁观看。",
+      "hotwords": [
+        "邵晴",
+        "邵清"
+      ],
+      "source_dataset": "sealed",
+      "baseline_actual": "邵清向邵晴演示了新的打光方法。",
+      "candidate_actual": "邵清向邵清演示了新的打光方法。",
+      "new_false_positions": [
+        4
+      ],
+      "lost_correction_positions": []
+    },
+    {
+      "id": "names003",
+      "category": "proper_name",
+      "input": "陆铭替陆铭修好了那辆自行车。",
+      "expected": "陆明替陆铭修好了那辆自行车。",
+      "context": "维修员陆明今天接到教师陆铭送来的自行车。教师不会修车，维修员已经把车修好。",
+      "hotwords": [
+        "陆铭",
+        "陆明"
+      ],
+      "source_dataset": "sealed",
+      "baseline_actual": "陆明替陆铭修好了那辆自行车。",
+      "candidate_actual": "陆明替陆明修好了那辆自行车。",
+      "new_false_positions": [
+        4
+      ],
+      "lost_correction_positions": []
+    },
+    {
+      "id": "names004",
+      "category": "proper_name",
+      "input": "沈瑜给沈瑜寄来了排练用的乐谱。",
+      "expected": "沈榆给沈瑜寄来了排练用的乐谱。",
+      "context": "编曲者沈榆住在外地，歌手沈瑜留在剧院排练。今天收到的乐谱由编曲者寄给歌手。",
+      "hotwords": [
+        "沈瑜",
+        "沈榆"
+      ],
+      "source_dataset": "sealed",
+      "baseline_actual": "沈榆给沈瑜寄来了排练用的乐谱。",
+      "candidate_actual": "沈榆给沈榆寄来了排练用的乐谱。",
+      "new_false_positions": [
+        4
+      ],
+      "lost_correction_positions": []
+    },
+    {
+      "id": "names005",
+      "category": "proper_name",
+      "input": "唐悦把自己画的平面图递给了唐悦。",
+      "expected": "唐越把自己画的平面图递给了唐悦。",
+      "context": "建筑师唐越画好了平面图，业主唐悦前来确认布局。两人见面后，建筑师把原图递给业主。",
+      "hotwords": [
+        "唐悦",
+        "唐越"
+      ],
+      "source_dataset": "sealed",
+      "baseline_actual": "唐越把自己画的平面图递给了唐悦。",
+      "candidate_actual": "唐越把自己画的平面图递给了唐越。",
+      "new_false_positions": [
+        14
+      ],
+      "lost_correction_positions": []
+    },
+    {
+      "id": "names006",
+      "category": "proper_name",
+      "input": "方岚带着方岚找到了那块岩石。",
+      "expected": "方蓝带着方岚找到了那块岩石。",
+      "context": "向导方蓝熟悉山路，地质教师方岚第一次来这里采样。今天由向导带路，教师跟随他到达岩石旁。",
+      "hotwords": [
+        "方岚",
+        "方蓝"
+      ],
+      "source_dataset": "sealed",
+      "baseline_actual": "方蓝带着方岚找到了那块岩石。",
+      "candidate_actual": "方蓝带着方蓝找到了那块岩石。",
+      "new_false_positions": [
+        5
+      ],
+      "lost_correction_positions": []
+    }
+  ]
+}

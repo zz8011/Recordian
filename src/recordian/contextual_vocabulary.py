@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
-from itertools import product
 from typing import Any
 
 from .contextual_choice import CandidateEdit, Choice
@@ -17,7 +16,7 @@ CONTEXT_FLANK = 160
 PREVIOUS_LIMIT = 256
 MAX_OPTIONS = 8
 _INSTRUCTIONS = "这是整句识别假设。只能选择一个候选条件。不要改条件以外的字，不要删字。"
-_OCCURRENCE_INSTRUCTIONS = "判断哪个候选句在完整上下文中各处用词都正确。保留或替换须符合各处语义，其他文字不变。"
+_OCCURRENCE_SEPARATORS = "，。！？；,:;!?\n"
 
 
 def vocabulary_choice(
@@ -60,78 +59,87 @@ def vocabulary_choice(
     )
 
 
-def vocabulary_occurrence_choice(
+def vocabulary_occurrence_choices(
     text: str,
     span: dict[str, Any],
     *,
     is_eligible: Callable[[int, int], bool],
     context: str = "",
     aliases: Sequence[dict[str, Any]] = (),
-) -> tuple[str, Choice] | None:
-    """Offer complete assignments in the original span's bounded window.
+) -> tuple[str, list[Choice]] | None:
+    """Preserve the baseline and add independent, locally anchored positions.
 
-    The caller supplies the same semantic/meta guards used to select the first
-    pinyin span. Literal protection is applied here too. Any ambiguous or
-    oversized expansion returns the unmodified single-span baseline.
+    The original eligibility guards and candidate-product cap still apply.
+    Ambiguous or oversized expansions keep only the unchanged baseline.
     """
     baseline = vocabulary_choice(text, span, context=context)
     if baseline is None:
         return None
+    state, initial = baseline
+    fallback = (state, [initial])
     start, end, surface = span["start"], span["end"], span["surface"]
     begin, stop = max(0, start - CONTEXT_FLANK), min(len(text), end + CONTEXT_FLANK)
     focus = text[begin:stop]
     if any(marker in focus or marker in context for marker in "〔〕"):
-        return baseline
+        return fallback
 
     # Reuse the baseline whitelist, including its order, deduplication and cap.
     words = [surface]
     words.extend(bundle[0].replacement for bundle in baseline[1].edits.values() if bundle)
     if any(len(word) != len(surface) for word in words):
-        return baseline
+        return fallback
 
     protected = _protected_spans(text)
     positions: list[tuple[int, int]] = []
+    ordinals: dict[int, int] = {}
+    occurrence_count = 0
     position = text.find(surface, begin, stop)
     while position >= 0:
+        occurrence_count += 1
         position_end = position + len(surface)
         if (
             not any(position < right and left < position_end for left, right in protected)
             and is_eligible(position, position_end)
         ):
             if positions and position < positions[-1][1]:
-                return baseline
+                return fallback
             if any(position < alias["end"] and alias["start"] < position_end for alias in aliases):
-                return baseline
+                return fallback
             positions.append((position, position_end))
+            # The model sees the full source, including protected occurrences.
+            # Its ordinal must describe that source, not the filtered edit list.
+            ordinals[position] = occurrence_count
         # Advance one character so overlapping starts cannot silently disappear.
         position = text.find(surface, position + 1, stop)
     if len(positions) <= 1 or len(words) ** len(positions) > MAX_OPTIONS:
-        return baseline
+        return fallback
 
-    state = focus
-    if context:
-        state = f"上一段：{context[-PREVIOUS_LIMIT:]}\n{state}"
-
-    options = {}
-    edits: dict[str, tuple[CandidateEdit, ...]] = {}
-    for index, assignment in enumerate(product(words, repeat=len(positions))):
-        key = "keep" if index == 0 else f"c{index - 1}"
-        chunks: list[str] = []
-        cursor = begin
-        for (left, right), word in zip(positions, assignment, strict=True):
-            chunks.extend((text[cursor:left], word))
-            cursor = right
-        chunks.append(text[cursor:stop])
-        options[key] = "".join(chunks)
-        edits[key] = tuple(
-            CandidateEdit(left, right, surface, word)
-            for (left, right), word in zip(positions, assignment, strict=True)
-            if word != surface
+    choices = [initial]
+    for i, (left, right) in enumerate(positions):
+        if left == start and right == end:
+            continue
+        lo = (positions[i - 1][1] + left) // 2 if i else begin
+        hi = (right + positions[i + 1][0]) // 2 if i + 1 < len(positions) else stop
+        for k in range(left - 1, lo - 1, -1):
+            if text[k] in _OCCURRENCE_SEPARATORS:
+                lo = k + 1
+                break
+        for k in range(right, hi):
+            if text[k] in _OCCURRENCE_SEPARATORS:
+                hi = k
+                break
+        before, after = text[lo:left], text[right:hi]
+        options = {}
+        edits: dict[str, tuple[CandidateEdit, ...]] = {}
+        for j, word in enumerate(words):
+            key = "keep" if j == 0 else f"c{j - 1}"
+            options[key] = f"此处应使用{word}：" + before + word + after
+            edits[key] = () if j == 0 else (CandidateEdit(left, right, surface, word),)
+        instruction = (
+            f"依据完整上下文，只判断第{ordinals[left]}处词语：{before}〔{surface}〕{after}。"
+            "其他位置的用词不属于本题。"
         )
-    return state, Choice(
-        "pick", {
-            "type": "choice",
-            "instructions": _OCCURRENCE_INSTRUCTIONS,
-            "criteria": options,
-        }, edits,
-    )
+        choices.append(Choice(
+            f"p{i}", {"type": "choice", "instructions": instruction, "criteria": options}, edits,
+        ))
+    return state, choices
