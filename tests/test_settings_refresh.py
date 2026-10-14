@@ -91,7 +91,7 @@ def ui(tmp_path, monkeypatch):
     monkeypatch.setattr(native, 'discover_agents', lambda: [catalog.AgentCandidate(k, n, '/synthetic/' + k if k in {'hermes', 'codex', 'claude'} else '', k in {'hermes', 'claude'}) for k, n in catalog.AGENTS])
     current = {
         'asr_provider': 'confucius-asr', 'asr_realtime_endpoint': 'ws://127.0.0.1:8321/asr_stream_api_v1',
-        'input_device': 'saved-missing-device', 'qwen_language': 'Chinese',
+        'input_device': 'saved-missing-device', 'qwen_language': 'Chinese', 'record_backend': 'ffmpeg-pulse',
         'asr_context': 'One\nTwo', 'refine_provider': 'cloud',
         'refine_api_base': 'https://example.invalid/v1', 'refine_api_model': 'fixture-model',
         'refine_api_key': 'fixture-secret', 'refine_model': '/old/model.gguf',
@@ -285,3 +285,154 @@ def test_absent_agent_preferences_match_existing_runtime_defaults(ui):
     assert ui.draft.values["wake_to_agent"] is True
     assert ui.controls["enable_agent"][1].get_active()
     assert ui.controls["wake_to_agent"][1].get_active()
+
+
+@pytest.fixture
+def device_jobs(ui, monkeypatch):
+    """Control slow device enumeration; GTK callbacks and draft logic stay real."""
+    from recordian import native_settings
+
+    jobs = []
+
+    class DeferredThread:
+        def __init__(self, *, target, **kwargs):
+            self.target = target
+
+        def start(self):
+            jobs.append(self.target)
+
+    monkeypatch.setattr(native_settings, 'Thread', DeferredThread)
+    monkeypatch.setattr(native_settings, 'microphone_choices', lambda backend, current: [
+        ('default', 'Default'), (backend + '-mic', backend + ' microphone'),
+    ])
+    return jobs
+
+
+def device_ids(ui):
+    return {row[1] for row in ui.controls['input_device'][1].get_model()}
+
+
+def finish_device_job(jobs):
+    jobs.pop(0)()
+    pump()
+
+
+def test_device_refresh_burst_has_one_worker_and_latest_backend(ui, device_jobs):
+    ui.refresh_microphones()
+    assert not ui.microphone_refresh.get_sensitive()
+    for _ in range(25):
+        ui.refresh_microphones()
+    ui.controls['record_backend'][1].set_active_id('arecord')
+    assert len(device_jobs) == 1
+    finish_device_job(device_jobs)
+    assert 'ffmpeg-pulse-mic' not in device_ids(ui)
+    assert len(device_jobs) == 1
+    finish_device_job(device_jobs)
+    assert 'arecord-mic' in device_ids(ui)
+    assert ui.microphone_refresh.get_sensitive()
+    assert not device_jobs
+
+
+def test_cancel_rejects_pending_backend_inventory(ui, device_jobs):
+    ui.controls['record_backend'][1].set_active_id('arecord')
+    ui.cancel_changes()
+    finish_device_job(device_jobs)
+    assert 'arecord-mic' not in device_ids(ui)
+    assert len(device_jobs) == 1
+    finish_device_job(device_jobs)
+    assert 'ffmpeg-pulse-mic' in device_ids(ui)
+    assert not ui.draft.dirty
+
+
+def test_cancel_rebuilds_finished_inventory_and_preserves_disconnected_device(ui, device_jobs):
+    ui.controls['record_backend'][1].set_active_id('arecord')
+    finish_device_job(device_jobs)
+    ui.controls['input_device'][1].set_active_id('arecord-mic')
+    ui.cancel_changes()
+    assert ui.controls['input_device'][1].get_active_id() == 'saved-missing-device'
+    assert 'arecord-mic' not in device_ids(ui)
+    finish_device_job(device_jobs)
+    assert 'ffmpeg-pulse-mic' in device_ids(ui)
+    assert not ui.draft.dirty
+
+
+def test_restore_defaults_invalidates_inventory(ui, device_jobs, monkeypatch):
+    from gi.repository import Gtk
+
+    ui.draft.defaults['record_backend'] = 'auto'
+    ui.controls['record_backend'][1].set_active_id('arecord')
+    monkeypatch.setattr(Gtk.MessageDialog, 'run', lambda _: Gtk.ResponseType.OK)
+    ui.restore_confirm(None)
+    finish_device_job(device_jobs)
+    assert 'arecord-mic' not in device_ids(ui)
+    finish_device_job(device_jobs)
+    assert 'auto-mic' in device_ids(ui)
+    assert ui.controls['input_device'][1].get_active_id() == 'default'
+
+
+def test_close_drops_pending_refresh_and_does_not_launch_more_workers(ui, device_jobs):
+    ui.refresh_microphones()
+    ui.controls['record_backend'][1].set_active_id('arecord')
+    ui.window.destroy()
+    finish_device_job(device_jobs)
+    ui.refresh_microphones()
+    assert not device_jobs
+
+
+def test_inventory_preserves_selection_made_while_loading(ui, device_jobs):
+    ui.refresh_microphones()
+    ui.controls['input_device'][1].set_active_id('default')
+    finish_device_job(device_jobs)
+    assert ui.controls['input_device'][1].get_active_id() == 'default'
+    assert ui.draft.values['input_device'] == 'default'
+
+
+def test_failed_inventory_keeps_selection_and_can_retry(ui, device_jobs, monkeypatch):
+    from recordian import native_settings
+
+    def fail(*_):
+        raise RuntimeError('synthetic enumeration failure')
+
+    monkeypatch.setattr(native_settings, 'microphone_choices', fail)
+    ui.refresh_microphones()
+    finish_device_job(device_jobs)
+    assert ui.microphone_refresh.get_sensitive()
+    assert ui.controls['input_device'][1].get_active_id() == 'saved-missing-device'
+    monkeypatch.setattr(native_settings, 'microphone_choices', lambda *_: [('default', 'Default')])
+    ui.refresh_microphones()
+    finish_device_job(device_jobs)
+    assert ui.microphone_refresh.get_sensitive()
+    assert not ui.draft.dirty
+
+
+def test_same_backend_cancel_does_not_start_inventory(ui, device_jobs):
+    ui.controls['input_device'][1].set_active_id('default')
+    ui.cancel_changes()
+    assert not device_jobs
+    assert ui.controls['input_device'][1].get_active_id() == 'saved-missing-device'
+
+
+def test_thread_start_failure_releases_busy_state_for_retry(ui, device_jobs, monkeypatch):
+    from recordian import native_settings
+
+    deferred_thread = native_settings.Thread
+
+    class RefusedThread:
+        def __init__(self, **kwargs):
+            pass
+
+        def start(self):
+            raise RuntimeError("can't start new thread")
+
+    monkeypatch.setattr(native_settings, 'Thread', RefusedThread)
+    ui.refresh_microphones()
+    assert not ui.inventory_running
+    assert ui.microphone_refresh.get_sensitive()
+    assert ui.controls['input_device'][1].get_active_id() == 'saved-missing-device'
+    assert not ui.draft.dirty
+    monkeypatch.setattr(native_settings, 'Thread', deferred_thread)
+    ui.refresh_microphones()
+    assert len(device_jobs) == 1
+    finish_device_job(device_jobs)
+    assert 'ffmpeg-pulse-mic' in device_ids(ui)
+    assert ui.microphone_refresh.get_sensitive()

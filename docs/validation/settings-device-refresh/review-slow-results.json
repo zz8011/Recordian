@@ -1,0 +1,158 @@
+[
+  {
+    "arm": "baseline",
+    "scenario": "single_timeout",
+    "calls": [
+      "pactl"
+    ],
+    "completion_ms": 3001.801311999998,
+    "applied": [
+      {
+        "ms": 3001.1584670000957,
+        "ids": [
+          "default"
+        ]
+      }
+    ],
+    "button_sensitive_during": null,
+    "button_label_after": null,
+    "heartbeat_max_ms": 21.297172999993563
+  },
+  {
+    "arm": "baseline",
+    "scenario": "burst_timeout",
+    "calls": [
+      "pactl",
+      "pactl",
+      "pactl",
+      "pactl",
+      "pactl",
+      "pactl",
+      "pactl",
+      "pactl",
+      "pactl",
+      "pactl",
+      "pactl",
+      "pactl",
+      "pactl",
+      "pactl",
+      "pactl",
+      "pactl",
+      "pactl",
+      "pactl",
+      "pactl",
+      "pactl",
+      "pactl",
+      "pactl",
+      "pactl",
+      "pactl",
+      "pactl",
+      "pactl",
+      "pactl",
+      "pactl",
+      "pactl",
+      "pactl",
+      "pactl",
+      "pactl"
+    ],
+    "completion_ms": 3006.86326999994,
+    "applied": [
+      {
+        "ms": 3006.231562000039,
+        "ids": [
+          "default"
+        ]
+      }
+    ],
+    "button_sensitive_during": null,
+    "button_label_after": null,
+    "heartbeat_max_ms": 21.739644999797747
+  },
+  {
+    "arm": "baseline",
+    "scenario": "switch_to_fast",
+    "calls": [
+      "pactl",
+      "arecord"
+    ],
+    "completion_ms": 3000.8282119999876,
+    "applied": [
+      {
+        "ms": 111.28802799998994,
+        "ids": [
+          "default",
+          "hw:SYNTH"
+        ]
+      }
+    ],
+    "button_sensitive_during": null,
+    "button_label_after": null,
+    "heartbeat_max_ms": 21.198185999992347
+  },
+  {
+    "arm": "candidate",
+    "scenario": "single_timeout",
+    "calls": [
+      "pactl"
+    ],
+    "completion_ms": 3001.738967999927,
+    "applied": [
+      {
+        "ms": 3000.8492800000113,
+        "ids": [
+          "default"
+        ]
+      }
+    ],
+    "button_sensitive_during": false,
+    "button_label_after": "\u5237\u65b0\u8bbe\u5907",
+    "heartbeat_max_ms": 21.219261000169354
+  },
+  {
+    "arm": "candidate",
+    "scenario": "burst_timeout",
+    "calls": [
+      "pactl",
+      "pactl"
+    ],
+    "completion_ms": 6004.426086000194,
+    "applied": [
+      {
+        "ms": 6003.566294000166,
+        "ids": [
+          "default"
+        ]
+      }
+    ],
+    "button_sensitive_during": false,
+    "button_label_after": "\u5237\u65b0\u8bbe\u5907",
+    "heartbeat_max_ms": 22.00588699997752
+  },
+  {
+    "arm": "candidate",
+    "scenario": "switch_to_fast",
+    "calls": [
+      "pactl",
+      "arecord"
+    ],
+    "completion_ms": 3013.2007650001924,
+    "applied": [
+      {
+        "ms": 100.48227800007226,
+        "ids": [
+          "default"
+        ]
+      },
+      {
+        "ms": 3013.0939620000845,
+        "ids": [
+          "default",
+          "hw:SYNTH"
+        ]
+      }
+    ],
+    "button_sensitive_during": false,
+    "button_label_after": "\u5237\u65b0\u8bbe\u5907",
+    "heartbeat_max_ms": 21.564570999998978
+  }
+]
