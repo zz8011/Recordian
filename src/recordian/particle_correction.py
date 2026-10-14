@@ -12,6 +12,7 @@ import time
 from collections import OrderedDict
 from typing import Any
 
+from .contextual_choice import CandidateEdit, Choice, judge_choices
 from .hotword_corrector import _protected_spans
 from .jev_judge import request_jev_choices
 
@@ -115,29 +116,30 @@ class ParticleCorrector:
             generation = self._generation
         original = str(self.base.finish(text))
         questions, positions = particle_questions(original)
+        protected_fn = getattr(self.base, "semantic_protected_spans", None)
+        protected = protected_fn(original) if callable(protected_fn) else []
+        choices = []
+        for name, indexes in positions.items():
+            indexes = [index for index in indexes if not any(start <= index < end for start, end in protected)]
+            if indexes:
+                choices.append(Choice(name, questions[name], {
+                    option: () if option == "的" else tuple(
+                        CandidateEdit(index, index + 1, "的", option) for index in indexes
+                    ) for option in "的地得"
+                }))
         with self._lock:
             if self._closed or generation != self._generation:
                 return original
         remaining = deadline - time.monotonic()
-        if questions and remaining >= 0.15:
-            answers = request_jev_choices(
-                remaining,
-                _STATE,
-                questions,
+        if choices and remaining >= 0.15:
+            result = judge_choices(
+                original, _STATE, choices,
+                request=request_jev_choices, timeout_s=remaining,
                 endpoint=self.endpoint,
                 min_top=MIN_TOP,
                 min_margin=MIN_MARGIN,
                 on_process=lambda proc: self._register(proc, generation),
             )
-            chars = list(original)
-            for name, indexes in positions.items():
-                choice = answers.get(name)
-                if choice not in ("地", "得"):
-                    continue
-                for index in indexes:
-                    if chars[index] == "的":
-                        chars[index] = choice
-            result = "".join(chars)
         else:
             result = original
         with self._lock:

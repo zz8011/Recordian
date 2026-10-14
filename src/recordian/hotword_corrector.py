@@ -18,6 +18,7 @@ Every replacement is returned so callers can log/inspect what changed.
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 
 _ASCII_RUN_RE = re.compile(r"[A-Za-z][A-Za-z0-9]*(?:[ ._-][A-Za-z0-9]+)*")
 _CJK_RUN_RE = re.compile(r"[一-鿿]+")
@@ -212,6 +213,7 @@ def ambiguous_pinyin_span(
     hotwords: list[str],
     *,
     frequencies: dict[str, int] | None = None,
+    is_eligible: Callable[[int, int], bool] | None = None,
 ) -> dict[str, object] | None:
     """Return one ambiguous CJK span, or None.
 
@@ -256,6 +258,8 @@ def ambiguous_pinyin_span(
                     continue
                 candidates = [term for term in pooled if term != window]
                 if not candidates:
+                    continue
+                if is_eligible is not None and not is_eligible(start, end):
                     continue
                 candidates.sort(key=lambda term: (-int(freq.get(term, 0)), order[term]))
                 return {

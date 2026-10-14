@@ -18,6 +18,10 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, cast
 
+from .contextual_choice import CandidateEdit, Choice, apply_choices, judge_choices
+from .contextual_vocabulary import MIN_MARGIN as WORD_MIN_MARGIN
+from .contextual_vocabulary import MIN_TOP as WORD_MIN_TOP
+from .contextual_vocabulary import vocabulary_choice
 from .hotword_corrector import (
     _parse_replacement_pair,
     _protected_spans,
@@ -213,6 +217,8 @@ def _alias_spans(
     text: str,
     aliases: list[tuple[str, str, str]],
     context: str = "",
+    *,
+    extra_protected: Sequence[tuple[int, int]] = (),
 ) -> list[dict[str, object]]:
     """Unprotected, non-meta occurrences of heard tokens, leftmost first.
 
@@ -236,7 +242,7 @@ def _alias_spans(
     """
     if not aliases:
         return []
-    protected = _protected_spans(text)
+    protected = _protected_spans(text) + list(extra_protected)
     clauses = _clause_spans(text)
     candidates: list[tuple[int, int, str, str, str, str]] = []
     for heard, word, meaning in aliases:
@@ -308,12 +314,14 @@ def _overlaps_span(start: int, end: int, spans: list[tuple[int, int]]) -> bool:
 
 def _apply_alias_edits(base: str, edits: list[tuple[int, int, str, str]]) -> str:
     """Apply role replacements right to left; offsets refer to the snapshot."""
-    updated = base
-    for start, end, surface, word in sorted(edits, reverse=True):
-        if updated[start:end] != surface:
-            continue
-        updated = updated[:start] + word + updated[end:]
-    return updated
+    choices = [
+        Choice(
+            f"alias{i}", {"criteria": {"apply": "Apply the validated alias choice"}},
+            {"apply": (CandidateEdit(start, end, surface, word),)},
+        )
+        for i, (start, end, surface, word) in enumerate(edits)
+    ]
+    return apply_choices(base, choices, {choice.question_id: "apply" for choice in choices})
 
 
 class _Job:
@@ -554,9 +562,22 @@ class StreamingHotwordCorrector:
         deterministic = self._deterministic(text)
         if not self._network_on():
             return deterministic, None, []
-        span = ambiguous_pinyin_span(deterministic, self._terms, frequencies=self._frequencies)
+        # Quoted or unfinished literal dictation is not semantic evidence
+        # that its spelling should be rewritten.
+        if any(char in deterministic for char in "`\"'“”‘’「」『』【】"):
+            return deterministic, None, []
+        protected = self.semantic_protected_spans(deterministic)
+        span = ambiguous_pinyin_span(
+            deterministic, self._terms, frequencies=self._frequencies,
+            is_eligible=lambda start, end: (
+                not _meta_mention(deterministic, start, end)
+                and not _overlaps_span(start, end, protected)
+            ),
+        )
         # The software-context gate is applied per clause inside _alias_spans.
-        alias_spans = _alias_spans(deterministic, self._aliases, self._context)
+        alias_spans = _alias_spans(
+            deterministic, self._aliases, self._context, extra_protected=protected,
+        )
         return deterministic, span, alias_spans
 
     def _deterministic(self, text: str) -> str:
@@ -568,11 +589,22 @@ class StreamingHotwordCorrector:
         )
         return corrected
 
+    def semantic_protected_spans(self, text: str) -> list[tuple[int, int]]:
+        """User-declared replacement targets cannot be undone by a model."""
+        spans = []
+        for _source, target in self._replacements:
+            start = text.find(target)
+            while start >= 0:
+                spans.append((start, start + len(target)))
+                start = text.find(target, start + len(target))
+        return spans
+
     def _network_on(self) -> bool:
         if not self._enabled or self._timeout_s <= 0 or self._closed:
             return False
-        # Official Jev is only for declared aliases. Disabled mode and an
-        # empty alias list never start the CLI. SemIf still needs an endpoint.
+        # Preserve the existing activation scope. Enabling word judgments in
+        # previously inactive no-alias configurations needs a separate quality
+        # and latency gate; unifying their executor must not opt users in.
         if self._provider == "jev":
             return bool(self._aliases)
         return bool(self._endpoint)
@@ -714,7 +746,7 @@ class StreamingHotwordCorrector:
         updated = deterministic
         deadline = time.monotonic() + max(0.0, timeout_s)
 
-        def ask(state: str, questions: dict[str, dict[str, Any]]) -> dict[str, str | None]:
+        def ask(state: str, questions: dict[str, dict[str, Any]], **policy: Any) -> dict[str, str | None]:
             if job.dropped or time.monotonic() >= deadline:
                 return {}
             remaining = deadline - time.monotonic()
@@ -728,6 +760,7 @@ class StreamingHotwordCorrector:
                     endpoint=endpoint,
                     argv=self._jev_argv,
                     on_process=lambda proc: self._register_proc(proc, job),
+                    **policy,
                 )
             return request_choices(session, endpoint, remaining, state, questions)
 
@@ -745,16 +778,25 @@ class StreamingHotwordCorrector:
                 token = str(candidate)
                 words[f"c{index}"] = token
                 options[f"c{index}"] = _criterion(deterministic, surface, token, start, end)
-            results = ask(
-                self._state(job, surface),
-                {"pick": {"type": "choice", "instructions": _INSTRUCTIONS, "criteria": options}},
+            choice = Choice(
+                "pick", {"type": "choice", "instructions": _INSTRUCTIONS, "criteria": options},
+                {key: () if key == "keep" else (CandidateEdit(start, end, surface, word),)
+                 for key, word in words.items()},
             )
-            picked = results.get("pick")
-            if picked is not None and picked != "keep" and picked in words:
-                replacement = words[picked]
-                if updated[start:end] == surface and replacement != surface:
-                    updated = updated[:start] + replacement + updated[end:]
-                    self._publish_partial(job, updated)
+            state = self._state(job, surface)
+            policy: dict[str, float] = {}
+            if self._provider == "jev":
+                built = vocabulary_choice(deterministic, span, context=job.context)
+                if built is not None:
+                    state, choice = built
+                policy = {"min_top": WORD_MIN_TOP, "min_margin": WORD_MIN_MARGIN}
+            updated = judge_choices(
+                deterministic, state, [choice],
+                request=lambda _budget, state, questions, **kwargs: ask(state, questions, **kwargs),
+                timeout_s=timeout_s, **policy,
+            )
+            if updated != deterministic:
+                self._publish_partial(job, updated)
 
         # Semantic-role judgments: one request per distinct clause, at most
         # _MAX_ALIAS_SPANS distinct clause questions. Batching several spans

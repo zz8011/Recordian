@@ -40,6 +40,7 @@
 | `continuous_dictation.py` / `duration_guard.py` | One microphone and IME token across sample-counted Confucius segments; bounded raw tail and failure handling |
 | `streaming_correction.py` / `semif_judge.py` / `jev_judge.py` | Optional asynchronous candidate judgment via SemIf or official Jev, contextual aliases, and shared corrector factory |
 | `particle_correction.py` | Optional final-only Chinese particle choices with equal-length edits and shared Jev timeout |
+| `contextual_choice.py` / `contextual_vocabulary.py` | Shared whitelisted choices/span validation and bounded context for lexicon-backed Chinese homophones/names |
 | `spoken_formatting.py` / `text_cleanup.py` | Spoken numbers and URL dots, with literal-text protection |
 | `auto_lexicon.py` | Auto-learned hotword lexicon (fragment-filtered, separate auto quota) |
 | `voice_wake.py` | Wake-word activation |
