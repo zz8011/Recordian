@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from .contextual_choice import CandidateEdit, Choice
@@ -14,6 +15,7 @@ CONTEXT_FLANK = 160
 PREVIOUS_LIMIT = 256
 MAX_OPTIONS = 8
 _INSTRUCTIONS = "这是整句识别假设。只能选择一个候选条件。不要改条件以外的字，不要删字。"
+_BOUNDARY = re.compile(r"[，。！？；：、,.!?;:\n]+")
 
 
 def vocabulary_choice(
@@ -31,6 +33,13 @@ def vocabulary_choice(
     begin, stop = max(0, start - CONTEXT_FLANK), min(len(text), end + CONTEXT_FLANK)
     before, after = text[begin:start], text[end:stop]
     focus = before + surface + after
+    if focus.find(surface) != focus.rfind(surface):
+        clause_before = _BOUNDARY.split(before)[-1]
+        clause_after = _BOUNDARY.split(after)[0]
+        clause = clause_before + surface + clause_after
+        if clause.find(surface) == clause.rfind(surface):
+            before, after = clause_before, clause_after
+            focus = clause
     state = focus + f"\n只判断这个跨度：「{surface}」"
     if context:
         state = f"上一段：{context[-PREVIOUS_LIMIT:]}\n{state}"
