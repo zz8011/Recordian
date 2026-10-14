@@ -27,6 +27,8 @@ def request_jev_choices(
     questions: dict[str, dict[str, Any]],
     *,
     endpoint: str = "",
+    min_top: float = 0.70,
+    min_margin: float = 0.20,
     argv: Sequence[str] | None = None,
     on_process: Callable[[subprocess.Popen[bytes]], None] | None = None,
 ) -> dict[str, str | None]:
@@ -103,7 +105,10 @@ def request_jev_choices(
         if not isinstance(criteria, dict):
             continue
         picked = answers.get(name)
-        results[name] = interpret_choice(criteria, picked if isinstance(picked, dict) else None)
+        results[name] = interpret_choice(
+            criteria, picked if isinstance(picked, dict) else None,
+            min_top=min_top, min_margin=min_margin,
+        )
     return results
 
 

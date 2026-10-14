@@ -97,7 +97,7 @@ def run_continuous_dictation(
     buffered_canonical = ""
     commit_segments = bool(getattr(session, "supports_segments", False))
     failed = False
-    live = {"asr": None}
+    live = {"asr": None, "corrector": None}
     # Audio-counted IME inactivity: the composition token dies after 120 s
     # idle, so long silence must re-touch it well before that.
     ime_idle_samples = 0
@@ -172,12 +172,13 @@ def run_continuous_dictation(
 
     def _cancel_live() -> None:
         cancel_event.set()
-        current = live["asr"]
-        if current is not None:
-            try:
-                current.cancel()
-            except Exception:  # noqa: BLE001
-                pass
+        for kind in ("corrector", "asr"):
+            current = live[kind]
+            if current is not None:
+                try:
+                    current.close() if kind == "corrector" else current.cancel()
+                except Exception:  # noqa: BLE001
+                    pass
 
     worker.cancel_session = _cancel_live
 
@@ -248,11 +249,17 @@ def run_continuous_dictation(
         except Exception:  # noqa: BLE001
             pass
         corrector = None
+        live["corrector"] = None
 
     def _ensure_corrector() -> Any:
         nonlocal corrector
         if corrector is None:
             corrector = build_corrector(context_tail[-guard.CONTINUOUS_CONTEXT_CHARS :])
+            live["corrector"] = corrector
+        # Registration may overlap a controller cancel. Closing here prevents
+        # a final-only judge from starting after cancellation already happened.
+        if cancel_event.is_set():
+            corrector.close()
         return corrector
 
     def _preedit(text: str, *, refresh: bool = False, recovery: str | None = None) -> bool:
@@ -433,12 +440,9 @@ def run_continuous_dictation(
         # User stop (reader EOF): one formatter pass over the whole
         # uncommitted raw tail, then normalise once for display/commit.
         _close_corrector()
-        formatter = build_corrector(context_tail[-guard.CONTINUOUS_CONTEXT_CHARS :])
+        formatter = _ensure_corrector()
         canonical = normalize_final_text(str(formatter.finish(snapshot) or "")) if snapshot else ""
-        try:
-            formatter.close()
-        except Exception:  # noqa: BLE001
-            pass
+        _close_corrector()
         worker.semif_applied = bool(snapshot or buffered_canonical)
         held_raw = ""
         final_text = buffered_canonical + canonical

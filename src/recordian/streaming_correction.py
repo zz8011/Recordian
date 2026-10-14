@@ -25,6 +25,7 @@ from .hotword_corrector import (
     correct_hotwords,
 )
 from .jev_judge import request_jev_choices
+from .particle_correction import ParticleCorrector
 from .runtime_config import (
     DEFAULT_JEV_TIMEOUT_S,
     DEFAULT_SEMIF_TIMEOUT_S,
@@ -817,7 +818,7 @@ def corrector_from_args(
     hotwords: list[str],
     *,
     context: str = "",
-) -> StreamingHotwordCorrector:
+) -> StreamingHotwordCorrector | ParticleCorrector:
     """Build a corrector with the standard SemIf wiring from CLI/config args.
 
     ``context`` is the bounded previous-segment tail used only as judgment
@@ -829,7 +830,7 @@ def corrector_from_args(
         timeout_s = normalize_jev_timeout_s(getattr(args, "jev_timeout_s", DEFAULT_JEV_TIMEOUT_S))
     else:
         timeout_s = normalize_semif_timeout_s(getattr(args, "semif_timeout_s", DEFAULT_SEMIF_TIMEOUT_S))
-    return StreamingHotwordCorrector(
+    corrector = StreamingHotwordCorrector(
         list(hotwords),
         endpoint=str(getattr(args, "semif_endpoint", "") or ""),
         timeout_s=timeout_s,
@@ -838,6 +839,10 @@ def corrector_from_args(
         contextual_aliases=getattr(args, "contextual_aliases", None),
         provider=provider,
     )
+
+    if provider == "jev" and bool(getattr(args, "enable_particle_correction", False)):
+        return ParticleCorrector(corrector, timeout_s=timeout_s, endpoint=str(getattr(args, "semif_endpoint", "") or ""))
+    return corrector
 
 
 def _correction_log_path() -> Path | None:

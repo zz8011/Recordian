@@ -18,13 +18,23 @@ _MIN_TOP = 0.70
 _MIN_MARGIN = 0.20
 
 
-def interpret_choice(options: Mapping[str, str], picked: object) -> str | None:
-    """Return an option key only when the distribution clears the fixed gate.
+def interpret_choice(
+    options: Mapping[str, str], picked: object, *,
+    min_top: float = _MIN_TOP, min_margin: float = _MIN_MARGIN,
+) -> str | None:
+    """Return an option key only when the distribution clears the rejection gate.
+
+    Optional thresholds may tighten, but never weaken, the default gate.
 
     ``None`` means keep the original. A ``choice`` without a usable
     distribution is rejected. ``_MIN_TOP`` and ``_MIN_MARGIN`` reject weak
     answers; they are not a calibrated probability of being correct.
     """
+    if (
+        not math.isfinite(min_top) or not math.isfinite(min_margin)
+        or not _MIN_TOP <= min_top <= 1.0 or not _MIN_MARGIN <= min_margin <= 1.0
+    ):
+        return None
     if not isinstance(picked, dict) or not options:
         return None
     choice = picked.get("choice")
@@ -49,7 +59,7 @@ def interpret_choice(options: Mapping[str, str], picked: object) -> str | None:
     ranking = sorted(scores.items(), key=lambda item: item[1])
     top_name, top_score = ranking[-1]
     second = ranking[-2][1] if len(ranking) > 1 else 0.0
-    if top_name != choice or top_score < _MIN_TOP or top_score - second < _MIN_MARGIN:
+    if top_name != choice or top_score < min_top or top_score - second < min_margin:
         return None
     return choice
 

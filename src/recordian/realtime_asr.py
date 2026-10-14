@@ -642,7 +642,18 @@ def _start_realtime_asr_worker(
             session_hotwords = resolve_hotwords()
             corrector = _build_streaming_corrector()
             asr_session = provider.start_realtime_session(hotwords=session_hotwords)
-            worker.cancel_session = lambda: _cancel_asr_session(asr_session)
+            def _cancel_current() -> None:
+                # Stop judgment as well as audio, including a cancel during
+                # the base corrector's final wait before the particle pass.
+                cancel_event.set()
+                try:
+                    corrector.close()
+                finally:
+                    _cancel_asr_session(asr_session)
+
+            worker.cancel_session = _cancel_current
+            if cancel_event.is_set():
+                _cancel_current()
 
             stale = False
             last_displayed = ""

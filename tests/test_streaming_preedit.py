@@ -1592,3 +1592,36 @@ def test_worker_cancelled_before_begin_never_binds_session(monkeypatch) -> None:
         "realtime_composition_cancelled_before_begin" in str(e.get("message", ""))
         for e in events
     )
+
+
+def test_controller_cancel_closes_particle_corrector_during_final(monkeypatch):
+    import recordian.particle_correction as pc
+    import recordian.streaming_correction as sc
+
+    entered, release = threading.Event(), threading.Event()
+    calls = []
+    def finish(self, text):
+        entered.set()
+        assert release.wait(2)
+        return text
+    monkeypatch.setattr(sc.StreamingHotwordCorrector, "finish", finish)
+    def ask(*args, **kwargs):
+        calls.append(True)
+        return {}
+    monkeypatch.setattr(pc, "request_jev_choices", ask)
+    bus = FakeFcitxBus()
+    _install_fake_bus(monkeypatch, bus)
+    provider = _RealtimeProvider(_ScriptedSession(["认真仔细的检查。"], finish_text="认真仔细的检查。"))
+    worker = _start_realtime_asr_worker(
+        args=_worker_args(enable_particle_correction=True, correction_provider="jev"),
+        provider=provider, record_handle=_record_handle(), committer=FcitxCommitter(),
+        enable_local_commit=True, auto_hard_enter=False, resolve_hotwords=lambda: [],
+        normalize_final_text=str, on_state=lambda _: None,
+    )
+    assert entered.wait(2)
+    worker.cancel_session()
+    release.set()
+    worker.thread.join(2)
+    assert not worker.thread.is_alive()
+    assert calls == []
+    assert bus.commit_texts() == []

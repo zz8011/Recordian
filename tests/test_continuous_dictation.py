@@ -1450,3 +1450,35 @@ def test_wayland_clipboard_worker_rotates_65_seconds_and_pastes_once(monkeypatch
     finally:
         if worker.transcript_path:
             Path(worker.transcript_path).unlink(missing_ok=True)
+
+
+@pytest.mark.parametrize("at_registration", [False, True])
+@pytest.mark.parametrize("at_eof", [False, True])
+def test_controller_cancel_stops_final_particle_request(monkeypatch, at_registration, at_eof):
+    from recordian import particle_correction as pc
+    from recordian.streaming_correction import StreamingHotwordCorrector
+
+    _short_segment_settings(monkeypatch)
+    calls = []
+    def ask(*args, **kwargs):
+        calls.append(h.cancel_event.is_set())
+        return {}
+    monkeypatch.setattr(pc, "request_jev_choices", ask)
+    def finish(self, text):
+        if not at_registration:
+            h.worker.cancel_session()
+        return text
+    monkeypatch.setattr(StreamingHotwordCorrector, "finish", finish)
+    args = SimpleNamespace(enable_particle_correction=True, correction_provider="jev")
+    def build(context=""):
+        result = corrector_from_args(args, [])
+        if at_registration:
+            h.worker.cancel_session()
+        return result
+    payload = _speech(.6) if at_eof else _speech(1.5) + _silence(.4) + _speech(5.0)
+    h = _Harness(reader=_Reader(payload), provider=_FakeProvider(["认真仔细的检查。"], speech_final="认真仔细的检查。"), build_corrector=build)
+    worker = h.run()
+    assert worker.outcome == "cancelled"
+    assert calls == []
+    assert h.session.commits == []
+    assert h.session.segments == []

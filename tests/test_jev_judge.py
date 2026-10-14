@@ -256,3 +256,17 @@ def test_real_jev_cli_integration(tmp_path: Path) -> None:
         assert "Jeff帮我" in corrector.finish("Jeff帮我调试脚本")
     finally:
         corrector.close()
+
+
+def test_particle_gate_is_forwarded_without_weakening_alias_gate(tmp_path: Path) -> None:
+    argv = _write_script(
+        tmp_path,
+        '''
+        import json,sys
+        sys.stdin.buffer.read()
+        print(json.dumps({'answers': {'p0': {'choice': 'di', 'probabilities': {'de': .12, 'di': .8, 'dei': .08}}}}))
+        ''',
+    )
+    questions = {'p0': {'criteria': {'de': '的', 'di': '地', 'dei': '得'}}}
+    assert request_jev_choices(.5, 'synthetic', questions, argv=argv) == {'p0': 'di'}
+    assert request_jev_choices(.5, 'synthetic', questions, argv=argv, min_top=.85, min_margin=.35) == {'p0': None}

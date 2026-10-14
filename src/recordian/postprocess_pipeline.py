@@ -752,7 +752,13 @@ def _apply_final_semif(
     """
     if not text.strip():
         return text
-    if not bool(getattr(args, "enable_semif_correction", False)):
+    particle_on = (
+        bool(getattr(args, "enable_particle_correction", False))
+        and _streaming_correction.normalize_correction_provider(
+            getattr(args, "correction_provider", "jev")
+        ) == "jev"
+    )
+    if not (bool(getattr(args, "enable_semif_correction", False)) or particle_on):
         return text
     effective = list(hotwords)
     lexicon, pairs = lexicon_from_args(args)

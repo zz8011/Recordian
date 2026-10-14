@@ -241,6 +241,7 @@ def normalize_runtime_config(
     normalized["enable_streaming_commit"] = bool(normalized.get("enable_streaming_commit", False))
     normalized["asr_provider"] = normalize_asr_provider(normalized.get("asr_provider", "qwen-asr"))
     normalized["asr_realtime_endpoint"] = str(normalized.get("asr_realtime_endpoint") or "").strip()
+    normalized["enable_particle_correction"] = bool(normalized.get("enable_particle_correction", False))
     normalized["enable_semif_correction"] = bool(normalized.get("enable_semif_correction", False))
     normalized["correction_provider"] = normalize_correction_provider(normalized.get("correction_provider", "jev"))
     normalized["semif_endpoint"] = str(normalized.get("semif_endpoint") or "").strip()

@@ -415,6 +415,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Enable contextual correction (上下文纠词). Default off; provider selects SemIf or official Jev",
     )
     parser.add_argument(
+        "--enable-particle-correction",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Conservatively correct Chinese 的/地/得 at final through Jev; shares the existing judgment budget",
+    )
+    parser.add_argument(
         "--correction-provider",
         default="jev",
         choices=("semif", "jev"),
@@ -586,6 +592,7 @@ def _parse_args_with_config(parser: argparse.ArgumentParser) -> argparse.Namespa
         args.hotword_correction_edits = max(0, int(getattr(args, "hotword_correction_edits", 1)))
     except Exception:
         args.hotword_correction_edits = 1
+    args.enable_particle_correction = _coerce_bool(getattr(args, "enable_particle_correction", False), default=False)
     args.enable_semif_correction = _coerce_bool(getattr(args, "enable_semif_correction", False), default=False)
     args.correction_provider = normalize_correction_provider(getattr(args, "correction_provider", "jev"))
     args.semif_endpoint = str(getattr(args, "semif_endpoint", "") or "").strip()
@@ -732,6 +739,7 @@ def _save_runtime_config(args: argparse.Namespace) -> None:
         "auto_lexicon_max_auto_hotwords": getattr(args, "auto_lexicon_max_auto_hotwords", 15),
         "enable_hotword_correction": getattr(args, "enable_hotword_correction", True),
         "hotword_correction_edits": getattr(args, "hotword_correction_edits", 1),
+        "enable_particle_correction": getattr(args, "enable_particle_correction", False),
         "enable_semif_correction": getattr(args, "enable_semif_correction", False),
         "correction_provider": normalize_correction_provider(getattr(args, "correction_provider", "jev")),
         "semif_endpoint": getattr(args, "semif_endpoint", ""),

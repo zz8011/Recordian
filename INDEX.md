@@ -39,6 +39,7 @@
 | `hotword_corrector.py` | Deterministic hotword correction (常用词/asr_context + `错词→正词` + ASCII/拼音), runs ASR → refine 之间 |
 | `continuous_dictation.py` / `duration_guard.py` | One microphone and IME token across sample-counted Confucius segments; bounded raw tail and failure handling |
 | `streaming_correction.py` / `semif_judge.py` / `jev_judge.py` | Optional asynchronous candidate judgment via SemIf or official Jev, contextual aliases, and shared corrector factory |
+| `particle_correction.py` | Optional final-only Chinese particle choices with equal-length edits and shared Jev timeout |
 | `spoken_formatting.py` / `text_cleanup.py` | Spoken numbers and URL dots, with literal-text protection |
 | `auto_lexicon.py` | Auto-learned hotword lexicon (fragment-filtered, separate auto quota) |
 | `voice_wake.py` | Wake-word activation |
