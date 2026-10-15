@@ -50,6 +50,30 @@ def test_no_changes_when_text_already_canonical() -> None:
     assert corrected == "用 Codex 和 Claude 开发 Recordian"
 
 
+def test_english_sentence_does_not_swallow_later_hotword_variant() -> None:
+    # "send to codex" matches one space-joining run whose compact key matches
+    # no hotword; the word-level pass must still normalize the trailing
+    # "codex" instead of leaving it swallowed by the sentence run.
+    corrected, changes = correct_hotwords("send to codex review", ["Codex"], max_ascii_edits=0)
+    assert corrected == "send to Codex review"
+    assert changes == [("codex", "Codex")]
+
+
+def test_multiword_hotword_variant_still_normalizes_after_phrase_pass() -> None:
+    corrected, changes = correct_hotwords("试试 VIBE CODING 的效果", ["vibe coding"], max_ascii_edits=0)
+    assert corrected == "试试 vibe coding 的效果"
+    assert changes == [("VIBE CODING", "vibe coding")]
+
+
+def test_word_pass_keeps_short_word_and_far_miss_protections() -> None:
+    # "codes" (4 compact chars, 1 edit from "codex") stays untouched, and
+    # "cloud" (2 edits from "claude") stays untouched — the extra pass must
+    # not weaken the short-key and edit-distance guards.
+    corrected, changes = correct_hotwords("check the codes in the cloud", ["Codex", "Claude"], max_ascii_edits=1)
+    assert corrected == "check the codes in the cloud"
+    assert changes == []
+
+
 def test_cjk_homophone_is_not_forced() -> None:
     pytest.importorskip("pypinyin")
     text = "张征和张艳东讨论这个问题"

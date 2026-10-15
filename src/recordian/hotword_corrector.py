@@ -20,7 +20,13 @@ from __future__ import annotations
 import re
 from collections.abc import Callable
 
+# ASCII runs may join words with spaces so multiword hotwords ("vibe
+# coding") normalize as one phrase; runs without spaces stay single tokens.
 _ASCII_RUN_RE = re.compile(r"[A-Za-z][A-Za-z0-9]*(?:[ ._-][A-Za-z0-9]+)*")
+# Word-level runs for the follow-up pass: a whole-phrase run whose compact
+# key matches no hotword must not swallow a sentence-level hotword variant
+# ("send to codex" would otherwise keep the lowercase "codex").
+_ASCII_WORD_RE = re.compile(r"[A-Za-z][A-Za-z0-9]*(?:[._-][A-Za-z0-9]+)*")
 _CJK_RUN_RE = re.compile(r"[一-鿿]+")
 _CJK_CHAR_RE = re.compile(r"^[一-鿿]+$")
 
@@ -169,20 +175,17 @@ def _allowed_ascii_edits(compact_key: str, max_ascii_edits: int) -> int:
     return max_ascii_edits
 
 
-def _correct_ascii(
+def _correct_ascii_pass(
     text: str,
-    ascii_terms: list[str],
+    targets: list[tuple[str, str]],
+    pattern: re.Pattern[str],
     *,
     max_ascii_edits: int,
     changes: list[tuple[str, str]],
 ) -> str:
-    if not ascii_terms:
-        return text
-
-    targets = [(_hotword_variant_key(term), term) for term in ascii_terms]
     replacements: list[tuple[int, int, str]] = []
     protected = _protected_spans(text)
-    for match in _ASCII_RUN_RE.finditer(text):
+    for match in pattern.finditer(text):
         if _overlaps(match.start(), match.end(), protected):
             continue
         candidate = match.group(0)
@@ -205,6 +208,26 @@ def _correct_ascii(
 
     for start, end, canonical in reversed(replacements):
         text = text[:start] + canonical + text[end:]
+    return text
+
+
+def _correct_ascii(
+    text: str,
+    ascii_terms: list[str],
+    *,
+    max_ascii_edits: int,
+    changes: list[tuple[str, str]],
+) -> str:
+    if not ascii_terms:
+        return text
+
+    targets = [(_hotword_variant_key(term), term) for term in ascii_terms]
+    # Phrase pass first so multiword hotwords win as a whole; the word pass
+    # then recovers variants inside runs the phrase pass left untouched.
+    # Already-canonical words hit the ``candidate == canonical`` break, so
+    # the second pass neither re-replaces nor double-records.
+    text = _correct_ascii_pass(text, targets, _ASCII_RUN_RE, max_ascii_edits=max_ascii_edits, changes=changes)
+    text = _correct_ascii_pass(text, targets, _ASCII_WORD_RE, max_ascii_edits=max_ascii_edits, changes=changes)
     return text
 
 
@@ -465,9 +488,9 @@ def lexicon_from_args(args: object) -> tuple[list[str], list[tuple[str, str]]]:
         _add_replacement(pair)
 
     for raw in getattr(args, "hotword_replacement", None) or getattr(args, "hotword_replacements", None) or []:
-        pair = _parse_replacement_pair(raw)
-        if pair is not None:
-            _add_replacement(pair)
+        replacement_pair = _parse_replacement_pair(raw)
+        if replacement_pair is not None:
+            _add_replacement(replacement_pair)
 
     return hotwords, replacements
 
