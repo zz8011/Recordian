@@ -163,7 +163,11 @@ def compose_system_prompt(
     hotwords: list[str],
     *,
     max_chars: int = MAX_SYSTEM_PROMPT_CHARS,
-    max_hotwords: int = 40,
+    # Match the correction-side lexicon cap (_LEXICON_LIMIT in
+    # streaming_correction) so a full pipeline vocabulary is not silently
+    # truncated on the ASR side; the character budget below still bounds the
+    # header, and a 4000-char server cap remains the hard limit.
+    max_hotwords: int = 64,
 ) -> str:
     """Build the ``system_prompt`` header value within the server budget.
 

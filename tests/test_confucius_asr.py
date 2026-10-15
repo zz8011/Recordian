@@ -111,6 +111,16 @@ class TestComposeSystemPrompt:
         prompt = compose_system_prompt("", ["甲", "甲", "乙"], max_hotwords=40)
         assert prompt.count("甲") == 1
 
+    def test_full_pipeline_vocabulary_survives_default_cap(self):
+        # Manual context + replacement targets + auto-learned terms reach ~43
+        # words; the old default cap of 40 silently dropped trailing terms
+        # even though the character budget had ample room. The default now
+        # matches the correction-side _LEXICON_LIMIT (64).
+        hotwords = [f"词{i:02d}" for i in range(43)]
+        prompt = compose_system_prompt("会议记录", hotwords)
+        for word in hotwords:
+            assert word in prompt
+
 
 class TestPcmConversion:
     """f32le -> PCM16 is standard-library only; numpy appears only in tests."""
