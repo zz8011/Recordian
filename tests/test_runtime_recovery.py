@@ -451,6 +451,30 @@ def test_llamacpp_refiner_without_preset_uses_fewshot_fallback() -> None:
     assert "输入：" in refiner._build_fewshot_prompt("你好")
 
 
+@pytest.mark.parametrize(
+    ("preset", "expected_heading"),
+    [
+        ("intent", "整理语音识别文本："),  # 正文提到“不是会议纪要”，不能误判
+        ("summary", "整理语音识别文本："),
+        ("formal", "将口语转换为书面语："),
+        ("meeting", "整理为会议纪要："),
+        ("technical", "整理为发给大语言模型的提示词："),
+    ],
+)
+def test_llamacpp_fewshot_fallback_matches_builtin_preset(preset: str, expected_heading: str) -> None:
+    from recordian.preset_manager import PresetManager
+    from recordian.providers.llamacpp_text_refiner import LlamaCppTextRefiner
+
+    refiner = LlamaCppTextRefiner(
+        "/tmp/does-not-need-to-exist.gguf", prompt_template=PresetManager().load_preset(preset)
+    )
+
+    prompt = refiner._build_fewshot_prompt("你好")
+
+    assert prompt.startswith(expected_heading), prompt
+    assert prompt.endswith("输入：你好\n输出：")
+
+
 def test_llamacpp_refiner_extracts_chat_and_completion_text() -> None:
     from recordian.providers.llamacpp_text_refiner import LlamaCppTextRefiner
 

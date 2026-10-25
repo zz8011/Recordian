@@ -9,15 +9,15 @@
 - `formal.md` - 正式书面语转换
 - `summary.md` - 提取核心信息
 - `meeting.md` - 会议纪要格式
-- `technical.md` - 技术文档风格
+- `technical.md` - 提示词整理：把口述整理成适合发给大语言模型的提示词
 - `code-comment.md` - 代码注释风格
-- `English.md` - 翻译成英文口语
+- `English.md` - 翻译成英文（美式日常表达）
 - `Japanese.md` - 翻译成日语
 - `Korean.md` - 翻译成韩语
 - `Arabic.md` - 翻译成阿拉伯语
 - `Indonesian.md` - 翻译成印尼语
 - `Uyghur.md` - 翻译成维吾尔语
-- `Extended.md` - 在原意基础上适度扩写
+- `Extended.md` - 在原意基础上适度扩写（不新增事实，最多 150 字）
 
 ### 使用方法
 

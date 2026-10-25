@@ -274,22 +274,28 @@ class LlamaCppTextRefiner(BaseTextRefiner):
         Returns:
             Few-shot prompt
         """
-        # 检测 preset 类型并生成对应的示例
-        task_lower = task_description.lower()
-        rules_text = ' '.join(rules).lower()
+        # 只看首句判断 preset 类型：正文常有“不是会议纪要”这类否定说明，全文匹配会误判
+        heading = task_description.split("。", 1)[0]
 
-        # formal preset
-        if "正式" in task_lower or "书面语" in task_lower or "正式" in rules_text:
-            return f"""将口语转换为书面语：
-输入：嗯，我觉得这个方案还不错，可以试试看
-输出：该方案具有可行性，建议尝试实施。
-输入：那个，我们明天开会讨论一下这个问题吧
-输出：建议明日召开会议讨论此问题。
+        if "提示词" in heading:
+            return f"""整理为发给大语言模型的提示词：
+输入：嗯，先只看看日志，先不改代码，也别重启
+输出：请先查看日志。先不要修改代码，也不要重启。
+输入：帮我写封邮件给客户，就是说项目要延期一周，然后呃语气客气点
+输出：请帮我写一封邮件给客户，说明项目要延期一周。语气要客气。
 输入：{text}
 输出："""
 
-        # meeting preset
-        elif "会议" in task_lower or "纪要" in task_lower or "会议" in rules_text:
+        if "正式" in heading or "书面语" in heading:
+            return f"""将口语转换为书面语：
+输入：嗯，我觉得这个方案还不错，可以试试看
+输出：我认为这个方案不错，可以尝试。
+输入：那个，我们明天开会讨论一下这个问题吧
+输出：我们明天开会讨论一下这个问题。
+输入：{text}
+输出："""
+
+        if "会议" in heading or "纪要" in heading:
             return f"""整理为会议纪要：
 输入：我们今天讨论了项目进度，张三负责前端开发
 输出：- 讨论项目进度
@@ -297,16 +303,6 @@ class LlamaCppTextRefiner(BaseTextRefiner):
 输入：下周一提交报告，王五跟进测试工作
 输出：- 下周一提交报告
 - 王五跟进测试工作
-输入：{text}
-输出："""
-
-        # technical preset
-        elif "技术" in task_lower or "文档" in task_lower or "技术" in rules_text:
-            return f"""整理为技术文档：
-输入：这个函数就是用来处理数据的，把输入转成输出
-输出：该函数用于数据处理，将输入数据转换为输出格式。
-输入：我们用了一个算法来优化性能，速度提升了很多
-输出：采用优化算法提升性能，执行速度显著提高。
 输入：{text}
 输出："""
 
@@ -331,14 +327,14 @@ class LlamaCppTextRefiner(BaseTextRefiner):
             Few-shot prompt
         """
         examples = [
-            ("嗯这个这个那个我觉得可以", "这个那个我觉得可以"),
-            ("打开打开浏览器然后呃进入主页", "打开浏览器进入主页"),
+            ("嗯这个这个那个我觉得可以", "我觉得可以"),
+            ("打开打开浏览器然后呃进入主页", "打开浏览器，然后进入主页"),
         ]
 
         # 如果有数字规则，添加数字转换示例
         if has_number_rule:
             examples.extend([
-                ("我有一二三四五个苹果", "我有12345个苹果"),
+                ("一共有三个文件", "一共有3个文件"),
                 ("第一步打开文件，第二步编辑内容", "第1步打开文件，第2步编辑内容"),
             ])
 

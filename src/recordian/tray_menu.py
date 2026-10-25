@@ -226,7 +226,7 @@ def refresh_appindicator_preset_submenu(app: Any, Gtk: Any) -> None:
         "formal": "正式",
         "meeting": "会议",
         "summary": "总结",
-        "technical": "技术",
+        "technical": "提示词",
     }
 
     radio_group = None

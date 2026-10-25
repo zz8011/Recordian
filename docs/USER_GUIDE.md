@@ -172,7 +172,7 @@ recordian-vllm-realtime-probe \
 - `formal`
 - `meeting`
 - `summary`
-- `technical`
+- `technical`（提示词整理：把口述整理成发给大语言模型的提示词）
 
 仓库还附带一组示例预设：
 

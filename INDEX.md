@@ -76,7 +76,7 @@
 |------|---------|
 | `presets/default.md` | 默认：整理口语，去重去语气词（`refine_preset` 的默认值） |
 | `presets/intent.md` | 意图整理：去掉对话废话和改口痕迹 |
-| `presets/formal.md` / `summary.md` / `meeting.md` / `technical.md` | 书面语、摘要、会议纪要、技术文档风格 |
+| `presets/formal.md` / `summary.md` / `meeting.md` / `technical.md` | 书面语、摘要、会议纪要、提示词整理（发给大语言模型） |
 | `presets/code-comment.md` | 代码注释风格 |
 | `presets/English.md` / `Japanese.md` / `Korean.md` / `Arabic.md` / `Indonesian.md` / `Uyghur.md` | 翻译类预设 |
 | `presets/Extended.md` | 在原意基础上适度扩写 |
