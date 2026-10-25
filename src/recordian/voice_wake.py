@@ -605,6 +605,7 @@ class VoiceWakeService:
         owner_noise_suppression = int(getattr(self.runtime, "owner_noise_suppression", 1))
         owner_noise_suppression = max(0, min(2, owner_noise_suppression))
         owner_embeddings: list[list[float]] | None = None
+        owner_sample_rate = 8000
         _extract_speaker_embedding = None
         _cosine_similarity = None
         if owner_verify_enabled:
@@ -645,6 +646,7 @@ class VoiceWakeService:
                         }
                     )
                 else:
+                    owner_sample_rate = int(getattr(profile, "sample_rate", 8000) or 8000)
                     owner_embeddings = list(profile.embeddings) if profile.embeddings else [profile.embedding]
                     _extract_speaker_embedding = extract_speaker_embedding
                     _cosine_similarity = cosine_similarity
@@ -927,7 +929,7 @@ class VoiceWakeService:
                             candidate_embedding = _extract_speaker_embedding(
                                 verify_samples,
                                 sample_rate=self.model.sample_rate,
-                                target_rate=8000,
+                                target_rate=owner_sample_rate,
                                 noise_suppression=owner_noise_suppression,
                             )
                             similarity = max(

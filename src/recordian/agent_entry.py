@@ -616,7 +616,10 @@ class AgentHub:
             if not self.preview.strip():
                 self.notice = '没有识别到指令'
                 return
-            self.submit(self.preview, capture.agent_id)
+            try:
+                self.submit(self.preview, capture.agent_id)
+            except ValueError as exc:
+                self.notice = str(exc)[:2000]
 
     def new_session(self, agent_id):
         with self.lock:

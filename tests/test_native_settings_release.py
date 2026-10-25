@@ -50,6 +50,24 @@ def test_draft_saves_only_edited_fields_and_preserves_concurrent_unknown_values(
     assert saved["asr_api_key"] == "synthetic-secret" and saved["custom"] == 2
 
 
+def test_draft_csv_fields_support_chinese_comma(tmp_path):
+    from recordian.settings_draft import SettingsDraft
+
+    path = tmp_path / "hotkey.json"
+    ConfigManager.save(path, {"wake_name": ["小二"], "wake_prefix": ["嗨"]})
+    draft = SettingsDraft(
+        {"wake_name": "小二", "wake_prefix": "嗨"},
+        {"wake_name": "小二", "wake_prefix": "嗨"},
+    )
+    draft.set("wake_name", "小二，小三，小四")
+    draft.set("wake_prefix", "嗨，嘿, 喂")
+    assert draft.dirty
+    draft.persist(path, apply_now=False)
+    saved = ConfigManager.load(path)
+    assert saved["wake_name"] == ["小二", "小三", "小四"]
+    assert saved["wake_prefix"] == ["嗨", "嘿", "喂"]
+
+
 def test_draft_cancel_and_defaults_never_write_until_saved(tmp_path):
     from recordian.settings_draft import SettingsDraft
 
@@ -297,3 +315,17 @@ def test_restart_dispatch_failure_still_reports_saved_config(tmp_path):
     effect, restarted, keys = draft.persist(path, apply_now=True, restart_callback=failed_callback)
     assert ConfigManager.load(path)["sample_rate"] == 24000
     assert not draft.dirty and not restarted and keys == ["sample_rate"]
+
+
+def test_settings_draft_csv_fields_support_chinese_comma():
+    from recordian.settings_draft import SettingsDraft
+
+    draft = SettingsDraft(
+        {"wake_name": "小二", "wake_prefix": "嗨"},
+        {"wake_name": "小二", "wake_prefix": "嗨"},
+    )
+    draft.values["wake_name"] = "小二，小明，小助手"
+    draft.values["wake_prefix"] = "嗨，嘿, 喂"
+    changes = draft.changes()
+    assert changes["wake_name"] == ["小二", "小明", "小助手"]
+    assert changes["wake_prefix"] == ["嗨", "嘿", "喂"]

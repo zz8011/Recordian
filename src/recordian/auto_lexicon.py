@@ -250,9 +250,9 @@ class AutoLexicon:
             return merged[: self.max_hotwords]
 
         auto_budget = min(self.max_auto_hotwords, self.max_hotwords - len(merged))
-        candidate_limit = max(auto_budget * 8, 64)
+        auto_added = 0
         with self._lock:
-            rows = self._conn.execute(
+            cursor = self._conn.execute(
                 """
                 SELECT term
                 FROM lexicon_terms
@@ -261,25 +261,25 @@ class AutoLexicon:
                 ORDER BY accept_count DESC, last_accept DESC
                 LIMIT ?
                 """,
-                (self.min_accepts, candidate_limit),
-            ).fetchall()
-
-        auto_added = 0
-        for (term,) in rows:
-            if auto_added >= auto_budget:
-                break
-            token = str(term).strip()
-            if not token or token in seen:
-                continue
-            variant_key = _hotword_variant_key(token)
-            # Skip learned variants of manual hotwords (e.g. "CodeX" when the
-            # manual list already has "Codex") — the manual form always wins.
-            if variant_key in seen_variant_keys:
-                continue
-            seen.add(token)
-            seen_variant_keys.add(variant_key)
-            merged.append(token)
-            auto_added += 1
+                (self.min_accepts, self.max_terms),
+            )
+            for (term,) in cursor:
+                if auto_added >= auto_budget:
+                    break
+                token = str(term).strip()
+                if not token or _normalize_term(token) is None:
+                    continue
+                if token in seen:
+                    continue
+                variant_key = _hotword_variant_key(token)
+                # Skip learned variants of manual hotwords (e.g. "CodeX" when the
+                # manual list already has "Codex") — the manual form always wins.
+                if variant_key in seen_variant_keys:
+                    continue
+                seen.add(token)
+                seen_variant_keys.add(variant_key)
+                merged.append(token)
+                auto_added += 1
         return merged
 
     def observe_accepted(self, text: str, source: str | None = None) -> int:

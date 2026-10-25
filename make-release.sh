@@ -9,6 +9,11 @@ cd "$SCRIPT_DIR"
 echo "=== Recordian Release 打包 ==="
 echo ""
 
+if ! git rev-parse --is-inside-work-tree &>/dev/null; then
+    echo "错误: 必须在 git 仓库中打包发布"
+    exit 1
+fi
+
 VERSION=$(awk -F'"' '/^version = / {print $2; exit}' pyproject.toml)
 if [ -z "$VERSION" ]; then
     echo "错误: 无法从 pyproject.toml 解析版本号"
@@ -19,61 +24,23 @@ echo "版本: $VERSION"
 RELEASE_DIR="recordian-$VERSION"
 RELEASE_ARCHIVE="$RELEASE_DIR.tar.gz"
 
-copy_required() {
-    local path="$1"
-    if [ ! -e "$path" ]; then
-        echo "错误: 缺少必需文件/目录: $path"
-        exit 1
-    fi
-    cp -r "$path" "$RELEASE_DIR/"
-}
-
-copy_optional() {
-    local path="$1"
-    if [ -e "$path" ]; then
-        cp -r "$path" "$RELEASE_DIR/"
-        return
-    fi
-    echo "提示: 可选文件不存在，已跳过: $path"
-}
-
 echo "清理旧的 release 文件..."
 rm -rf "$RELEASE_DIR" "$RELEASE_ARCHIVE"
 
-echo "创建 release 目录..."
+echo "创建 release 目录并按 git 受控清单复制文件..."
 mkdir -p "$RELEASE_DIR"
 
-echo "复制核心文件..."
-required_paths=(
-    src
-    assets
-    presets
-    docs
-    server
-    tests
-    pyproject.toml
-    README.md
-    LICENSE
-    install.sh
-    uninstall.sh
-    recordian-launch.sh
-)
+while IFS= read -r -d '' file; do
+    mkdir -p "$RELEASE_DIR/$(dirname "$file")"
+    cp -fP "$file" "$RELEASE_DIR/$file"
+done < <(git ls-files -z)
 
-optional_paths=(
-    QUICK_REFERENCE.md
-    ANIMATION_FIX.md
-    uv.lock
-)
+# 保持根目录 presets 软链接兼容
+if [ ! -e "$RELEASE_DIR/presets" ] && [ -d "$RELEASE_DIR/src/recordian/presets" ]; then
+    (cd "$RELEASE_DIR" && ln -s src/recordian/presets presets)
+fi
 
-for path in "${required_paths[@]}"; do
-    copy_required "$path"
-done
-
-for path in "${optional_paths[@]}"; do
-    copy_optional "$path"
-done
-
-echo "清理缓存和构建残留..."
+echo "清理缓存..."
 find "$RELEASE_DIR" -type d -name "__pycache__" -prune -exec rm -rf {} +
 find "$RELEASE_DIR" -type d -name "*.egg-info" -prune -exec rm -rf {} +
 find "$RELEASE_DIR" -type f \( -name "*.pyc" -o -name "*.pyo" \) -delete
@@ -103,9 +70,4 @@ echo ""
 echo "=== 打包完成！ ==="
 echo "Release 文件: $RELEASE_ARCHIVE"
 echo "大小: $(du -h "$RELEASE_ARCHIVE" | cut -f1)"
-echo ""
-echo "发布步骤："
-echo "1. 上传 $RELEASE_ARCHIVE 到 GitHub Releases"
-echo "2. 用户下载后解压: tar xzf $RELEASE_ARCHIVE"
-echo "3. 用户运行: cd recordian-$VERSION && ./install.sh"
 echo ""

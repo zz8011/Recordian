@@ -138,12 +138,17 @@ def _normalize_choice(
     return token if token in allowed else fallback
 
 
-def _normalize_string_list(value: object, *, fallback: list[str]) -> list[str]:
+def normalize_string_list(value: object, *, fallback: list[str]) -> list[str]:
     if isinstance(value, str):
-        items = [part.strip() for part in value.split(",") if part.strip()]
+        items = [part.strip() for part in re.split(r"[,，]+", value) if part.strip()]
         return items or list(fallback)
     if isinstance(value, list):
-        items = [str(part).strip() for part in value if str(part).strip()]
+        items = []
+        for part in value:
+            if isinstance(part, str):
+                items.extend(p.strip() for p in re.split(r"[,，]+", part) if p.strip())
+            elif str(part).strip():
+                items.append(str(part).strip())
         return items or list(fallback)
     return list(fallback)
 
@@ -248,11 +253,11 @@ def normalize_runtime_config(
     normalized["semif_timeout_s"] = normalize_semif_timeout_s(normalized.get("semif_timeout_s", DEFAULT_SEMIF_TIMEOUT_S))
     normalized["jev_timeout_s"] = normalize_jev_timeout_s(normalized.get("jev_timeout_s", DEFAULT_JEV_TIMEOUT_S))
     normalized["contextual_aliases"] = normalize_contextual_aliases(normalized.get("contextual_aliases", []))
-    normalized["wake_prefix"] = _normalize_string_list(
+    normalized["wake_prefix"] = normalize_string_list(
         normalized.get("wake_prefix", DEFAULT_WAKE_PREFIX),
         fallback=DEFAULT_WAKE_PREFIX,
     )
-    normalized["wake_name"] = _normalize_string_list(
+    normalized["wake_name"] = normalize_string_list(
         normalized.get("wake_name", DEFAULT_WAKE_NAME),
         fallback=DEFAULT_WAKE_NAME,
     )

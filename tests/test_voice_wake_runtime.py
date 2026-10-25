@@ -12,8 +12,8 @@ import recordian.voice_wake as wake
 
 @pytest.fixture
 def replay(monkeypatch, tmp_path):
-    def run(blocks, *, speech=True, pre_vad=True, enter=2, fail_open=False, cooldown=0.0, frame_ms=20, owner=False):
-        state = SimpleNamespace(index=0, clock=100.0, opened=False, feeds=[], resets=0, streams=0, decodes=0, owner_samples=[])
+    def run(blocks, *, speech=True, pre_vad=True, enter=2, fail_open=False, cooldown=0.0, frame_ms=20, owner=False, owner_profile=None):
+        state = SimpleNamespace(index=0, clock=100.0, opened=False, feeds=[], resets=0, streams=0, decodes=0, owner_samples=[], owner_target_rates=[])
         events, hits = [], []
 
         class Stream:
@@ -77,14 +77,17 @@ def replay(monkeypatch, tmp_path):
         monkeypatch.setitem(sys.modules, 'sounddevice', SimpleNamespace(InputStream=Mic))
         monkeypatch.setitem(sys.modules, 'sherpa_onnx', SimpleNamespace(KeywordSpotter=Spotter))
         monkeypatch.setitem(sys.modules, 'webrtcvad', SimpleNamespace(Vad=Vad))
-        if owner:
+        if owner or owner_profile is not None:
+            owner = True
             def extract(samples, **kwargs):
                 state.owner_samples.append(len(samples))
+                state.owner_target_rates.append(kwargs.get('target_rate'))
                 return [1.0]
 
-            monkeypatch.setattr('recordian.speaker_verify.load_speaker_profile', lambda path: SimpleNamespace(
-                feature_version=2, embeddings=[[1.0]], embedding=[1.0],
-            ))
+            prof = owner_profile or SimpleNamespace(
+                feature_version=2, embeddings=[[1.0]], embedding=[1.0], sample_rate=8000,
+            )
+            monkeypatch.setattr('recordian.speaker_verify.load_speaker_profile', lambda path: prof)
             monkeypatch.setattr('recordian.speaker_verify.extract_speaker_embedding', extract)
             monkeypatch.setattr('recordian.speaker_verify.cosine_similarity', lambda a, b: 1.0)
         monkeypatch.setattr(wake, 'time', SimpleNamespace(monotonic=lambda: state.clock))
@@ -173,3 +176,19 @@ def test_owner_window_is_complete_and_bounded_for_all_frame_sizes(replay, frame_
                             pre_vad=False, frame_ms=frame_ms, owner=True)
     assert state.owner_samples == [28800]
     assert hits == ['嗨小二']
+
+
+def test_owner_verification_target_rate_matches_profile_sample_rate(replay):
+    profile = SimpleNamespace(
+        feature_version=2,
+        embeddings=[[1.0], [0.9]],
+        embedding=[1.0],
+        sample_rate=16000,
+    )
+    state, _, hits = replay(
+        [{}] * 25 + [{'keyword': '嗨小二'}],
+        pre_vad=False,
+        owner_profile=profile,
+    )
+    assert hits == ['嗨小二']
+    assert state.owner_target_rates == [16000]

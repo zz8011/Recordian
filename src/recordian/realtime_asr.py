@@ -18,9 +18,6 @@ from dataclasses import dataclass
 from typing import Any
 
 from . import streaming_correction as _streaming_correction
-
-# NOTE: These imports will be replaced by state_manager imports once that
-#       module is available.  For now they are passed in as parameters.
 from .duration_guard import (
     CONTINUOUS_CONTEXT_CHARS,
     CONTINUOUS_HELD_TAIL_CHARS,

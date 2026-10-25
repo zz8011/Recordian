@@ -57,13 +57,64 @@ echo "=== Recordian 安装程序 ==="
 echo ""
 
 # 检查 Python 版本
-if ! command -v python3 &> /dev/null; then
-    echo "错误: 未找到 python3，请先安装 Python 3.10+"
+# 1. 显式指定 PYTHON 环境变量优先，且严格验证 >= 3.10
+# 2. 默认优先探测带 gi 且版本 >= 3.10 的系统 Python，避免旧系统 3.8 gi 导致无法安装
+SYSTEM_PYTHON=""
+if [ -n "${PYTHON:-}" ]; then
+    if command -v "$PYTHON" &>/dev/null; then
+        SYSTEM_PYTHON="$(command -v "$PYTHON")"
+    elif [ -x "$PYTHON" ]; then
+        SYSTEM_PYTHON="$PYTHON"
+    else
+        echo "错误: 指定的 PYTHON 未找到或不可执行: $PYTHON"
+        exit 1
+    fi
+    if ! "$SYSTEM_PYTHON" -c "import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)" &>/dev/null; then
+        echo "错误: 指定的 Python 版本低于 3.10，Recordian 需要 Python 3.10+ (当前: $("$SYSTEM_PYTHON" -c 'import sys; print(".".join(map(str, sys.version_info[:2])))' 2>/dev/null || echo "未知"))"
+        exit 1
+    fi
+fi
+
+if [ -z "$SYSTEM_PYTHON" ]; then
+    for cand in /usr/bin/python3 /usr/local/bin/python3; do
+        if [ -x "$cand" ] && "$cand" -c "import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)" &>/dev/null && "$cand" -c "import gi" &>/dev/null; then
+            SYSTEM_PYTHON="$cand"
+            break
+        fi
+    done
+fi
+
+if [ -z "$SYSTEM_PYTHON" ]; then
+    if command -v python3 &>/dev/null; then
+        cand="$(command -v python3)"
+        if "$cand" -c "import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)" &>/dev/null && "$cand" -c "import gi" &>/dev/null; then
+            SYSTEM_PYTHON="$cand"
+        fi
+    fi
+fi
+
+if [ -z "$SYSTEM_PYTHON" ]; then
+    for cand in /usr/bin/python3 /usr/local/bin/python3 python3; do
+        if command -v "$cand" &>/dev/null; then
+            resolved="$(command -v "$cand")"
+            if "$resolved" -c "import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)" &>/dev/null; then
+                SYSTEM_PYTHON="$resolved"
+                break
+            fi
+        elif [ -x "$cand" ] && "$cand" -c "import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)" &>/dev/null; then
+            SYSTEM_PYTHON="$cand"
+            break
+        fi
+    done
+fi
+
+if [ -z "$SYSTEM_PYTHON" ] || ! command -v "$SYSTEM_PYTHON" &>/dev/null; then
+    echo "错误: 未找到可用的 Python 3.10+，请先安装 Python 3.10+"
     exit 1
 fi
 
-PYTHON_VERSION=$(python3 -c 'import sys; print(".".join(map(str, sys.version_info[:2])))')
-echo "检测到 Python 版本: $PYTHON_VERSION"
+SYSTEM_VERSION=$("$SYSTEM_PYTHON" -c 'import sys; print(".".join(map(str, sys.version_info[:2])))')
+echo "检测到系统 Python: $SYSTEM_PYTHON (版本: $SYSTEM_VERSION)"
 
 # 检查系统依赖
 echo ""
@@ -72,11 +123,11 @@ echo "检查系统依赖..."
 MISSING_DEPS=()
 
 # 检查 AppIndicator3（托盘图标）
-if ! python3 -c "import gi" 2>/dev/null; then
+if ! "$SYSTEM_PYTHON" -c "import gi" 2>/dev/null; then
     MISSING_DEPS+=("python3-gi")
 fi
 
-if ! python3 -c "import gi; gi.require_version('AppIndicator3', '0.1'); from gi.repository import AppIndicator3" 2>/dev/null; then
+if ! "$SYSTEM_PYTHON" -c "import gi; gi.require_version('AppIndicator3', '0.1'); from gi.repository import AppIndicator3" 2>/dev/null; then
     MISSING_DEPS+=("gir1.2-appindicator3-0.1")
 fi
 
@@ -123,13 +174,33 @@ if [ -z "$EXTERNAL_MODEL_DIR" ]; then
 fi
 
 # 检查虚拟环境
-if [ ! -d ".venv" ]; then
-    echo "创建虚拟环境..."
-    python3 -m venv .venv
+TARGET_PYTHON="$SCRIPT_DIR/.venv/bin/python"
+
+if [ -d ".venv" ] && [ -x "$TARGET_PYTHON" ]; then
+    TARGET_VERSION=$("$TARGET_PYTHON" -c 'import sys; print(".".join(map(str, sys.version_info[:2])))' 2>/dev/null || true)
+    if [ -n "$TARGET_VERSION" ] && [ "$TARGET_VERSION" != "$SYSTEM_VERSION" ]; then
+        echo "错误: 既有虚拟环境 Python 版本 ($TARGET_VERSION) 与系统 Python 版本 ($SYSTEM_VERSION) 不一致。"
+        echo "为避免破坏既有环境，已停止安装。请手动处理现有 .venv 后重试。"
+        exit 1
+    fi
+    if ! "$TARGET_PYTHON" -c "import gi" 2>/dev/null; then
+        echo "更新既有虚拟环境以允许 system-site-packages..."
+        "$SYSTEM_PYTHON" -m venv --system-site-packages .venv
+    fi
+else
+    echo "创建虚拟环境 (启用 --system-site-packages)..."
+    "$SYSTEM_PYTHON" -m venv --system-site-packages .venv
 fi
 
 echo "激活虚拟环境..."
 source .venv/bin/activate
+
+# 使用目标解释器实际验证 gi 和 AppIndicator3
+echo "验证虚拟环境目标解释器 GTK/gi 访问..."
+if ! python -c "import gi; gi.require_version('AppIndicator3', '0.1'); from gi.repository import AppIndicator3" 2>/dev/null; then
+    echo "⚠️  警告: 目标虚拟环境无法加载 AppIndicator3/gi。"
+    echo "若托盘图标无法正常显示，请确认系统已安装 python3-gi 与 gir1.2-appindicator3-0.1。"
+fi
 
 echo "安装依赖..."
 pip install -e ".[gui,hotkey,qwen-asr,wake]"

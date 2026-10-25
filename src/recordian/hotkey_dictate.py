@@ -6,7 +6,7 @@ All heavy logic has been decomposed into sibling modules:
 * :mod:`arg_parser` — CLI / config argument parsing
 * :mod:`recording_controller` — hotkey handler factories (oneshot / PTT / toggle)
 * :mod:`realtime_asr` — streaming ASR worker & commit accumulator
-* :mod:`state_manager` — recording state dataclass & thread-safe manager
+* :mod:`state_manager` — recording state enum
 * :mod:`text_cleanup` — partial-text delta helpers & final normalisation
 """
 

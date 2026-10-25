@@ -20,7 +20,7 @@
 | `src/recordian/_native/` | Generated package-local shared library + SHA256 metadata | Gitignored; build before startup |
 | `docs/` | 用户手册、故障排查、功能专题 | 索引见 `docs/README.md`；历史文档在 `docs/archive/` |
 | `models/` | ASR model files (gitignored) | Do not commit large files |
-| `presets/` | 文本精炼 prompt 预设（`.md`） | 文件名即 preset 名 |
+| `src/recordian/presets/` | 文本精炼 prompt 预设（`.md`，根目录 `presets/` 软链接兼容） | 文件名即 preset 名 |
 | `examples/` | Usage examples | |
 | `assets/` | Static assets | |
 
@@ -69,7 +69,7 @@
 
 ## Canonical Presets
 
-预设是 `presets/` 下的 `.md` prompt 文件，**文件名（去掉扩展名）就是 preset 名**，由
+预设是内置于包内 `src/recordian/presets/`（根目录保留 `presets/` 软链接兼容）下的 `.md` prompt 文件，**文件名（去掉扩展名）就是 preset 名**，由
 `preset_manager.py` 的 `glob("*.md")` 加载，托盘菜单按此列表展示。
 
 | File | Purpose |

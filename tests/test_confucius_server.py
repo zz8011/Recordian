@@ -124,7 +124,26 @@ def test_token_file_created_0600_never_overwritten(srv, tmp_path):
 def test_token_file_empty_refused(srv, tmp_path):
     path = tmp_path / "tok"
     path.write_text("  \n")
+    path.chmod(0o600)
     with pytest.raises(ValueError, match="empty"):
+        srv.load_or_create_token(str(path))
+
+
+def test_token_file_symlink_refused(srv, tmp_path):
+    target = tmp_path / "real_tok"
+    target.write_text("a" * 32)
+    target.chmod(0o600)
+    link = tmp_path / "link_tok"
+    link.symlink_to(target)
+    with pytest.raises(OSError):
+        srv.load_or_create_token(str(link))
+
+
+def test_token_file_bad_mode_refused(srv, tmp_path):
+    path = tmp_path / "tok"
+    path.write_text("a" * 32)
+    path.chmod(0o644)
+    with pytest.raises(ValueError, match="0600"):
         srv.load_or_create_token(str(path))
 
 
@@ -436,17 +455,67 @@ def test_loopback_session_audio_budget(srv, tmp_path):
 
 
 @pytestmark_loopback
-def test_loopback_backpressure_queue_full(srv, tmp_path):
-    # Slow model (80 ms/chunk) + 4-frame queue + instant blast of 40 frames.
-    model = FakeModel(infer_delay_s=0.08)
+def test_loopback_backpressure_slow_model_completes(srv, tmp_path):
+    # Slow model (40 ms/chunk) + 4-frame queue + instant blast of 20 frames + EOS.
+    # Bounded queue.put backpressures the sender without dropping or aborting.
+    model = FakeModel(infer_delay_s=0.04)
     args = _args(srv, tmp_path, max_queued_frames=4)
     with RunningServer(srv, args, model) as server:
         actions = [("send_header", {"requestId": "r", "secret_key": TOKEN}), ("recv",)]
-        actions += [("send_audio", _frame()) for _ in range(40)]
-        actions += [("recv",)] * 60
-        frames, close_code = _sync_client(server.port, actions)
-    assert close_code == 1008
-    assert any("queue full" in str(f.get("msg", "")) for f in frames if f.get("status") == "error")
+        actions += [("send_audio", _frame()) for _ in range(20)]
+        actions += [("send_text", srv.EOS_MESSAGE)]
+        actions += [("recv",)] * 30
+        frames, close_code = _sync_client(server.port, actions, timeout=10)
+    assert close_code == 1000
+    successes = [f for f in frames if f.get("status") == "success"]
+    assert successes and successes[-1]["msg"]["reset"] is True
+    assert model.finish_calls == 1
+
+
+@pytestmark_loopback
+def test_bridge_transcribe_slow_inference_backpressure(srv, tmp_path, monkeypatch):
+    from server import confucius_openai_bridge as bridge
+
+    token_path = tmp_path / "tok"
+    token_path.write_text(TOKEN)
+    token_path.chmod(0o600)
+    model = FakeModel(infer_delay_s=0.01)
+    args = _args(srv, tmp_path, max_queued_frames=2)
+    with RunningServer(srv, args, model) as server:
+        monkeypatch.setattr(bridge, "WS_URL", f"ws://127.0.0.1:{server.port}/asr_stream_api_v1")
+        monkeypatch.setattr(bridge, "TOKEN_FILE", str(token_path))
+        pcm = _frame(160) * 50  # 50 frames > 32 default queue
+        text = asyncio.run(asyncio.wait_for(bridge._transcribe(pcm, "Chinese"), timeout=10))
+    assert text
+    assert text.endswith("。")
+    assert model.finish_calls == 1
+
+
+@pytestmark_loopback
+def test_bridge_transcribe_silence_no_delta_until_eos(srv, tmp_path, monkeypatch):
+    from server import confucius_openai_bridge as bridge
+
+    class SilentModel(FakeModel):
+        def streaming_transcribe(self, seg, state, max_new_tokens):
+            self.stream_calls += 1
+            return "", ""  # no delta during silence
+
+        def finish_streaming_transcribe(self, state, max_new_tokens):
+            self.finish_calls += 1
+            state.text = "静音结束"
+
+    token_path = tmp_path / "tok"
+    token_path.write_text(TOKEN)
+    token_path.chmod(0o600)
+    model = SilentModel()
+    args = _args(srv, tmp_path, max_queued_frames=4)
+    with RunningServer(srv, args, model) as server:
+        monkeypatch.setattr(bridge, "WS_URL", f"ws://127.0.0.1:{server.port}/asr_stream_api_v1")
+        monkeypatch.setattr(bridge, "TOKEN_FILE", str(token_path))
+        pcm = _frame(160) * 20  # 20 frames (> 16) with no delta
+        text = asyncio.run(asyncio.wait_for(bridge._transcribe(pcm, "Chinese"), timeout=10))
+    assert text == "静音结束"
+    assert model.finish_calls == 1
 
 
 @pytestmark_loopback
@@ -511,6 +580,34 @@ def test_validate_config_rejects_programmatic_namespace(srv, tmp_path):
     with pytest.raises(ValueError, match="max_queued_frames"):
         srv.run_server(args, model=FakeModel())
     assert not (tmp_path / "tok").exists()
+
+
+def test_validate_config_rejects_non_loopback_host(srv, tmp_path):
+    args = _args(srv, tmp_path, host="0.0.0.0")
+    with pytest.raises(ValueError, match="non-loopback"):
+        srv.validate_config(args)
+
+
+def test_run_server_rejects_non_loopback_host_before_model_load(srv, tmp_path, monkeypatch):
+    args = _args(srv, tmp_path, host="192.168.1.10")
+    model_loaded = False
+
+    def fake_load(a):
+        nonlocal model_loaded
+        model_loaded = True
+        return FakeModel()
+
+    monkeypatch.setattr(srv, "load_model", fake_load)
+    monkeypatch.setattr(srv, "_serve", lambda *a, **kw: pytest.fail("reached _serve"))
+    with pytest.raises(ValueError, match="non-loopback"):
+        srv.run_server(args)
+    assert not model_loaded
+
+
+def test_serve_rejects_non_loopback_host(srv, tmp_path):
+    args = _args(srv, tmp_path, host="0.0.0.0")
+    with pytest.raises(ValueError, match="non-loopback"):
+        asyncio.run(asyncio.wait_for(srv._serve(args, FakeModel(), TOKEN), timeout=1.0))
 
 
 def test_validate_config_preserves_valid_overrides(srv, tmp_path):

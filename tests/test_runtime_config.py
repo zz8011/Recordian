@@ -272,6 +272,18 @@ def test_normalize_contextual_aliases_default_empty() -> None:
     assert normalized["contextual_aliases"] == []
 
 
+def test_runtime_config_wake_words_support_chinese_comma() -> None:
+    normalized = normalize_runtime_config(
+        {
+            "wake_prefix": "嗨，嘿，喂",
+            "wake_name": ["小二，乐乐", "小助手"],
+        },
+        include_sound_defaults=False,
+    )
+    assert normalized["wake_prefix"] == ["嗨", "嘿", "喂"]
+    assert normalized["wake_name"] == ["小二", "乐乐", "小助手"]
+
+
 def test_normalize_contextual_aliases_accepts_dicts_and_strings() -> None:
     normalized = normalize_runtime_config(
         {

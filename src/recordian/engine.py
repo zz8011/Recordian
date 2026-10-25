@@ -92,5 +92,8 @@ class DictationEngine:
             except TimeoutError:
                 future.cancel()
                 return None
+            except Exception as e:
+                logger.error(f"Pass2 transcription error: {e}", exc_info=True)
+                return None
         finally:
             executor.shutdown(wait=False, cancel_futures=True)

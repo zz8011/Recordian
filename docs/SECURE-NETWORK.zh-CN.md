@@ -42,6 +42,7 @@ recordian-remote-paste-agent --host <服务端绑定地址> \
 旧 HTTP ASR 和 Qwen HTTP 流式服务接受相同的 `--token-file`、`--tls-cert-file`、`--tls-key-file`。
 使用 HTTPS 地址，并把令牌作为 `asr_api_key`；自行签发的证书需通过客户端信任存储或
 `REQUESTS_CA_BUNDLE` 提供 CA，不能关闭 TLS 验证。
+Confucius 流式服务（`confucius_streaming_server.py`）仅支持本机回环明文绑定（`127.0.0.1`、`localhost`、`::1`），在模型加载前与程序化 serve 边界均通过 `require_private_bind` 校验并硬拒绝非回环明文绑定；私有令牌文件复用 `load_private_token` 强制属主私有（0600）且禁止符号链接。
 这些模型服务仍是单用户服务；需要公开服务时应在经过认证的反向代理后部署并限制入口。
 
 ## 请求边界
@@ -51,7 +52,7 @@ recordian-remote-paste-agent --host <服务端绑定地址> \
 - HTTP 入口最多 8 个处理线程，TLS 握手最多 3 秒，请求头与请求体合计接收截止时间 10 秒；完整收到请求后不以这个传输截止时间截断模型推理。
 - 旧 `/transcribe` 接口要求未压缩 WAV，最多 120 秒且不超过 1600 万声道采样；Qwen 文件上传经过有界解码，最多 120 秒。
 - Qwen HTTP 流式服务最多 8 个会话，每个会话最多 120 秒的 16 kHz 音频；超限删除该会话并拒绝继续推理。
-- Confucius OpenAI bridge 最多接受 30 秒音频；过大请求返回 413、无效或超预算音频返回 400。
+- Confucius 流式服务与 OpenAI bridge 最多接受 30 秒音频预算；服务端采用默认 32 帧有界队列与异步接收背压支持慢推理与批量上传，超限时显式以 1008 拒绝，bridge 超过 30 秒返回 400，过大请求返回 413。
 - 未鉴权的回环 HTTP 服务拒绝外部网页 Origin 和非回环 Host，避免浏览器跨站请求和 DNS 重绑定。
 
 旧 `/transcribe` 客户端把支持的压缩录音转换为 PCM WAV，并写入可验证的有限长度头；服务器仍拒绝畸形或超预算 WAV。

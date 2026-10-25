@@ -1,6 +1,6 @@
 # Presets 目录
 
-此目录包含文本精炼 prompt 预设文件，并支持自定义 ASR Context 预设。
+内置于包内 `src/recordian/presets/`（仓库根目录保留 `presets/` 软链接兼容源码与文档）。此目录包含文本精炼 prompt 预设文件，并支持自定义 ASR Context 预设。
 
 ## 文本精炼预设（用于第二轮精炼）
 

@@ -11,6 +11,7 @@ from recordian.recommended_profile import (
     confucius_endpoint_problem,
     http_cloud_endpoint_problem,
 )
+from recordian.runtime_config import normalize_string_list
 from recordian.setting_effects import SettingEffect, combined_setting_effect
 from recordian.tray_utils import save_config_changes
 
@@ -111,7 +112,7 @@ class SettingsDraft:
             if key in INTEGERS | FLOATS:
                 value = _parse_number(key, value)
             elif key in CSV_FIELDS and isinstance(value, str):
-                value = [part.strip() for part in value.split(",") if part.strip()]
+                value = normalize_string_list(value, fallback=[])
             result[key] = value
         if self.refine_key:
             result["refine_api_key"] = self.refine_key

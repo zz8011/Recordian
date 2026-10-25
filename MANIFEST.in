@@ -3,6 +3,7 @@ include native/recordian-core/Cargo.toml
 include native/recordian-core/Cargo.lock
 recursive-include native/recordian-core/src *.rs
 recursive-include native/recordian-core/tests *.rs
+recursive-include src/recordian/presets *.md
 include docs/RUST-RUNTIME.zh-CN.md
 prune native/recordian-core/target
 prune native-prototype

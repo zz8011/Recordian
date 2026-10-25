@@ -192,19 +192,28 @@ def _correct_ascii_pass(
         candidate_key = _hotword_variant_key(candidate)
         if not candidate_key:
             continue
+        # Exact match (surface or case/separator variant) takes precedence over fuzzy.
+        exact_matched = False
         for target_key, canonical in targets:
             if candidate == canonical:
+                exact_matched = True
                 break
             if candidate_key == target_key:
                 # Case / spacing / separator variant of a known hotword.
                 replacements.append((match.start(), match.end(), canonical))
                 changes.append((candidate, canonical))
+                exact_matched = True
                 break
-            allowed = _allowed_ascii_edits(target_key, max_ascii_edits)
-            if allowed and _levenshtein_at_most(candidate_key, target_key, allowed) <= allowed:
-                replacements.append((match.start(), match.end(), canonical))
-                changes.append((candidate, canonical))
-                break
+        if exact_matched:
+            continue
+
+        if max_ascii_edits > 0:
+            for target_key, canonical in targets:
+                allowed = _allowed_ascii_edits(target_key, max_ascii_edits)
+                if allowed and _levenshtein_at_most(candidate_key, target_key, allowed) <= allowed:
+                    replacements.append((match.start(), match.end(), canonical))
+                    changes.append((candidate, canonical))
+                    break
 
     for start, end, canonical in reversed(replacements):
         text = text[:start] + canonical + text[end:]

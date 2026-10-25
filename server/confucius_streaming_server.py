@@ -161,6 +161,13 @@ def validate_config(args) -> None:
         problems.append(f"max_model_len must be an integer >= 256, got {args.max_model_len!r}")
     if not isinstance(args.port, int) or not 0 <= args.port <= 65535:
         problems.append(f"port must be in 0..65535 (0 = ephemeral), got {args.port!r}")
+    host = getattr(args, "host", "127.0.0.1")
+    from recordian.local_auth import require_private_bind
+
+    try:
+        require_private_bind(host, "placeholder-token", encrypted=False)
+    except ValueError as exc:
+        problems.append(str(exc))
     if problems:
         raise ValueError("invalid server config: " + "; ".join(problems))
 
@@ -176,22 +183,25 @@ def default_token_path() -> str:
 
 
 def load_or_create_token(path: str) -> str:
-    """Read a local auth token, or atomically create one with mode 0600.
+    """Read a local auth token via load_private_token, or atomically create one with mode 0600.
 
     Never overwrites an existing file; an empty/whitespace token file is a
     hard error (fail closed). The token is a hex secret, never logged.
     Parent directories are created private (0700) when missing.
     """
-    if os.path.exists(path):
-        with open(path, encoding="utf-8") as handle:
-            token = handle.read().strip()
-        if not token:
-            raise ValueError(f"token file {path} is empty; refusing to start without auth")
-        return token
+    from recordian.local_auth import load_private_token
+
+    try:
+        return load_private_token(path)
+    except FileNotFoundError:
+        pass
     parent = os.path.dirname(os.path.abspath(path))
     os.makedirs(parent, mode=0o700, exist_ok=True)
     token = secrets.token_hex(16)
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        return load_private_token(path)
     try:
         os.write(fd, token.encode("ascii"))
     finally:
@@ -491,12 +501,7 @@ async def _handle_connection(ws, model, token: str, args, busy_lock) -> None:
                     if isinstance(data, str):
                         terminal["kind"] = "eos" if data == EOS_MESSAGE else "bad_text"
                         return
-                    try:
-                        queue.put_nowait(data)
-                    except asyncio.QueueFull:
-                        # Explicit backpressure failure, never silent drop.
-                        terminal["kind"] = "overflow"
-                        return
+                    await queue.put(data)
             finally:
                 receiver_done.set()  # never blocks, even on a full queue
 

@@ -4,15 +4,20 @@ from __future__ import annotations
 
 from pathlib import Path
 
+DEFAULT_PRESETS_DIR = Path(__file__).resolve().parent / "presets"
+
 
 class PresetManager:
     """管理 prompt 预设文件"""
 
     def __init__(self, presets_dir: str | Path = "presets") -> None:
-        self.presets_dir = Path(presets_dir)
-        if not self.presets_dir.is_absolute():
-            # 相对于项目根目录
-            self.presets_dir = Path(__file__).parent.parent.parent / self.presets_dir
+        p = Path(presets_dir)
+        if p.is_absolute():
+            self.presets_dir = p
+        elif str(presets_dir) == "presets" or p == Path("presets"):
+            self.presets_dir = DEFAULT_PRESETS_DIR
+        else:
+            self.presets_dir = Path(__file__).resolve().parent.parent.parent / p
         self._cache: dict[str, str] = {}
 
     def list_presets(self) -> list[str]:

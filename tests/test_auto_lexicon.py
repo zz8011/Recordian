@@ -203,3 +203,61 @@ def test_prune_invalid_removes_legacy_fragment_terms(tmp_path: Path) -> None:
     finally:
         lexicon.close()
 
+
+def test_compose_hotwords_filters_invalid_legacy_terms_without_deleting_database(tmp_path: Path) -> None:
+    db_path = tmp_path / "auto_lexicon.db"
+    lexicon = AutoLexicon(
+        db_path=db_path,
+        max_hotwords=10,
+        min_accepts=1,
+        max_terms=1000,
+        max_auto_hotwords=2,
+    )
+    try:
+        # Legacy invalid terms with higher accept_count than valid terms
+        with lexicon._conn:
+            lexicon._conn.executemany(
+                "INSERT INTO lexicon_terms (term, seen_count, accept_count, last_seen, last_accept, blocked)"
+                " VALUES (?, 5, ?, 10, 10, 0)",
+                [("的这个", 10), ("是不是", 9), ("华影九天", 3), ("沈宇", 2)],
+            )
+        composed = lexicon.compose_hotwords([])
+        # Invalid terms must not consume quota or appear in hotwords
+        assert "的这个" not in composed
+        assert "是不是" not in composed
+        # Valid terms must be chosen to satisfy auto_budget
+        assert composed == ["华影九天", "沈宇"]
+
+        # User database must NOT have deleted the terms
+        db_terms = {row[0] for row in lexicon._conn.execute("SELECT term FROM lexicon_terms").fetchall()}
+        assert "的这个" in db_terms
+        assert "是不是" in db_terms
+    finally:
+        lexicon.close()
+
+
+def test_compose_hotwords_scans_past_candidate_window_of_invalid_fragments(tmp_path: Path) -> None:
+    """超过 64 个高频历史非法碎片时，游标仍能向后扫到合法词填满配额"""
+    db_path = tmp_path / "auto_lexicon.db"
+    lexicon = AutoLexicon(
+        db_path=db_path,
+        max_hotwords=10,
+        min_accepts=1,
+        max_terms=1000,
+        max_auto_hotwords=2,
+    )
+    try:
+        # 插入 70 个高频非法碎片（如以胶水字符开头的口语残片）
+        invalid_rows = [(f"的碎片{i:02d}", 10, 10) for i in range(70)]
+        # 插入 2 个合法词，频次较低但完全合法
+        valid_rows = [("华影九天", 5, 5), ("沈宇", 4, 4)]
+        with lexicon._conn:
+            lexicon._conn.executemany(
+                "INSERT INTO lexicon_terms (term, seen_count, accept_count, last_seen, last_accept, blocked)"
+                " VALUES (?, 1, ?, 1, ?, 0)",
+                invalid_rows + valid_rows,
+            )
+        composed = lexicon.compose_hotwords([])
+        assert composed == ["华影九天", "沈宇"]
+    finally:
+        lexicon.close()

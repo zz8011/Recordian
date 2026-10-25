@@ -169,7 +169,7 @@ PresetManager(presets_dir: str | Path = "presets")
 ```
 
 **参数**:
-- `presets_dir`: 预设目录路径（默认 "presets"）
+- `presets_dir`: 预设目录路径（默认 `"presets"`，优先使用包内内置预设目录 `src/recordian/presets/`）
 
 **方法**:
 

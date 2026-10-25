@@ -26,6 +26,14 @@ def _release_backend_lifeline(proc: subprocess.Popen[str]) -> None:
         endpoint.close()
 
 
+def _remove_backend_process(proc: subprocess.Popen[str]) -> None:
+    with _LIFELINES_LOCK:
+        try:
+            _ACTIVE_BACKEND_PROCESSES.remove(proc)
+        except ValueError:
+            pass
+
+
 def _terminate_backend_process(proc: subprocess.Popen[str], *, timeout_s: float = 2.0) -> None:
     if proc.poll() is not None:
         return
@@ -68,7 +76,7 @@ def _cleanup_backend_processes() -> None:
                 _terminate_backend_process(proc)
         finally:
             _release_backend_lifeline(proc)
-            _ACTIVE_BACKEND_PROCESSES.remove(proc)
+            _remove_backend_process(proc)
 
 
 # 注册清理函数
@@ -131,7 +139,7 @@ class BackendManager:
         self.proc, endpoint = spawn_backend(cmd)
         with _LIFELINES_LOCK:
             _BACKEND_LIFELINES[self.proc] = endpoint
-        _ACTIVE_BACKEND_PROCESSES.append(self.proc)
+            _ACTIVE_BACKEND_PROCESSES.append(self.proc)
         self._on_state_change(True, "starting", "Starting backend...")
         self._on_menu_update()
 
@@ -155,8 +163,7 @@ class BackendManager:
         finally:
             _release_backend_lifeline(proc)
         # 从注册表移除
-        if proc in _ACTIVE_BACKEND_PROCESSES:
-            _ACTIVE_BACKEND_PROCESSES.remove(proc)
+        _remove_backend_process(proc)
         self.proc = None
         self._events.put({"event": "stopped"})
 
@@ -199,6 +206,7 @@ class BackendManager:
             code = target.wait()
         finally:
             _release_backend_lifeline(target)
+            _remove_backend_process(target)
         # 「主动停止」有两种：用户点了停止后端，或我们自己 restart（此时 self.proc
         # 已经换成新进程）。只有进程自己退出且没被替换，才算非预期退出。
         intentional = self._intentional_stop or target is not self.proc

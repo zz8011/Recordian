@@ -142,6 +142,13 @@ jobs:
           RECORDIAN_NATIVE_CORE=required python -c "from recordian.native_core import status; s = status(); assert s['backend'] == 'rust' and s['abi'] == 1, s"
           RECORDIAN_NATIVE_CORE=python python -c "from recordian.native_core import status; assert status()['backend'] == 'python'"
           RECORDIAN_NATIVE_LIBRARY=/tmp/recordian-no-library.so python -c "from recordian.native_core import status; assert status()['backend'] == 'python'"
+          python - <<'PY'
+          from recordian.preset_manager import PresetManager
+          presets = PresetManager()
+          assert {'default', 'intent', 'meeting', 'English'} <= set(presets.list_presets())
+          for name in presets.list_presets():
+              assert presets.load_preset(name).strip(), name
+          PY
       - name: Required-native focused regression (isolated bus, no desktop writes)
         env:
           RECORDIAN_NATIVE_CORE: required

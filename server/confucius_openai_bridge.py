@@ -11,6 +11,7 @@ file. Keep on loopback; single-user service anyway (CLOSE 4429 when busy).
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import os
 import subprocess
@@ -68,21 +69,33 @@ async def _transcribe(pcm: bytes, language: str) -> str:
     parts: list[str] = []
     async with connect(WS_URL, max_size=2**22) as ws:
         await ws.send(json.dumps(header))
-        await ws.recv()  # {"status":"connected",...}
-        # ponytail: server queue is 512 frames (covers the 30s session budget);
-        # inference p50 ~3ms/frame drains it instantly — blast, no pacing.
-        for i in range(0, len(pcm), FRAME_BYTES):
-            await ws.send(pcm[i:i + FRAME_BYTES])
-        await ws.send(EOS)
-        while True:
-            msg = json.loads(await ws.recv())
-            if msg.get("status") != "success":
-                continue
-            text = (msg.get("msg") or {}).get("text") or ""
-            if text:
-                parts.append(text)
-            if (msg.get("msg") or {}).get("reset"):
-                break
+        greeting = json.loads(await ws.recv())
+        if greeting.get("status") != "connected":
+            raise RuntimeError(greeting.get("msg") or "connection rejected")
+
+        async def reader() -> None:
+            while True:
+                msg = json.loads(await ws.recv())
+                if msg.get("status") == "error":
+                    raise RuntimeError(msg.get("msg") or "transcription error")
+                if msg.get("status") != "success":
+                    continue
+                text = (msg.get("msg") or {}).get("text") or ""
+                if text:
+                    parts.append(text)
+                if (msg.get("msg") or {}).get("reset"):
+                    break
+
+        reader_task = asyncio.create_task(reader())
+        try:
+            for i in range(0, len(pcm), FRAME_BYTES):
+                await ws.send(pcm[i:i + FRAME_BYTES])
+            await ws.send(EOS)
+            await reader_task
+        finally:
+            reader_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await reader_task
     return "".join(parts)
 
 

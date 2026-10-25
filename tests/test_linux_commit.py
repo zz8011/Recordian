@@ -1,4 +1,5 @@
 import subprocess
+import time
 from unittest.mock import Mock
 
 import pytest
@@ -90,25 +91,260 @@ def test_xdotool_clipboard_committer_clears_clipboard_after_timeout(monkeypatch)
     assert clipboard_calls[1] == "set:"
 
 
-def test_xdotool_clipboard_committer_waits_for_clipboard_settle(monkeypatch):
+def test_xdotool_clipboard_timeout_zero_uses_persistent_write(monkeypatch):
     from recordian.linux_commit import XdotoolClipboardCommitter
 
     order: list[str] = []
     slept: list[float] = []
 
     monkeypatch.setattr("recordian.linux_commit.which", lambda x: "/usr/bin/" + x)
-    monkeypatch.setattr("recordian.linux_commit._start_transient_clipboard_owner", lambda text: object())
-    monkeypatch.setattr("recordian.linux_commit._stop_transient_clipboard_owner", lambda proc: order.append("owner:stop"))
+    monkeypatch.setattr(
+        "recordian.linux_commit._start_transient_clipboard_owner",
+        lambda text: (_ for _ in ()).throw(AssertionError("transient owner should not be started when timeout=0")),
+    )
+    monkeypatch.setattr(
+        "recordian.linux_commit._stop_transient_clipboard_owner",
+        lambda proc: (_ for _ in ()).throw(AssertionError("transient owner should not be stopped when timeout=0")),
+    )
+    monkeypatch.setattr("recordian.linux_commit._set_clipboard_text", lambda text: order.append(f"set:{text}"))
     monkeypatch.setattr("recordian.linux_commit._xdotool_key", lambda shortcut, *, window_id=None: order.append(f"paste:{shortcut}"))
     monkeypatch.setattr("time.sleep", lambda seconds: slept.append(seconds))
 
     committer = XdotoolClipboardCommitter(clipboard_timeout_ms=0)
+    result = committer.commit("测试文本")
+
+    assert result.committed is True
+    assert order == ["set:测试文本", "paste:ctrl+v"]
+    assert len(slept) >= 1
+    assert slept[0] >= 0.2
+
+
+def test_xdotool_clipboard_nonzero_timeout_retains_transient_owner_until_timeout(monkeypatch):
+    from recordian.linux_commit import XdotoolClipboardCommitter
+
+    order: list[str] = []
+    fake_proc = object()
+
+    monkeypatch.setattr("recordian.linux_commit.which", lambda x: "/usr/bin/" + x)
+    monkeypatch.setattr("recordian.linux_commit._start_transient_clipboard_owner", lambda text: fake_proc)
+    monkeypatch.setattr("recordian.linux_commit._stop_transient_clipboard_owner", lambda proc: order.append("owner:stop"))
+    monkeypatch.setattr("recordian.linux_commit._set_clipboard_text", lambda text: order.append(f"set:{text}"))
+    monkeypatch.setattr("recordian.linux_commit._xdotool_key", lambda shortcut, *, window_id=None: order.append(f"paste:{shortcut}"))
+
+    committer = XdotoolClipboardCommitter(clipboard_timeout_ms=200)
     committer.commit("测试文本")
 
-    assert order == ["paste:ctrl+v", "owner:stop"]
-    assert len(slept) >= 2
-    assert slept[0] >= 0.2
-    assert slept[1] >= 0.15
+    # commit 返回时瞬态 owner 仍未被杀掉，仍在声明期限内保留
+    assert "owner:stop" not in order
+    assert "paste:ctrl+v" in order
+
+    # 等待定时器超时触发清理
+    time.sleep(0.3)
+    assert "owner:stop" in order
+    assert "set:" in order
+
+
+def test_xdotool_clipboard_nonzero_timeout_stops_owner_on_exception(monkeypatch):
+    from recordian.linux_commit import CommitError, XdotoolClipboardCommitter
+
+    order: list[str] = []
+    fake_proc = object()
+
+    monkeypatch.setattr("recordian.linux_commit.which", lambda x: "/usr/bin/" + x)
+    monkeypatch.setattr("recordian.linux_commit._start_transient_clipboard_owner", lambda text: fake_proc)
+    monkeypatch.setattr("recordian.linux_commit._stop_transient_clipboard_owner", lambda proc: order.append("owner:stop"))
+    monkeypatch.setattr("recordian.linux_commit.send_paste_shortcut", lambda *, target_window_id=None: (_ for _ in ()).throw(CommitError("paste failed")))
+
+    committer = XdotoolClipboardCommitter(clipboard_timeout_ms=5000)
+    with pytest.raises(CommitError, match="paste failed"):
+        committer.commit("测试文本")
+
+    # 发生异常时立即清理瞬态 owner，避免进程泄漏
+    assert order == ["owner:stop"]
+
+
+def test_xdotool_clipboard_nonzero_timeout_releases_old_owner_on_new_commit(monkeypatch):
+    from recordian.linux_commit import XdotoolClipboardCommitter
+
+    stopped: list[object] = []
+    fake_proc1 = object()
+    fake_proc2 = object()
+    procs = [fake_proc1, fake_proc2]
+
+    monkeypatch.setattr("recordian.linux_commit.which", lambda x: "/usr/bin/" + x)
+    monkeypatch.setattr("recordian.linux_commit._start_transient_clipboard_owner", lambda text: procs.pop(0))
+    monkeypatch.setattr("recordian.linux_commit._stop_transient_clipboard_owner", lambda proc: stopped.append(proc))
+    monkeypatch.setattr("recordian.linux_commit._set_clipboard_text", lambda text: None)
+    monkeypatch.setattr("recordian.linux_commit._xdotool_key", lambda shortcut, *, window_id=None: None)
+    monkeypatch.setattr("time.sleep", lambda seconds: None)
+
+    committer = XdotoolClipboardCommitter(clipboard_timeout_ms=5000)
+    committer.commit("文本1")
+
+    # 第一次 commit 返回后，owner1 仍保留，未被立即停止
+    assert stopped == []
+
+    # 同一 committer 进行第二次 commit，应释放旧 owner，避免进程泄漏
+    committer.commit("文本2")
+    assert stopped == [fake_proc1]
+
+
+def test_xdotool_clipboard_delayed_old_timer_does_not_clear_new_commit(monkeypatch):
+    import threading
+
+    from recordian.linux_commit import XdotoolClipboardCommitter
+
+    clipboard_calls: list[str] = []
+    timers: list[threading.Timer] = []
+    stopped: list[object] = []
+
+    real_timer = threading.Timer
+
+    def _intercept_timer(interval, func, *args, **kwargs):
+        t = real_timer(interval, func, *args, **kwargs)
+        timers.append(t)
+        return t
+
+    fake_owner1 = object()
+    fake_owner2 = object()
+    owners = [fake_owner1, fake_owner2]
+
+    monkeypatch.setattr("threading.Timer", _intercept_timer)
+    monkeypatch.setattr("recordian.linux_commit.which", lambda x: "/usr/bin/" + x)
+    monkeypatch.setattr("recordian.linux_commit._start_transient_clipboard_owner", lambda text: owners.pop(0))
+    monkeypatch.setattr("recordian.linux_commit._stop_transient_clipboard_owner", lambda proc: stopped.append(proc))
+    monkeypatch.setattr("recordian.linux_commit._set_clipboard_text", lambda text: clipboard_calls.append(f"set:{text}"))
+    monkeypatch.setattr("recordian.linux_commit._xdotool_key", lambda shortcut, *, window_id=None: None)
+    monkeypatch.setattr("time.sleep", lambda seconds: None)
+
+    committer = XdotoolClipboardCommitter(clipboard_timeout_ms=5000)
+    committer.commit("文本1")
+    assert len(timers) == 1
+    timer1 = timers[0]
+
+    # 第二次 commit 替换内容，产生 owner2 和 timer2，并在同锁释放 owner1
+    committer.commit("文本2")
+    assert len(timers) == 2
+    timer2 = timers[1]
+    assert stopped == [fake_owner1]
+
+    # 模拟旧 timer1 的回调延迟执行：由于 timer 身份不匹配，不应清理新 owner2 或新剪贴板
+    timer1.function(*timer1.args, **timer1.kwargs)
+    assert stopped == [fake_owner1]
+    assert "set:" not in clipboard_calls
+
+    # 触发新 timer2 的回调，正常释放 owner2 并清理剪贴板
+    timer2.function(*timer2.args, **timer2.kwargs)
+    assert stopped == [fake_owner1, fake_owner2]
+    assert "set:" in clipboard_calls
+
+
+def test_xdotool_clipboard_superseded_commit_exception_does_not_clear_new_owner(monkeypatch):
+    from recordian.linux_commit import CommitError, XdotoolClipboardCommitter
+
+    fake_owner1 = object()
+    fake_owner2 = object()
+    stopped: list[object] = []
+
+    monkeypatch.setattr("recordian.linux_commit.which", lambda x: "/usr/bin/" + x)
+    monkeypatch.setattr("recordian.linux_commit._stop_transient_clipboard_owner", lambda proc: stopped.append(proc))
+    monkeypatch.setattr("time.sleep", lambda seconds: None)
+
+    committer = XdotoolClipboardCommitter(clipboard_timeout_ms=5000)
+
+    def _fake_paste_with_preemption(*, target_window_id=None):
+        # 模拟并发的新 commit 抢占了 _transient_owner
+        committer._transient_owner = fake_owner2
+        committer._clear_timer = object()  # new timer
+        raise CommitError("commit1 paste failed")
+
+    monkeypatch.setattr("recordian.linux_commit._start_transient_clipboard_owner", lambda text: fake_owner1)
+    monkeypatch.setattr("recordian.linux_commit.send_paste_shortcut", _fake_paste_with_preemption)
+
+    with pytest.raises(CommitError, match="commit1 paste failed"):
+        committer.commit("文本1")
+
+    # commit1 异常退出时，发现当前 owner 已被更新，不清理属于新 commit 的 owner2
+    assert committer._transient_owner is fake_owner2
+    assert fake_owner2 not in stopped
+
+
+def test_xdotool_clipboard_timer_start_failure_cleans_up_owner(monkeypatch):
+    from recordian.linux_commit import XdotoolClipboardCommitter
+
+    fake_owner = object()
+    stopped: list[object] = []
+
+    monkeypatch.setattr("recordian.linux_commit.which", lambda x: "/usr/bin/" + x)
+    monkeypatch.setattr("recordian.linux_commit._start_transient_clipboard_owner", lambda text: fake_owner)
+    monkeypatch.setattr("recordian.linux_commit._stop_transient_clipboard_owner", lambda proc: stopped.append(proc))
+
+    def _fail_start(self):
+        raise RuntimeError("thread limit reached")
+
+    monkeypatch.setattr("threading.Timer.start", _fail_start)
+
+    committer = XdotoolClipboardCommitter(clipboard_timeout_ms=5000)
+
+    with pytest.raises(RuntimeError, match="thread limit reached"):
+        committer.commit("文本")
+
+    assert stopped == [fake_owner]
+    assert committer._transient_owner is None
+    assert committer._clear_timer is None
+
+
+def test_xdotool_clipboard_short_timeout_starts_timer_after_paste_and_hold(monkeypatch):
+    """短 timeout 必须在 paste 及 owner hold 完成后才启动计时，防止粘贴前提前清空"""
+
+    from recordian.linux_commit import CommitResult, XdotoolClipboardCommitter
+
+    timeline: list[str] = []
+    fake_proc = object()
+
+    monkeypatch.setattr("recordian.linux_commit.which", lambda x: "/usr/bin/" + x)
+    monkeypatch.setattr("recordian.linux_commit._start_transient_clipboard_owner", lambda text: fake_proc)
+    monkeypatch.setattr("recordian.linux_commit._stop_transient_clipboard_owner", lambda proc: timeline.append("owner:stop"))
+    monkeypatch.setattr("recordian.linux_commit._set_clipboard_text", lambda text: timeline.append(f"set:{text}"))
+    monkeypatch.setattr(
+        "recordian.linux_commit.send_paste_shortcut",
+        lambda *, target_window_id=None: timeline.append("paste") or CommitResult(backend="xdotool", committed=True, detail="paste_only:ctrl+v"),
+    )
+    monkeypatch.setattr("time.sleep", lambda seconds: timeline.append("wait"))
+
+    committer = XdotoolClipboardCommitter(clipboard_timeout_ms=50)
+
+    monkeypatch.setattr("threading.Timer.start", lambda self: timeline.append("timer:start"))
+
+    committer.commit("测试")
+
+    assert timeline == ["wait", "paste", "wait", "timer:start"]
+
+
+def test_xdotool_clipboard_fallback_cleans_clipboard_on_paste_failure(monkeypatch):
+    """owner=None fallback 持久写入在 timeout>0 且 paste 失败时必须清空剪贴板，避免敏感内容残留"""
+    from recordian.linux_commit import CommitError, XdotoolClipboardCommitter
+
+    clipboard_calls: list[str] = []
+
+    monkeypatch.setattr("recordian.linux_commit.which", lambda x: "/usr/bin/" + x)
+    monkeypatch.setattr("recordian.linux_commit._start_transient_clipboard_owner", lambda text: None)
+    monkeypatch.setattr("recordian.linux_commit._set_clipboard_text", lambda text: clipboard_calls.append(f"set:{text}"))
+    monkeypatch.setattr("time.sleep", lambda seconds: None)
+
+    def _fail_paste(*, target_window_id=None):
+        raise CommitError("paste failed")
+
+    monkeypatch.setattr("recordian.linux_commit.send_paste_shortcut", _fail_paste)
+
+    committer = XdotoolClipboardCommitter(clipboard_timeout_ms=5000)
+
+    with pytest.raises(CommitError, match="paste failed"):
+        committer.commit("机密密码")
+
+    assert clipboard_calls == ["set:机密密码", "set:"]
+    assert committer._clear_timer is None
+    assert committer._transient_owner is None
 
 
 def test_xdotool_clipboard_committer_falls_back_when_no_transient_owner(monkeypatch):
@@ -270,6 +506,128 @@ def test_fcitx_enter_refuses_changed_window(monkeypatch) -> None:
     result = send_hard_enter(FcitxCommitter(target_window_address="0xtarget", target_xwayland=False))
     assert not result.committed
     assert result.detail == "hard_enter_failed:focus_changed"
+
+
+def test_send_hard_enter_fcitx_native_wayland_without_address_uses_wtype(monkeypatch) -> None:
+    from recordian.linux_commit import FcitxCommitter, send_hard_enter
+
+    calls = []
+    monkeypatch.setattr("recordian.linux_commit.which", lambda name: "/usr/bin/" + name)
+    monkeypatch.setattr("recordian.linux_commit.time.sleep", lambda seconds: calls.append(("wait", seconds)))
+    monkeypatch.setattr("recordian.linux_commit._run_command", lambda cmd: calls.append(("key", cmd)))
+    monkeypatch.setattr(
+        "recordian.linux_commit._xdotool_hard_return",
+        lambda **kw: (_ for _ in ()).throw(AssertionError("xdotool should not be used on native Wayland")),
+    )
+
+    # 无 address 的原生 Wayland
+    result = send_hard_enter(FcitxCommitter(target_xwayland=False))
+    assert result.committed is True
+    assert result.detail == "hard_enter_sent:wayland"
+    assert ("wait", 0.12) in calls
+    assert ("key", ["wtype", "-k", "Return"]) in calls
+
+
+def test_send_hard_enter_fcitx_explicit_xwayland_retains_xdotool(monkeypatch) -> None:
+    from recordian.linux_commit import FcitxCommitter, send_hard_enter
+
+    called = {"xdotool": False}
+
+    def _fake_hard_return(*, window_id=None) -> None:
+        called["xdotool"] = True
+
+    # 模拟 Wayland 会话，且 wtype 可用
+    monkeypatch.setenv("XDG_SESSION_TYPE", "wayland")
+    monkeypatch.setattr("recordian.linux_commit.which", lambda name: "/usr/bin/" + name)
+    monkeypatch.setattr(
+        "recordian.linux_commit._run_command",
+        lambda cmd: (_ for _ in ()).throw(AssertionError("wtype should not be used for explicit XWayland")),
+    )
+    monkeypatch.setattr("recordian.linux_commit._xdotool_hard_return", _fake_hard_return)
+
+    # 明确 XWayland：保留 xdotool
+    committer = FcitxCommitter(target_xwayland=True, target_window_id=777)
+    result = send_hard_enter(committer)
+    assert result.committed is True
+    assert called["xdotool"] is True
+    assert "hard_enter_sent" in result.detail
+
+
+def test_fcitx_delete_chars_with_address_checks_focus_safety(monkeypatch) -> None:
+    from recordian.linux_commit import FcitxCommitter
+
+    monkeypatch.setattr("recordian.wayland_desktop.desktop_query", lambda _: {
+        "address": "0xother_window", "xwayland": False,
+    })
+    monkeypatch.setattr(
+        "recordian.linux_commit._run_command",
+        lambda cmd: (_ for _ in ()).throw(AssertionError("keys should not be sent when focus changed")),
+    )
+
+    committer = FcitxCommitter(target_window_address="0xtarget", target_xwayland=False)
+    result = committer.delete_chars(3)
+    assert result.committed is False
+    assert result.detail == "backspace_failed:focus_changed"
+
+
+def test_fcitx_delete_chars_with_address_native_wayland_uses_wtype(monkeypatch) -> None:
+    from recordian.linux_commit import FcitxCommitter
+
+    calls = []
+    monkeypatch.setattr("recordian.wayland_desktop.desktop_query", lambda _: {
+        "address": "0xtarget", "xwayland": False,
+    })
+    monkeypatch.setattr("recordian.linux_commit.which", lambda name: "/usr/bin/" + name)
+    monkeypatch.setattr("recordian.linux_commit._run_command", lambda cmd: calls.append(cmd))
+
+    committer = FcitxCommitter(target_window_address="0xtarget", target_xwayland=False)
+    result = committer.delete_chars(2)
+    assert result.committed is True
+    assert result.detail == "backspace:2"
+    assert calls == [["wtype", "-k", "BackSpace", "-k", "BackSpace"]]
+
+
+def test_fcitx_delete_chars_native_wayland_without_address_uses_wtype(monkeypatch) -> None:
+    from recordian.linux_commit import FcitxCommitter
+
+    calls = []
+    monkeypatch.setattr("recordian.linux_commit.which", lambda name: "/usr/bin/" + name)
+    monkeypatch.setattr("recordian.linux_commit._run_command", lambda cmd: calls.append(cmd))
+    monkeypatch.setattr(
+        "recordian.linux_commit._send_backspaces_via_xtest",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("xtest should not be used on native Wayland")),
+    )
+
+    committer = FcitxCommitter(target_xwayland=False)
+    result = committer.delete_chars(3)
+    assert result.committed is True
+    assert result.detail == "backspace:3"
+    assert calls == [["wtype", "-k", "BackSpace", "-k", "BackSpace", "-k", "BackSpace"]]
+
+
+def test_fcitx_delete_chars_explicit_xwayland_retains_xdotool(monkeypatch) -> None:
+    from recordian.linux_commit import FcitxCommitter
+
+    called = {"xtest": False}
+
+    monkeypatch.setenv("XDG_SESSION_TYPE", "wayland")
+    monkeypatch.setattr("recordian.linux_commit.which", lambda name: "/usr/bin/" + name)
+    monkeypatch.setattr(
+        "recordian.linux_commit._run_command",
+        lambda cmd: (_ for _ in ()).throw(AssertionError("wtype should not be used for explicit XWayland")),
+    )
+
+    def _fake_xtest(n, *, window_id=None):
+        called["xtest"] = True
+        return True
+
+    monkeypatch.setattr("recordian.linux_commit._send_backspaces_via_xtest", _fake_xtest)
+
+    committer = FcitxCommitter(target_xwayland=True, target_window_id=123)
+    result = committer.delete_chars(2)
+    assert result.committed is True
+    assert result.detail == "backspace:2:xtest"
+    assert called["xtest"] is True
 
 
 def test_send_hard_enter_unsupported_backend() -> None:

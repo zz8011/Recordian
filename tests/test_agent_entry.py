@@ -88,6 +88,25 @@ def test_incomplete_asr_never_submits(hub, outcome, failed):
     assert not hub.tasks
 
 
+def test_accept_transcript_catches_submit_validation_error_and_notices(hub):
+    hub.select('agent', 'hermes')
+    capture = hub.begin_capture()
+    hub.cancels['hermes'] = threading.Event()
+    payload = {'result': {'text': '新指令', 'commit': {'outcome': 'committed'}}}
+
+    delivered = []
+
+    def deliver():
+        hub.accept_transcript(capture, payload)
+        delivered.append(payload)
+
+    deliver()
+    assert delivered == [payload]
+    assert hub.preview == '新指令'
+    assert '仍在执行' in hub.notice
+
+
+
 def test_capture_disables_remote_paste_and_even_live_config_enter(hub, tmp_path):
     path = tmp_path/'hotkey.json'
     path.write_text('{"auto_hard_enter":true}')

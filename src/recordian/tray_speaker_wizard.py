@@ -323,7 +323,7 @@ def open_speaker_enrollment_wizard(app: TrayApp) -> None:
             try:
                 import numpy as np
 
-                from recordian.speaker_verify import enroll_speaker_profile  # type: ignore[attr-defined]
+                from recordian.speaker_verify import enroll_speaker_profile_from_multiple_wavs
 
                 config = ConfigManager.load(app.config_path)
                 sample_rate = int(config.get("wake_sample_rate", 16000))
@@ -349,7 +349,7 @@ def open_speaker_enrollment_wizard(app: TrayApp) -> None:
                     sample_paths.append(sample_path)
 
                 # Create profile
-                enroll_speaker_profile(
+                enroll_speaker_profile_from_multiple_wavs(
                     sample_paths=sample_paths,
                     profile_path=profile_path,
                     target_rate=sample_rate,

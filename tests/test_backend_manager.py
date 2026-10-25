@@ -489,6 +489,42 @@ class TestBackendManagerProcessExit:
         manager._wait()
         assert events.empty()
 
+    def test_wait_removes_exited_process_from_registry(self) -> None:
+        """测试进程异常退出时，检查线程从全局注册表中清理该进程"""
+        mock_proc = Mock()
+        mock_proc.wait.return_value = 1
+        manager = BackendManager(
+            config_path=Path("/tmp/test_config.json"),
+            events=queue.Queue(),
+            on_state_change=Mock(),
+            on_menu_update=Mock(),
+        )
+        manager.proc = mock_proc
+
+        with patch("recordian.backend_manager._ACTIVE_BACKEND_PROCESSES", [mock_proc]) as processes:
+            manager._wait()
+            assert mock_proc not in processes
+
+    def test_duplicate_removal_between_wait_and_stop_is_safe(self) -> None:
+        """测试 _wait 与 stop 重复删除同一进程时安全不报错"""
+        mock_proc = Mock()
+        mock_proc.poll.return_value = 0
+        mock_proc.wait.return_value = 0
+        manager = BackendManager(
+            config_path=Path("/tmp/test_config.json"),
+            events=queue.Queue(),
+            on_state_change=Mock(),
+            on_menu_update=Mock(),
+        )
+        manager.proc = mock_proc
+
+        with patch("recordian.backend_manager._ACTIVE_BACKEND_PROCESSES", [mock_proc]) as processes:
+            manager._wait()
+            assert mock_proc not in processes
+            manager.stop()
+            assert mock_proc not in processes
+
+
 
 class TestBackendManagerRestart:
     """测试重启功能"""
@@ -628,6 +664,25 @@ class TestBackendManagerCleanup:
         assert mock_terminate_backend_process.call_count == 1
 
         # 验证注册表被清空
+        assert len(_ACTIVE_BACKEND_PROCESSES) == 0
+
+    def test_cleanup_handles_process_already_removed_by_wait(self) -> None:
+        """测试 atexit 清理时，如果某进程已被 _wait 提前移除，不会抛出 ValueError"""
+        from recordian.backend_manager import (
+            _ACTIVE_BACKEND_PROCESSES,
+            _cleanup_backend_processes,
+            _remove_backend_process,
+        )
+
+        mock_proc = Mock()
+        mock_proc.poll.return_value = 0
+        _ACTIVE_BACKEND_PROCESSES.clear()
+        _ACTIVE_BACKEND_PROCESSES.append(mock_proc)
+
+        # 模拟在 cleanup 之前已被 _wait 移除
+        _remove_backend_process(mock_proc)
+        # 再次执行清理，不应报 ValueError
+        _cleanup_backend_processes()
         assert len(_ACTIVE_BACKEND_PROCESSES) == 0
 
     @patch("recordian.backend_manager.os.killpg")

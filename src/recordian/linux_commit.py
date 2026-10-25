@@ -573,10 +573,37 @@ class FcitxCommitter(TextCommitter):
 
 
     def delete_chars(self, count: int) -> CommitResult:
+        n = max(0, int(count))
+        if n <= 0:
+            return CommitResult(backend=self.backend_name, committed=True, detail="backspace:0")
+
+        address = self.target_window_address
+        if isinstance(address, str) and address:
+            from .wayland_desktop import desktop_query
+            try:
+                active = desktop_query("activewindow")
+            except (CommitError, OSError, ValueError, subprocess.SubprocessError) as exc:
+                return CommitResult(backend=self.backend_name, committed=False, detail=f"backspace_failed:{exc}")
+            if active.get("address") != address:
+                return CommitResult(backend=self.backend_name, committed=False, detail="backspace_failed:focus_changed")
+            if not active.get("xwayland", True):
+                return WTypeCommitter().delete_chars(n)
+            return XDoToolCommitter(
+                target_window_id=self.target_window_id if isinstance(self.target_window_id, int) else None,
+                streaming=True,
+            ).delete_chars(n)
+
+        is_explicit_xwayland = self.target_xwayland is True
+        is_native_wayland = (
+            self.target_xwayland is False
+            or (not is_explicit_xwayland and _is_wayland_session() and bool(which("wtype")))
+        )
+        if is_native_wayland and not is_explicit_xwayland:
+            return WTypeCommitter().delete_chars(n)
         return XDoToolCommitter(
             target_window_id=self.target_window_id if isinstance(self.target_window_id, int) else None,
             streaming=True,
-        ).delete_chars(count)
+        ).delete_chars(n)
 
 
 class WTypeCommitter(TextCommitter):
@@ -693,6 +720,20 @@ def send_hard_enter(committer: TextCommitter) -> CommitResult:
                 raise CommitError("wtype not found in PATH")
             _run_command(["wtype", "-k", "Return"])
             return CommitResult(backend=backend, committed=True, detail="hard_enter_sent")
+
+        if target_backend == "fcitx" and not (isinstance(address, str) and address):
+            is_explicit_xwayland = getattr(target_committer, "target_xwayland", None) is True
+            is_native_wayland = (
+                getattr(target_committer, "target_xwayland", None) is False
+                or (not is_explicit_xwayland and _is_wayland_session())
+            )
+            if is_native_wayland and not is_explicit_xwayland:
+                if which("wtype"):
+                    time.sleep(0.12)
+                    _run_command(["wtype", "-k", "Return"])
+                    return CommitResult(backend=backend, committed=True, detail="hard_enter_sent:wayland")
+                if getattr(target_committer, "target_xwayland", None) is False:
+                    raise CommitError("wtype not found in PATH")
 
         if target_backend == "fcitx" or target_backend.startswith("xdotool") or target_backend in {"auto", "auto-fallback", "fallback"}:
             if not which("xdotool"):
@@ -831,51 +872,89 @@ class XdotoolClipboardCommitter(TextCommitter):
         self.clipboard_timeout_ms = clipboard_timeout_ms
         self._clear_timer: threading.Timer | None = None
         self._timer_lock = threading.Lock()
+        self._transient_owner: subprocess.Popen[str] | None = None
+
+    def _cleanup_timer_and_owner_locked(self) -> None:
+        if self._clear_timer is not None:
+            self._clear_timer.cancel()
+            self._clear_timer = None
+        owner = self._transient_owner
+        self._transient_owner = None
+        if owner is not None:
+            _stop_transient_clipboard_owner(owner)
 
     def commit(self, text: str) -> CommitResult:
         if not which("xdotool"):
             raise CommitError("xdotool not found in PATH")
-        clipboard_owner = _start_transient_clipboard_owner(text)
-        if clipboard_owner is None:
-            _set_clipboard_text(text)
-        # Give the clipboard owner time to publish the new selection before
-        # sending the paste shortcut. This avoids stale clipboard pastes on X11.
-        time.sleep(_CLIPBOARD_SETTLE_DELAY_S)
 
-        # 取消之前的定时器（如果存在）
+        owner: subprocess.Popen[str] | None = None
+        timer: threading.Timer | None = None
         with self._timer_lock:
-            if self._clear_timer is not None:
-                self._clear_timer.cancel()
-                self._clear_timer = None
+            self._cleanup_timer_and_owner_locked()
 
-            # 启动新的定时器清空剪贴板
-            if self.clipboard_timeout_ms > 0:
-                def _clear_clipboard():
-                    try:
-                        _set_clipboard_text("")
-                    except (subprocess.SubprocessError, OSError):
-                        pass  # 静默失败，不影响主流程
+            if self.clipboard_timeout_ms <= 0:
+                _set_clipboard_text(text)
+            else:
+                try:
+                    owner = _start_transient_clipboard_owner(text)
+                    self._transient_owner = owner
+                    if owner is None:
+                        _set_clipboard_text(text)
 
-                self._clear_timer = threading.Timer(
-                    self.clipboard_timeout_ms / 1000.0,
-                    _clear_clipboard
-                )
-                self._clear_timer.daemon = True
-                self._clear_timer.start()
+                    def _clear_clipboard():
+                        with self._timer_lock:
+                            if self._clear_timer is not timer:
+                                return
+                            self._clear_timer = None
+                            cur_owner = self._transient_owner
+                            self._transient_owner = None
+                            if cur_owner is not None:
+                                _stop_transient_clipboard_owner(cur_owner)
+                            try:
+                                _set_clipboard_text("")
+                            except (subprocess.SubprocessError, OSError):
+                                pass
+
+                    timer = threading.Timer(
+                        self.clipboard_timeout_ms / 1000.0,
+                        _clear_clipboard,
+                    )
+                    timer.daemon = True
+                    self._clear_timer = timer
+                except Exception:
+                    self._cleanup_timer_and_owner_locked()
+                    raise
 
         try:
+            time.sleep(_CLIPBOARD_SETTLE_DELAY_S)
             result = send_paste_shortcut(target_window_id=self.target_window_id)
-            # Electron/web editors often request clipboard contents a moment
-            # after Ctrl+V is dispatched. Keep the transient owner alive long
-            # enough for the target app to complete the paste handshake.
-            if clipboard_owner is not None:
+            if owner is not None:
                 time.sleep(_POST_PASTE_OWNER_HOLD_S)
+
+            if timer is not None:
+                with self._timer_lock:
+                    if self._clear_timer is timer:
+                        timer.start()
+
             detail = str(result.detail).replace("paste_only:", "paste:", 1)
             if self.clipboard_timeout_ms > 0:
                 detail += f" clear_after:{self.clipboard_timeout_ms}ms"
             return CommitResult(backend=self.backend_name, committed=True, detail=detail)
-        finally:
-            _stop_transient_clipboard_owner(clipboard_owner)
+        except Exception:
+            with self._timer_lock:
+                if self._clear_timer is timer and timer is not None:
+                    timer.cancel()
+                    self._clear_timer = None
+                    if self._transient_owner is owner:
+                        self._transient_owner = None
+                    if owner is not None:
+                        _stop_transient_clipboard_owner(owner)
+                    else:
+                        try:
+                            _set_clipboard_text("")
+                        except (subprocess.SubprocessError, OSError):
+                            pass
+            raise
 
 
 class CommitterWithFallback(TextCommitter):

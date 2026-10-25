@@ -3,13 +3,22 @@
 ## PyGObject (gi) 模块配置
 
 ### 问题
-虚拟环境中无法直接安装 PyGObject，因为它依赖系统级的 GTK 库。
+默认隔离的虚拟环境无法导入系统安装的 PyGObject。自行安装 PyGObject 还需要匹配的系统 GTK 与开发库。
 
 ### 解决方案
-通过 `.pth` 文件让虚拟环境访问系统的 PyGObject：
+使用能导入 `gi` 的系统 Python，通过 `--system-site-packages` 创建虚拟环境。下面以 `/usr/bin/python3` 为例：
 
 ```bash
-# 创建 .pth 文件
+/usr/bin/python3 -c "import gi"
+/usr/bin/python3 -m venv --system-site-packages .venv
+```
+
+已有 `.venv` 只有在 Python 主次版本与系统解释器一致时才能按此方式更新。版本不同时先保留旧环境并另建环境，不要原地覆盖；`install.sh` 会检测这种情况并停止安装。
+
+若无法使用 `--system-site-packages`，也可通过 `.pth` 文件让虚拟环境访问系统的 PyGObject：
+
+```bash
+# 创建 .pth 文件（以 Debian/Ubuntu 为例）
 cat > .venv/lib/python3.12/site-packages/gi.pth << 'EOF'
 /usr/lib/python3/dist-packages
 EOF
@@ -41,4 +50,4 @@ sudo apt install gir1.2-appindicator3-0.1 python3-gi
 - Python 版本变化时需要更新路径（如 python3.12 -> python3.13）
 
 ### 自动化脚本
-可以在 `install.sh` 中添加这个配置步骤。
+该配置已由 `install.sh` 自动处理（自动检测系统 Python 并启用 `--system-site-packages`，若检测到既有隔离环境会自动升级，并由目标解释器实际验证 gi）。

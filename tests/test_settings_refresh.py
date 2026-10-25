@@ -265,6 +265,66 @@ def test_speaker_intro_reuses_window_and_cancel_has_no_recording_or_write(ui, mo
     assert ui.app._gtk_speaker_window is None
 
 
+def test_speaker_wizard_saves_profile_using_from_multiple_wavs(ui, monkeypatch, tmp_path):
+    import numpy as np
+    from gi.repository import Gtk
+
+    from recordian.tray_speaker_wizard import open_speaker_enrollment_wizard
+
+    profile_file = tmp_path / "speaker_profile.json"
+    ConfigManager.save(
+        ui.app.config_path,
+        {
+            "wake_sample_rate": 16000,
+            "wake_owner_profile": str(profile_file),
+        },
+    )
+
+    captured: dict[str, object] = {}
+    orig_connect = Gtk.Button.connect
+
+    def capture_connect(self, signal, callback, *args):
+        if callback and hasattr(callback, "__closure__") and callback.__closure__:
+            for cell in callback.__closure__:
+                val = cell.cell_contents
+                if callable(val) and hasattr(val, "__closure__") and val.__closure__:
+                    for inner in val.__closure__:
+                        inner_val = inner.cell_contents
+                        if isinstance(inner_val, dict) and "step" in inner_val:
+                            captured["state"] = inner_val
+                elif isinstance(val, dict) and "step" in val:
+                    captured["state"] = val
+        if self.get_label() == "下一步":
+            captured["btn_next"] = self
+        return orig_connect(self, signal, callback, *args)
+
+    monkeypatch.setattr(Gtk.Button, "connect", capture_connect)
+    open_speaker_enrollment_wizard(ui.app)
+    pump()
+    dialog = ui.app._gtk_speaker_window
+    assert dialog is not None
+    wizard_state = captured.get("state")
+    btn_next = captured.get("btn_next")
+    assert isinstance(wizard_state, dict)
+    assert isinstance(btn_next, Gtk.Button)
+
+    t = np.linspace(0.0, 1.5, int(16000 * 1.5), endpoint=False, dtype=np.float32)
+    voice = (0.58 * np.sin(2 * np.pi * 180.0 * t) + 0.26 * np.sin(2 * np.pi * 420.0 * t)).astype(np.float32)
+    wizard_state["samples"] = [voice.copy() for _ in range(3)]
+    wizard_state["step"] = 3
+
+    btn_next.emit("clicked")
+    pump()
+
+    assert profile_file.exists()
+    from recordian.speaker_verify import load_speaker_profile
+    loaded = load_speaker_profile(profile_file)
+    assert loaded is not None
+    assert loaded.sample_rate == 16000
+    assert loaded.embeddings is not None and len(loaded.embeddings) == 3
+    dialog.destroy()
+
+
 def test_initial_page_and_defaults_preserve_hidden_legacy_model(ui, monkeypatch):
     from gi.repository import Gtk
 

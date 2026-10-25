@@ -1,6 +1,8 @@
 import time
 from pathlib import Path
 
+import pytest
+
 from recordian.engine import DictationEngine
 from recordian.models import ASRResult
 from recordian.providers.base import ASRProvider
@@ -26,6 +28,19 @@ class FakeProvider(ASRProvider):
         if self._delay > 0:
             time.sleep(self._delay)
         return ASRResult(text=self._text, confidence=self._confidence, model_name=self._name)
+
+
+class ErrorProvider(ASRProvider):
+    @property
+    def provider_name(self) -> str:
+        return "error_p2"
+
+    @property
+    def is_cloud(self) -> bool:
+        return False
+
+    def transcribe_file(self, wav_path: Path, *, hotwords: list[str]) -> ASRResult:
+        raise RuntimeError("Pass2 provider network failure")
 
 
 def test_engine_uses_pass2_when_triggered() -> None:
@@ -154,3 +169,21 @@ class TestEngineTimeoutHandling:
         assert result.text == "Pass2结果"
         assert result.pass2_result is not None
         assert result.pass2_result.text == "Pass2结果"
+
+    def test_pass2_non_timeout_exception_keeps_pass1_result_and_logs(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """测试 Pass2 提供方抛出非超时异常时保留 Pass1 结果并记录日志"""
+        import logging
+
+        pass1 = FakeProvider("p1", text="保留Pass1文本", confidence=0.6)
+        pass2 = ErrorProvider()
+
+        engine = DictationEngine(pass1, pass2_provider=pass2)
+
+        with caplog.at_level(logging.ERROR):
+            result = engine.transcribe_utterance(Path(__file__), hotwords=[], force_high_precision=True)
+
+        assert result.text == "保留Pass1文本"
+        assert result.pass2_result is None
+        assert any("network failure" in record.message for record in caplog.records)
