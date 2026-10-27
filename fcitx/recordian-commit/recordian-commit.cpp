@@ -501,6 +501,20 @@ bool acceptPreeditSurrounding(StreamingSession &session,
         }
         if (session.frontend == "wayland_v2" &&
             !session.lastPreedit.empty()) {
+            // Lexical inserts a zero-width placeholder during composition.
+            // Only the observed empty paragraph format is equivalent; its
+            // transient placeholder cannot prove intermediate commit echoes.
+            const auto lexicalPlaceholder = [](const SurroundSnap &snap) {
+                return snap.valid && snap.cursor == 0 && snap.anchor == 0 &&
+                       snap.text == "\u200b\n\n";
+            };
+            if ((emptyEditorLayout(ack.accepted) || lexicalPlaceholder(ack.accepted)) &&
+                (emptyEditorLayout(observed) || lexicalPlaceholder(observed)) &&
+                (lexicalPlaceholder(ack.accepted) || lexicalPlaceholder(observed))) {
+                ack.accepted = observed;
+                session.segmentSafe = false;
+                return true;
+            }
             if (emptyEditorLayout(ack.accepted) && emptyEditorLayout(observed)) {
                 ack.accepted = observed;
                 return true;
