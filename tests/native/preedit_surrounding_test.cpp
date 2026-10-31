@@ -119,6 +119,32 @@ int main() {
     assert(!acceptPreeditSurrounding(emptyEditor, {true, "\n\n\n", 0, 0}));
     assert(!acceptPreeditSurrounding(emptyEditor, {true, " ", 0, 0}));
 
+    // Rikyū/Lexical reports U+200B + two newlines during composition.
+    StreamingSession lexical;
+    lexical.frontend = "wayland_v2";
+    lexical.segmentSafe = true;
+    assert(acceptPreeditSurrounding(lexical, {true, "\n", 0, 0}));
+    assert(!acceptPreeditSurrounding(lexical, {true, "\u200b\n\n", 0, 0}));
+    lexical.lastPreedit = "测";
+    rememberPreedit(lexical, "测");
+    assert(acceptPreeditSurrounding(lexical, {true, "\u200b\n\n", 0, 0}));
+    assert(!lexical.segmentSafe);
+    assert(acceptPreeditSurrounding(lexical, {true, "\n", 0, 0}));
+    assert(acceptPreeditSurrounding(lexical, {true, "\u200b\n\n", 0, 0}));
+    assert(!acceptPreeditSurrounding(lexical, {true, "\u200b\n\n", 1, 1}));
+    assert(!acceptPreeditSurrounding(lexical, {true, "\u200b\n\n", 0, 1}));
+    assert(!acceptPreeditSurrounding(lexical, {true, "X\u200b\n\n", 0, 0}));
+    assert(!acceptPreeditSurrounding(lexical, {true, "\u200b\n\n\n", 0, 0}));
+    assert(!acceptPreeditSurrounding(lexical, {true, "\u200b\u200b\n\n", 0, 0}));
+    lexical.ack.armed = true;
+    assert(!acceptPreeditSurrounding(lexical, {true, "\n", 0, 0}));
+    lexical.ack.armed = false;
+    lexical.ack.poisoned = true;
+    assert(!acceptPreeditSurrounding(lexical, {true, "\n", 0, 0}));
+    lexical.ack.poisoned = false;
+    lexical.frontend = "dbus";
+    assert(!acceptPreeditSurrounding(lexical, {true, "\n", 0, 0}));
+
     // Unrelated frontends do not inherit the Wayland exception.
     rememberPreedit(gtk, "文字");
     assert(!acceptPreeditSurrounding(gtk, {true, "草稿文字\n", 4, 4}));
