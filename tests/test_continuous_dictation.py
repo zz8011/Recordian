@@ -965,6 +965,21 @@ def test_refine_released_only_when_no_segment_committed() -> None:
     assert h.session.cancelled == 0
 
 
+def test_refine_enabled_buffers_segments_and_releases_whole_utterance() -> None:
+    # 开精炼时分段只进预编辑，整段留给精炼（翻译预设不能漏掉前缀）。
+    payload = _speech(20.0) + _silence(0.4) + _speech(5.0)
+    provider = _FakeProvider(["第一段。", "第二段。"])
+    h = _Harness(reader=_Reader(payload), provider=provider, refine_enabled=True)
+    worker = h.run()
+
+    assert len(provider.sessions) == 2
+    assert h.session.segments == []
+    assert h.session.commits == []
+    assert worker.segments_committed == 0
+    assert worker.outcome == "released_for_refine"
+    assert worker.final_text == "第一段。第二段。"
+
+
 # ---------------------------------------------------------------------------
 # IME token TTL keepalive during long silence (>120 s native inactivity TTL)
 # ---------------------------------------------------------------------------

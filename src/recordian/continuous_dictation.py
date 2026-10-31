@@ -95,7 +95,8 @@ def run_continuous_dictation(
     segment_index = 0
     committed_chars_total = 0
     buffered_canonical = ""
-    commit_segments = bool(getattr(session, "supports_segments", False))
+    # 开了精炼就不分段上屏：已上屏的前缀无法再整段精炼（如翻译预设）。
+    commit_segments = bool(getattr(session, "supports_segments", False)) and not refine_enabled
     failed = False
     live = {"asr": None, "corrector": None}
     # Audio-counted IME inactivity: the composition token dies after 120 s
