@@ -542,6 +542,14 @@ bool acceptPreeditSurrounding(StreamingSession &session,
                     }
                 }
             }
+            // Wayland editors can temporarily drop surrounding-text support
+            // while reflowing a composition. Downgrade segment commits and
+            // keep the accepted baseline so a later valid snapshot is still
+            // checked against it.
+            if (!observed.valid) {
+                session.segmentSafe = false;
+                return true;
+            }
         }
         return false;
     }
@@ -1188,6 +1196,13 @@ private:
                 session.ack.hasAccepted = true;
                 session.ack.accepted = observed;
                 clearPendingAck(&session.ack);
+                return true;
+            }
+            // Wayland terminals (e.g. Ghostty) may report invalid surrounding
+            // text after a segment commit. Downgrade further segment commits
+            // so the remaining speech stays buffered until final commit.
+            if (session.frontend == "wayland_v2" && !observed.valid) {
+                session.segmentSafe = false;
                 return true;
             }
             FCITX_WARN() << "Recordian CommitSegment echo mismatch seq="

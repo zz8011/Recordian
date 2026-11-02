@@ -88,7 +88,13 @@ int main() {
     assert(!acceptPreeditSurrounding(chromium, {true, "我想试\n\n", 3, 0}));
     assert(!acceptPreeditSurrounding(chromium, {true, "其他人\n\n", 3, 3}));
     assert(!acceptPreeditSurrounding(chromium, {true, "我想试X\n\n", 4, 4}));
-    assert(!acceptPreeditSurrounding(chromium, unknown));
+    // Transient invalid surrounding text on Wayland during active composition
+    // downgrades segment commits without killing the session or losing baseline.
+    assert(acceptPreeditSurrounding(chromium, unknown));
+    assert(!chromium.segmentSafe);
+    assert(sameSnap(chromium.ack.accepted, {true, "\n\n", 0, 0}));
+    assert(!acceptPreeditSurrounding(chromium, {true, "其他人\n\n", 3, 3}));
+    assert(acceptPreeditSurrounding(chromium, {true, "我想试\n\n", 3, 3}));
 
     StreamingSession switchesReporting;
     switchesReporting.frontend = "wayland_v2";
