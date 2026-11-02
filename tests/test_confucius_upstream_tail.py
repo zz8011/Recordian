@@ -84,3 +84,28 @@ class UpstreamTailContract(unittest.TestCase):
     def test_explicit_empty_audio_tag_remains_valid(self):
         text, _ = self.run_tail("language None<asr_text>", None, " None<asr_text>")
         self.assertEqual(text, "")
+
+    def test_retokenized_rollback_keeps_emitted_text_in_prompt(self):
+        # “跟他”+“们”重切分后，两 token 回滚曾切掉已发出的“然后”。
+        model = object.__new__(self.model_class)
+        model.backend = "vllm"
+        model.processor = SimpleNamespace(tokenizer=self.tokenizer)
+        model._build_text_prompt = lambda **kwargs: "PROMPT:"
+        replies = iter(["language Chinese<asr_text>给你家拍个照片，然后跟他商量", "们", "去吃饭吧。"])
+        prompts = []
+
+        def generate(inputs, sampling_params, **kwargs):
+            prompts.append(inputs[0]["prompt"])
+            return [SimpleNamespace(outputs=[SimpleNamespace(text=next(replies))])]
+
+        model.model = SimpleNamespace(generate=generate)
+        session = self.srv.StreamingSession(model, None, "")
+        try:
+            session.feed(b"\0\0" * (5120 + 2 * 2560))
+            deltas = [delta for delta, _ in session.process_ready()]
+        finally:
+            session.close()
+        emitted = "给你家拍个照片，然后"
+        self.assertEqual(deltas[0], emitted)
+        self.assertTrue(all(p.endswith(emitted) for p in prompts[1:]))
+        self.assertTrue("".join(deltas).startswith(emitted))

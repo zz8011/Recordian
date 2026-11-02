@@ -166,27 +166,25 @@ def test_spoken_language_word_is_not_filtered_as_metadata(srv):
     assert session.process_ready()[0][0] == "language English"
 
 
-def test_revised_fixed_prefix_fails_instead_of_slicing_by_length(srv):
-    model = RecordingModel(replies=[("我去公园", "我去"), ("你去公园", "你去公")])
+def test_revised_fixed_prefix_waits_instead_of_slicing_by_length(srv):
+    # 已发出的字不能撤回：修订后不切片、不中断，等模型重新对齐再继续。
+    model = RecordingModel(replies=[("我去公园", "我去"), ("你去公园", "你去公"), ("我去公园玩", "我去公园")])
     session = srv.StreamingSession(model, None, "")
-    session.feed(_pcm(5120))
-    assert session.process_ready()[0][0] == "我去"
-    session.feed(_pcm(2560))
-    with pytest.raises(RuntimeError, match="fixed transcript revised"):
-        session.process_ready()
+    session.feed(_pcm(5120 + 2 * 2560))
+    assert [d for d, _ in session.process_ready()] == ["我去", "", "公园"]
+    assert session.last_fixed == "我去公园"
 
 
-def test_revised_final_prefix_fails_instead_of_corrupting_transcript(srv):
+def test_revised_final_prefix_keeps_tail_after_common_prefix(srv):
     class Model(RecordingModel):
         def finish_streaming_transcribe(self, state, max_new_tokens):
-            state.text = "你去公园。"
+            state.text = "我们去公园。"
 
     model = Model(replies=[("我去公园", "我去")])
     session = srv.StreamingSession(model, None, "")
     session.feed(_pcm(5120))
     assert session.process_ready()[0][0] == "我去"
-    with pytest.raises(RuntimeError, match="final transcript revised"):
-        session.finish()
+    assert session.finish()[0] == "们去公园。"
 
 
 def test_final_tail_is_decoded_as_an_actual_short_chunk(srv):

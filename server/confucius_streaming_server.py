@@ -332,6 +332,29 @@ class StreamingSession:
             self.max_new_tokens *= 2
         self.max_new_tokens = max(self.minimum_new_tokens, min(self.floor, self.max_new_tokens))
 
+    def _pin_emitted_prefix(self) -> None:
+        """Bound this step's token rollback so the prompt keeps all emitted text.
+
+        Re-tokenisation can merge an emitted character into the rolled-back
+        tail (“然后跟他” → “然后”+“们”), which drops emitted speech from the
+        prompt and lets the model regenerate it differently.
+        """
+        tokenizer = getattr(getattr(self.model, "processor", None), "tokenizer", None)
+        raw = getattr(self.state, "_raw_decoded", None)
+        if tokenizer is None or not isinstance(raw, str):
+            return
+        self.state.unfixed_token_num = UNFIX_TOKEN_NUM
+        raw = raw.split("|")[0]
+        meta, tag, _ = raw.partition("<asr_text>")
+        anchor = meta + tag + self.last_fixed
+        if not self.last_fixed or not raw.startswith(anchor):
+            return
+        ids = tokenizer.encode(raw)
+        rollback = UNFIX_TOKEN_NUM
+        while rollback > 0 and not tokenizer.decode(ids[:max(0, len(ids) - rollback)]).startswith(anchor):
+            rollback -= 1
+        self.state.unfixed_token_num = rollback
+
     def process_ready(self) -> list[tuple[str, float]]:
         """Decode every full chunk in the buffer; returns (delta, cost_ms)."""
         import time
@@ -348,6 +371,7 @@ class StreamingSession:
                 self.state.chunk_size_sec = self.step / SAMPLE_RATE
                 self.state.chunk_size_samples = self.step
             start = time.perf_counter()
+            self._pin_emitted_prefix()
             text, fixed = self.model.streaming_transcribe(seg, self.state, int(self.max_new_tokens))
             cost_ms = (time.perf_counter() - start) * 1000
             text = (text or "").split("|")[0]
@@ -358,13 +382,11 @@ class StreamingSession:
             if not text.startswith(fixed):
                 fixed = ""
             delta = ""
-            if len(fixed) > len(self.last_fixed):
-                if not fixed.startswith(self.last_fixed):
-                    raise RuntimeError("fixed transcript revised an emitted prefix")
+            # A revised emitted prefix emits nothing until the model agrees
+            # again; emitted text cannot be retracted, so never abort for it.
+            if len(fixed) > len(self.last_fixed) and fixed.startswith(self.last_fixed):
                 delta = fixed[len(self.last_fixed):]
                 self.last_fixed = fixed
-            elif fixed and not self.last_fixed.startswith(fixed):
-                raise RuntimeError("fixed transcript revised an emitted prefix")
             self._adapt(text)
             out.append((delta, round(cost_ms, 1)))
         return out
@@ -392,6 +414,7 @@ class StreamingSession:
                 while rollback < len(ids) and "\ufffd" in tokenizer.decode(ids[:-rollback]):
                     rollback += 1
                 budget = max(budget, rollback + 2)
+            self._pin_emitted_prefix()
             self.model.streaming_transcribe(seg, self.state, int(budget))
         self.model.finish_streaming_transcribe(self.state, self.first_max_new_tokens)
         cost_ms = (time.perf_counter() - start) * 1000
@@ -401,11 +424,11 @@ class StreamingSession:
                 and "<asr_text>" not in raw):
             raise RuntimeError("incomplete automatic-language transcript at end of stream")
         final = (self.state.text or "").split("|")[0]
-        if not final.startswith(self.last_fixed):
-            raise RuntimeError("final transcript revised an emitted prefix")
-        delta = ""
-        if len(final) > len(self.last_fixed):
-            delta = final[len(self.last_fixed):]
+        # Continue after the last character both versions agree on, so the
+        # tail of speech is kept even if a few emitted characters differ.
+        common = len(os.path.commonprefix([final, self.last_fixed]))
+        delta = final[common:] if len(final) > common else ""
+        if delta:
             self.last_fixed = final
         return delta, round(cost_ms, 1)
 
