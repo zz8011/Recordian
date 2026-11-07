@@ -1350,7 +1350,7 @@ def test_ptt_handlers_fall_back_to_raw_text_when_refiner_fails(monkeypatch) -> N
         provider_name = "http-cloud"
 
         def transcribe_file(self, audio_path: Path, hotwords: list[str]) -> SimpleNamespace:  # noqa: ANN001
-            return SimpleNamespace(text="你好")
+            return SimpleNamespace(text="你好，请帮我把明天下午三点和产品团队的会议提醒设置好，并且把上周的会议纪要一起发给我确认一下")
 
     class _FakeCommitter:
         backend_name = "stdout"
@@ -1440,7 +1440,7 @@ def test_ptt_handlers_fall_back_to_raw_text_when_refiner_fails(monkeypatch) -> N
 
     result_events = [event for event in events if event.get("event") == "result"]
     assert result_events
-    assert result_events[-1]["result"]["text"] == "你好"
+    assert result_events[-1]["result"]["text"] == "你好，请帮我把明天下午三点和产品团队的会议提醒设置好，并且把上周的会议纪要一起发给我确认一下"
     assert any(
         "text_refine_failed" in str(event.get("message", ""))
         for event in events

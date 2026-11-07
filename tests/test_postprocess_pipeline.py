@@ -68,13 +68,13 @@ def test_run_postprocess_pipeline_runs_asr_refine_commit_and_lexicon(tmp_path: P
 
         def transcribe_file(self, audio_path: Path, hotwords: list[str]):  # noqa: ANN001
             assert hotwords == ["Recordian", "Docker"]
-            return SimpleNamespace(text="DockerDocker", detected_language="en")
+            return SimpleNamespace(text="嗯DockerDocker", detected_language="en")
 
     class _Refiner:
         prompt_template = "请整理文本：{text}"
 
         def refine(self, text: str) -> str:
-            assert text == "Docker"
+            assert text == "嗯Docker"
             return "整理后的 Docker"
 
     class _Committer:
@@ -119,7 +119,7 @@ def test_run_postprocess_pipeline_runs_asr_refine_commit_and_lexicon(tmp_path: P
         committer=_Committer(),
         auto_lexicon=auto_lexicon,
         refine_postprocess_rule="none",
-        normalize_final_text=lambda text: "Docker" if text == "DockerDocker" else str(text).strip(),
+        normalize_final_text=lambda text: "嗯Docker" if text == "嗯DockerDocker" else str(text).strip(),
         resolve_hotwords=lambda: ["Recordian", "Docker"],
         on_state=state_events.append,
         on_result=result_events.append,
@@ -159,14 +159,14 @@ def test_run_postprocess_pipeline_captures_refine_samples_jsonl(tmp_path: Path, 
 
     class _Provider:
         def transcribe_file(self, audio_path: Path, hotwords: list[str]):  # noqa: ANN001
-            return SimpleNamespace(text="原始 识别 文本")
+            return SimpleNamespace(text="嗯，原始 识别 文本")
 
     class _Refiner:
         prompt_template = "请整理文本：{text}"
         model_name = "mock-refiner"
 
         def refine(self, text: str) -> str:
-            assert text == "原始 识别 文本"
+            assert text == "嗯，原始 识别 文本"
             return "整理后的文本"
 
     class _Committer:
@@ -224,7 +224,7 @@ def test_run_postprocess_pipeline_captures_refine_samples_jsonl(tmp_path: Path, 
     lines = capture_path.read_text(encoding="utf-8").strip().splitlines()
     assert len(lines) == 1
     payload = json.loads(lines[0])
-    assert payload["raw_asr_text"] == "原始 识别 文本"
+    assert payload["raw_asr_text"] == "嗯，原始 识别 文本"
     assert payload["final_text"] == "整理后的文本"
     assert payload["refine_applied"] is True
     assert payload["refine_changed"] is True
@@ -498,7 +498,7 @@ def test_run_postprocess_pipeline_skips_local_refine_recommit_when_realtime_comm
         on_state=state_events.append,
         on_result=result_events.append,
         on_error=error_events.append,
-        prefetched_asr_text="实时预稿",
+        prefetched_asr_text="嗯，实时预稿",
         prefetched_transcribe_latency_ms=123.0,
         prefetched_commit_info={"backend": "xdotool", "committed": True, "detail": "realtime_chunks:4"},
     )
@@ -862,7 +862,7 @@ def test_run_postprocess_pipeline_streams_refine_commit_when_enabled(tmp_path: P
 
     class _Provider:
         def transcribe_file(self, audio_path: Path, hotwords: list[str]):  # noqa: ANN001
-            return SimpleNamespace(text="原始文本")
+            return SimpleNamespace(text="嗯，原始文本")
 
     class _Refiner:
         prompt_template = "请整理文本：{text}"
@@ -937,7 +937,7 @@ def test_run_postprocess_pipeline_streams_refine_commit_applies_postprocess_rule
 
     class _Provider:
         def transcribe_file(self, audio_path: Path, hotwords: list[str]):  # noqa: ANN001
-            return SimpleNamespace(text="原始文本")
+            return SimpleNamespace(text="嗯，原始文本")
 
     class _Refiner:
         prompt_template = "请整理文本：{text}"
@@ -1436,3 +1436,112 @@ def test_run_postprocess_pipeline_skips_llm_and_commits_cleaned_long_text(tmp_pa
     assert "按这个执行" in payload["text"]
     assert len(payload["text"]) < 8 * len("这个这个方案没问题，然后然后我们按这个执行，确保确保流程顺畅。")
     assert any("refine_skip_long_text" in str(event.get("message", "")) for event in state_events)
+
+
+# ---------------------------------------------------------------------------
+# Refine triage: short + clean skips the LLM; anything else refines
+# ---------------------------------------------------------------------------
+
+
+def _triage_args() -> argparse.Namespace:
+    return argparse.Namespace(
+        refine_max_len_llm=0,
+        enable_streaming_refine=False,
+        debug_diagnostics=False,
+        config_path="",
+    )
+
+
+class _RaisingRefiner:
+    prompt_template = None
+
+    def refine(self, text: str) -> str:  # noqa: ANN001
+        raise AssertionError("triaged text should never reach the LLM refiner")
+
+
+def test_count_dictation_fillers_only_counts_clear_patterns() -> None:
+    from recordian.postprocess_pipeline import _count_dictation_fillers
+
+    assert _count_dictation_fillers("把这个文件打开") == 0  # demonstrative, not filler
+    assert _count_dictation_fillers("今天天气不错啊") == 0  # trailing particle, conservative
+    assert _count_dictation_fillers("我们就是明天出发") == 0  # 就是 as emphasis, no pause
+    assert _count_dictation_fillers("嗯，把这个文件打开") >= 1  # standalone hesitation
+    assert _count_dictation_fillers("呃我想一下") >= 1  # clause-initial hesitation
+    assert _count_dictation_fillers("这个这个方案要测试") >= 1  # word stutter
+    assert _count_dictation_fillers("那个，我想想") >= 1  # filler word before a pause
+    assert _count_dictation_fillers("嗯嗯，好的") >= 1  # stuttered filler sound
+
+
+def test_run_refinement_triages_short_clean_text() -> None:
+    from recordian.postprocess_pipeline import _run_refinement
+
+    state_events: list[dict[str, object]] = []
+    refiner = _RaisingRefiner()
+    text, latency_ms = _run_refinement(
+        args=_triage_args(),
+        refiner=refiner,
+        text="把配置文件打开看一下",
+        effective_hotwords=[],
+        refine_postprocess_rule="none",
+        on_state=state_events.append,
+    )
+    assert text == "把配置文件打开看一下"
+    assert latency_ms == 0.0
+    assert refiner.last_refine_skipped is True
+    assert any(event.get("event") == "refine_triaged_skip" for event in state_events)
+
+
+def test_run_refinement_still_refines_short_text_with_fillers() -> None:
+    from recordian.postprocess_pipeline import _run_refinement
+
+    calls: list[str] = []
+
+    class _Refiner:
+        prompt_template = None
+
+        def refine(self, text: str) -> str:  # noqa: ANN001
+            calls.append(str(text))
+            return "把文件打开"
+
+    state_events: list[dict[str, object]] = []
+    refiner = _Refiner()
+    text, _ = _run_refinement(
+        args=_triage_args(),
+        refiner=refiner,
+        text="嗯，把那个文件打开",
+        effective_hotwords=[],
+        refine_postprocess_rule="none",
+        on_state=state_events.append,
+    )
+    assert calls == ["嗯，把那个文件打开"]
+    assert text == "把文件打开"
+    assert refiner.last_refine_skipped is False
+    assert not any(event.get("event") == "refine_triaged_skip" for event in state_events)
+
+
+def test_run_refinement_still_refines_long_clean_text() -> None:
+    from recordian.postprocess_pipeline import _run_refinement
+
+    calls: list[str] = []
+
+    class _Refiner:
+        prompt_template = None
+
+        def refine(self, text: str) -> str:  # noqa: ANN001
+            calls.append(str(text))
+            return "整理后的长文"
+
+    long_clean = "请把昨天会议里确认的三个接口参数和负责人名单一起整理成一份文档发给我确认后再同步给项目组全体成员"
+    assert len(long_clean) >= 40
+    refiner = _Refiner()
+    text, _ = _run_refinement(
+        args=_triage_args(),
+        refiner=refiner,
+        text=long_clean,
+        effective_hotwords=[],
+        refine_postprocess_rule="none",
+        on_state=lambda event: None,
+    )
+    assert calls == [long_clean]
+    assert text == "整理后的长文"
+    assert refiner.last_refine_skipped is False

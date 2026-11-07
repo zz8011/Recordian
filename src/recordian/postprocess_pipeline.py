@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -592,6 +593,55 @@ def _should_skip_llm_refine(args: argparse.Namespace, text: str) -> bool:
     return len(str(text or "")) > threshold
 
 
+# --- Refine triage -------------------------------------------------------
+# The reachable refine endpoints cost seconds per utterance, which is
+# worth paying only when the LLM can actually improve the text. A short,
+# clean utterance (no dictation fillers) gains nothing from the rewrite
+# and keeps only its latency and rewrite risk, so triage skips the LLM
+# call and keeps the deterministic-layer output. The bias is deliberate:
+# when a pattern is ambiguous, it does NOT count as a filler, the text
+# is refined, and triage stays out of the way.
+_REFINE_TRIAGE_MAX_CHARS = 40
+
+_FILLER_STUTTER_RE = re.compile(r"([嗯呃诶哦啊])\1+")
+_FILLER_STANDALONE_RE = re.compile(r"(?:^|(?<=[\s，。！？；、…]))\s*[嗯呃诶哦啊]\s*(?=$|[\s，。！？；、…])")
+_FILLER_CLAUSE_INITIAL_RE = re.compile(r"(?:^|(?<=[，。！？；…]))\s*[嗯呃诶](?=\S)")
+_FILLER_WORD_STUTTER_RE = re.compile(r"(这个|那个|就是)\1")
+_FILLER_WORD_PAUSE_RE = re.compile(r"(?:那个|这个|就是)(?=[，、…])")
+
+
+def _count_dictation_fillers(text: str) -> int:
+    """Count only CLEAR dictation-filler patterns in ``text``.
+
+    Counted: standalone/clause-boundary filler sounds (嗯/呃/诶/哦/啊),
+    hesitation sounds opening a clause, stuttered filler sounds
+    (嗯嗯), stuttered filler words (这个这个), and filler words
+    immediately before a pause mark (那个，就是…). Not counted:
+    sentence-final particles, 啊/哦 inside real words or exclamations,
+    and 这个/那个/就是 used as genuine demonstratives/pronouns — when
+    in doubt the pattern is not a filler and the text gets refined.
+    """
+    value = str(text or "")
+    if not value.strip():
+        return 0
+    count = len(_FILLER_STUTTER_RE.findall(value))
+    # Remove stutter runs before the other passes so 嗯嗯 counts once.
+    rest = _FILLER_STUTTER_RE.sub("", value)
+    count += len(_FILLER_STANDALONE_RE.findall(rest))
+    count += len(_FILLER_CLAUSE_INITIAL_RE.findall(rest))
+    count += len(_FILLER_WORD_STUTTER_RE.findall(rest))
+    count += len(_FILLER_WORD_PAUSE_RE.findall(rest))
+    return count
+
+
+def _refine_triage_skips(text: str) -> bool:
+    """True when the utterance is short AND filler-free (LLM adds nothing)."""
+    value = str(text or "").strip()
+    if not value or len(value) >= _REFINE_TRIAGE_MAX_CHARS:
+        return False
+    return _count_dictation_fillers(value) == 0
+
+
 def _sync_refiner_preset(args: argparse.Namespace, refiner: Any, on_state: EventCallback) -> None:
     if not hasattr(refiner, "update_preset"):
         return
@@ -628,6 +678,24 @@ def _run_refinement(
                     f"refine_skip_long_text: len={len(text)} max_len_llm={threshold}"
                     f" rule={refine_postprocess_rule or 'none'}"
                     " — 长文跳过 LLM 精炼，仅做确定性清洗"
+                ),
+            }
+        )
+        cleaned = _apply_refine_postprocess(text, rule=refine_postprocess_rule)
+        return cleaned, 0.0
+
+    if _refine_triage_skips(text):
+        # Short and clean: the deterministic layer is the whole result.
+        # Emit a dedicated event so the trial can measure the trigger
+        # rate from logs / refine samples.
+        refiner.last_refine_skipped = True
+        on_state(
+            {
+                "event": "refine_triaged_skip",
+                "text_chars": len(text),
+                "message": (
+                    f"refine_triaged_skip: len={len(text)}"
+                    " — 短句无填充词，跳过 LLM 精炼，仅做确定性清洗"
                 ),
             }
         )
@@ -1482,6 +1550,7 @@ def run_postprocess_pipeline(context: PostprocessPipelineContext) -> None:
                 and context.prefetched_commit_info is None
                 and hasattr(context.refiner, "refine_stream")
                 and not _should_skip_llm_refine(context.args, text)
+                and not _refine_triage_skips(text)
             ):
                 try:
                     text, refine_latency_ms, commit_info = _run_refinement_streaming_commit(

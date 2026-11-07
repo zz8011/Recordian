@@ -461,7 +461,7 @@ def test_qwen_truncation_keeps_complete_asr_in_pipeline(monkeypatch, stream):
 
     refiner = qwen_with_chunks(monkeypatch, ["仅有前半句"], tokens=[10, 11, 12])
     events = []
-    original = "完整原文，后半句也必须保留。"
+    original = "嗯，完整原文，后半句也必须保留。"
     result, _ = _run_refinement(
         args=argparse.Namespace(
             refine_max_len_llm=800, enable_streaming_refine=stream,

@@ -766,7 +766,7 @@ def test_pipeline_refine_differs_from_partial_and_commits_once(monkeypatch) -> N
         provider=_RealtimeProvider(_ScriptedSession([], finish_text="x")),
         committer=FcitxCommitter(),
         args=_pipeline_args(),
-        prefetched_asr_text="实时部分文本",
+        prefetched_asr_text="嗯，实时部分文本",
         prefetched_commit_info={
             "backend": "fcitx",
             "committed": False,
@@ -873,7 +873,7 @@ def test_pipeline_labels_auto_lexicon_source(monkeypatch) -> None:
         provider=_RealtimeProvider(_ScriptedSession([], finish_text="x")),
         committer=FcitxCommitter(),
         args=_pipeline_args(),
-        prefetched_asr_text="原始转写",
+        prefetched_asr_text="嗯，原始转写",
         prefetched_commit_info=None,
         auto_lexicon=lexicon2,
         refiner=_UpperRefiner(),
@@ -1177,7 +1177,7 @@ def test_refine_session_commit_through_same_token_once(monkeypatch) -> None:
     """Refine happy path: the worker-carried session commits exactly once,
     through the SAME token (same input context), after refinement."""
     bus = FakeFcitxBus()
-    provider = _RealtimeProvider(_ScriptedSession(["草稿"], finish_text="最终草稿"))
+    provider = _RealtimeProvider(_ScriptedSession(["草稿"], finish_text="嗯，最终草稿"))
     worker, _events = _run_worker(monkeypatch, bus, provider, refine_enabled=True)
     carried = worker.composition_session
     assert carried is not None and carried.active
@@ -1227,7 +1227,7 @@ def test_refine_session_focus_lost_during_refine_rejects_commit(monkeypatch) -> 
     the refiner runs. The carried session goes stale; the commit through the
     original token FAILS and no fallback may write into the new focus."""
     bus = FakeFcitxBus()
-    provider = _RealtimeProvider(_ScriptedSession(["草稿"], finish_text="最终草稿"))
+    provider = _RealtimeProvider(_ScriptedSession(["草稿"], finish_text="嗯，最终草稿"))
     worker, _events = _run_worker(monkeypatch, bus, provider, refine_enabled=True)
     carried = worker.composition_session
     assert carried is not None and carried.active
@@ -1306,7 +1306,7 @@ def test_pipeline_refine_stream_begin_refused_zero_commits(monkeypatch) -> None:
     class _OneshotProvider(_FileStreamProvider):
         def transcribe_file(self, audio_path: Path, hotwords: list[str]):
             self.transcribe_file_calls += 1
-            return SimpleNamespace(text="原始转写", detected_language="zh")
+            return SimpleNamespace(text="嗯，原始转写", detected_language="zh")
 
     context = _pipeline_context(
         provider=_OneshotProvider(_ScriptedSession([], finish_text="x")),

@@ -148,12 +148,12 @@ def test_failed_bound_refine_stream_keeps_original_without_fallback(monkeypatch)
     results, errors = [], []
     context = _pipeline_context(
         provider=_RealtimeProvider(_ScriptedSession([])), committer=linux_commit.FcitxCommitter(),
-        args=_pipeline_args(), prefetched_asr_text="第一项。第二项。第三项。",
+        args=_pipeline_args(), prefetched_asr_text="嗯，第一项。第二项。第三项。",
         refiner=InterruptedRefiner(), result_events=results, error_events=errors,
     )
     pipeline.run_postprocess_pipeline(context)
     assert not errors
-    assert results[0]["result"]["text"] == "第一项。第二项。第三项。"
+    assert results[0]["result"]["text"] == "嗯，第一项。第二项。第三项。"
     assert not results[0]["result"]["commit"]["committed"]
     assert bus.applied_commits == []
     assert not any(method == "CommitText" for method, args in bus.calls)
@@ -307,7 +307,7 @@ def test_empty_wav_rms_retains_inconclusive_result(tmp_path):
 def test_refinement_logs_counts_while_ui_and_opt_in_capture_keep_text(
     monkeypatch, tmp_path, route, capture_samples,
 ):
-    original = "合成审计原文 synthetic_private_ASR_7f4e。"
+    original = "合成审计原文 synthetic_private_ASR_7f4e 号样本记录。"
     refined = "合成审计精炼 synthetic_private_refined_4a9b。"
     bus = FakeFcitxBus()
     _install_fake_bus(monkeypatch, bus)
