@@ -8,9 +8,15 @@ accuracy rate. ``trim_new_piece`` does not delete characters or use the network.
 
 from __future__ import annotations
 
+import logging
 import math
+import time
 from collections.abc import Mapping
 from typing import Any
+
+from .judge_observability import emit_judge_event
+
+logger = logging.getLogger(__name__)
 
 _PUNCT = set("，。！？；：、,.!?;:")
 # Fixed conservative gate. A near tie such as 0.51/0.49 stays on the original.
@@ -90,6 +96,11 @@ def request_choice(
 ) -> str | None:
     """POST one choice. Network and payload failures return None."""
     if session is None or not endpoint or timeout_s <= 0 or len(options) < 2:
+        emit_judge_event(
+            logger, site="semif_request", outcome="skipped_guard",
+            timeout_budget_ms=timeout_s * 1000, text_len=len(state),
+            correction_applied=False,
+        )
         return None
     requests = require_requests()
     payload = {
@@ -102,14 +113,45 @@ def request_choice(
             }
         },
     }
+    started = time.perf_counter()
+
+    def _fail(outcome: str) -> None:
+        emit_judge_event(
+            logger, site="semif_request", outcome=outcome,
+            latency_ms=(time.perf_counter() - started) * 1000,
+            timeout_budget_ms=timeout_s * 1000, text_len=len(state),
+            correction_applied=False,
+        )
+
     try:
         response = session.post(endpoint, json=payload, timeout=timeout_s)
         response.raise_for_status()
         body = response.json()
         picked = body["answers"]["pick"]
-    except (requests.RequestException, OSError, ValueError, KeyError, TypeError):
+    except requests.Timeout:
+        _fail("timeout")
         return None
-    return interpret_choice(options, picked)
+    except requests.RequestException:
+        _fail("transport_error")
+        return None
+    except OSError:
+        _fail("transport_error")
+        return None
+    except (ValueError, KeyError, TypeError):
+        _fail("payload_error")
+        return None
+    except Exception:
+        _fail("exception")
+        raise
+    result = interpret_choice(options, picked)
+    emit_judge_event(
+        logger, site="semif_request",
+        outcome="answered" if result is not None else "gate_rejected",
+        latency_ms=(time.perf_counter() - started) * 1000,
+        timeout_budget_ms=timeout_s * 1000, text_len=len(state),
+        correction_applied=result is not None and result != "keep",
+    )
+    return result
 
 
 def request_choices(
@@ -127,23 +169,56 @@ def request_choices(
     Network and payload failures return an empty dict.
     """
     if session is None or not endpoint or timeout_s <= 0 or not questions:
+        emit_judge_event(
+            logger, site="semif_request_batch", outcome="skipped_guard",
+            timeout_budget_ms=timeout_s * 1000, text_len=len(state),
+            correction_applied=False, extra=f"questions={len(questions)}",
+        )
         return {}
     requests = require_requests()
     payload = {"state": state, "questions": questions}
+    started = time.perf_counter()
+
+    def _fail(outcome: str) -> dict[str, str | None]:
+        emit_judge_event(
+            logger, site="semif_request_batch", outcome=outcome,
+            latency_ms=(time.perf_counter() - started) * 1000,
+            timeout_budget_ms=timeout_s * 1000, text_len=len(state),
+            correction_applied=False, extra=f"questions={len(questions)}",
+        )
+        return {}
+
     try:
         response = session.post(endpoint, json=payload, timeout=timeout_s)
         response.raise_for_status()
         answers = response.json()["answers"]
-    except (requests.RequestException, OSError, ValueError, KeyError, TypeError):
-        return {}
+    except requests.Timeout:
+        return _fail("timeout")
+    except requests.RequestException:
+        return _fail("transport_error")
+    except OSError:
+        return _fail("transport_error")
+    except (ValueError, KeyError, TypeError):
+        return _fail("payload_error")
+    except Exception:
+        _fail("exception")
+        raise
     if not isinstance(answers, dict):
-        return {}
+        return _fail("payload_error")
     results: dict[str, str | None] = {}
     for name, question in questions.items():
         criteria = question.get("criteria")
         if not isinstance(criteria, dict):
             continue
         results[name] = interpret_choice(criteria, answers.get(name))
+    emit_judge_event(
+        logger, site="semif_request_batch",
+        outcome="answered" if any(v is not None for v in results.values()) else "gate_rejected",
+        latency_ms=(time.perf_counter() - started) * 1000,
+        timeout_budget_ms=timeout_s * 1000, text_len=len(state),
+        correction_applied=any(v is not None and v != "keep" for v in results.values()),
+        extra=f"questions={len(questions)}",
+    )
     return results
 
 
@@ -173,6 +248,11 @@ class SemIfClient:
         instructions: str | None = None,
     ) -> str | None:
         if self._closed or not self.enabled or not self.endpoint:
+            emit_judge_event(
+                logger, site="semif_client", outcome="skipped_disabled",
+                timeout_budget_ms=self.timeout_s * 1000, text_len=len(state),
+                correction_applied=False,
+            )
             return None
         if self._session is None:
             requests = require_requests()

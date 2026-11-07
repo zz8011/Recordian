@@ -9,13 +9,18 @@ returns no accepted choices so the caller keeps the original text.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import shutil
 import subprocess
+import time
 from collections.abc import Callable, Sequence
 from typing import Any
 
+from .judge_observability import emit_judge_event
 from .semif_judge import interpret_choice
+
+logger = logging.getLogger(__name__)
 
 _MAX_STDOUT = 1_000_000
 _SYSTEMONE_PATH = "/v1/systemone"
@@ -40,10 +45,22 @@ def request_jev_choices(
     以 ``SEMIF_BASE_URL`` 覆盖 plumb.json，留空则沿用 plumb.json。
     环境变量只改子进程。
     """
+    started = time.perf_counter()
+
+    def _emit(outcome: str, applied: bool = False) -> None:
+        emit_judge_event(
+            logger, site="jev_request", outcome=outcome,
+            latency_ms=(time.perf_counter() - started) * 1000,
+            timeout_budget_ms=timeout_s * 1000, text_len=len(state),
+            correction_applied=applied, extra=f"questions={len(questions)}",
+        )
+
     if timeout_s <= 0 or not questions:
+        _emit("skipped_guard")
         return {}
     command = _command(argv, timeout_s)
     if not command:
+        _emit("skipped_guard")
         return {}
     payload = json.dumps(
         {"state": state, "questions": questions},
@@ -68,6 +85,7 @@ def request_jev_choices(
             shell=False,
         )
     except OSError:
+        _emit("transport_error")
         return {}
     if on_process is not None:
         on_process(proc)
@@ -75,9 +93,11 @@ def request_jev_choices(
         stdout, stderr = proc.communicate(payload, timeout=timeout_s)
     except subprocess.TimeoutExpired:
         _kill(proc)
+        _emit("timeout")
         return {}
     except OSError:
         _kill(proc)
+        _emit("transport_error")
         return {}
     if proc.returncode != 0 or not stdout or len(stdout) > _MAX_STDOUT:
         # Log stderr on failure so jev crashes, config errors, model load
@@ -89,15 +109,19 @@ def request_jev_choices(
                 proc.returncode,
                 stderr.decode("utf-8", errors="replace")[:500],
             )
+        _emit("process_error")
         return {}
     try:
         body = json.loads(stdout.decode("utf-8"))
     except (UnicodeError, json.JSONDecodeError):
+        _emit("payload_error")
         return {}
     if not isinstance(body, dict) or "error" in body:
+        _emit("payload_error")
         return {}
     answers = body.get("answers")
     if not isinstance(answers, dict):
+        _emit("payload_error")
         return {}
     results: dict[str, str | None] = {}
     for name, question in questions.items():
@@ -109,6 +133,10 @@ def request_jev_choices(
             criteria, picked if isinstance(picked, dict) else None,
             min_top=min_top, min_margin=min_margin,
         )
+    _emit(
+        "answered" if any(v is not None for v in results.values()) else "gate_rejected",
+        applied=any(v is not None and v != "keep" for v in results.values()),
+    )
     return results
 
 
