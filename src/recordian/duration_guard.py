@@ -38,11 +38,24 @@ CONFUCIUS_RECORDING_LIMIT_S = 25.0
 
 # Continuous worker rotation (audio samples, not a second mic and not a
 # raised server budget). Silence window is 400 ms, inside the 320–480 ms
-# band. Hard cap stays 6 s under the 30 s server sample budget.
-CONTINUOUS_SEGMENT_MIN_S = 15.0
+# band. Hard cap stays 6 s under the 30 s server sample budget; the soft
+# cut only rotates EARLIER than before (8 s instead of 15 s on a silence
+# run), so the per-session sample budget is respected with more margin,
+# not less. Shorter segments also keep each ASR session in the range
+# where the small streaming model is most accurate.
+CONTINUOUS_SEGMENT_MIN_S = 8.0
 CONTINUOUS_SEGMENT_MAX_S = 24.0
 CONTINUOUS_SILENCE_S = 0.40
-CONTINUOUS_SILENCE_RMS = 0.008
+# Silence detection is noise-adaptive (see AdaptiveSilenceMeter): the
+# threshold follows the turn's own noise floor instead of one absolute
+# RMS value, which a quiet speaker in a quiet room could never cross
+# downward and steady room noise could never cross upward. The factor
+# and floor mirror the wake monitor's adaptive precedent
+# (wake_session_monitor: rms >= max(0.0025, floor * 2.2)).
+CONTINUOUS_SILENCE_FACTOR = 2.2
+CONTINUOUS_SILENCE_ABS_MIN = 0.0025
+CONTINUOUS_SILENCE_ABS_MAX = 0.03
+CONTINUOUS_SILENCE_FLOOR_EMA = 0.15
 CONTINUOUS_HELD_TAIL_CHARS = 64
 CONTINUOUS_CONTEXT_CHARS = 256
 CONTINUOUS_PREEDIT_CHARS = 512
@@ -55,6 +68,60 @@ CONTINUOUS_IME_REFRESH_S = 30.0
 MONITOR_BACKLOG_S = 8.0
 
 _CONFUCIUS_PROVIDER_NAME = "confucius-asr"
+
+
+class AdaptiveSilenceMeter:
+    """Noise-adaptive silence classification for continuous segmentation.
+
+    Tracks an EMA noise floor from the pieces classified as silence and
+    classifies a piece as silence when its RMS falls below
+    ``clamp(floor * FACTOR, ABS_MIN, ABS_MAX)``. The floor only learns
+    from silence-classified pieces, so speech can never inflate it; a
+    turn that starts in steady noise converges to that noise level and
+    can still cut on pauses, while a quiet speaker in a quiet room gets
+    the ABS_MIN threshold instead of an unreachable absolute value.
+    One meter lives for one dictation turn (the room does not change
+    mid-turn); it is deliberately not shared across turns.
+    """
+
+    def __init__(
+        self,
+        *,
+        factor: float = CONTINUOUS_SILENCE_FACTOR,
+        abs_min: float = CONTINUOUS_SILENCE_ABS_MIN,
+        abs_max: float = CONTINUOUS_SILENCE_ABS_MAX,
+        ema_alpha: float = CONTINUOUS_SILENCE_FLOOR_EMA,
+    ) -> None:
+        self._factor = max(1.0, float(factor))
+        self._abs_min = max(0.0, float(abs_min))
+        self._abs_max = max(self._abs_min, float(abs_max))
+        self._ema_alpha = min(1.0, max(0.0, float(ema_alpha)))
+        self._floor: float | None = None
+
+    @property
+    def noise_floor(self) -> float | None:
+        return self._floor
+
+    @property
+    def threshold(self) -> float:
+        if self._floor is None:
+            return self._abs_min
+        return min(self._abs_max, max(self._abs_min, self._floor * self._factor))
+
+    def observe(self, rms: float) -> bool:
+        """Feed one piece's RMS; return True when the piece is silence."""
+        value = max(0.0, float(rms))
+        if self._floor is None:
+            # First piece seeds the floor; it is never classified silence
+            # on its own evidence (a turn starting mid-speech must not be
+            # mistaken for a pause).
+            self._floor = value
+            return False
+        is_silence = value < self.threshold
+        if is_silence:
+            alpha = self._ema_alpha
+            self._floor = (1.0 - alpha) * self._floor + alpha * value
+        return is_silence
 
 
 def recording_limit_s_for_provider(provider: object) -> float | None:

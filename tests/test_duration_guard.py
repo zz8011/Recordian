@@ -1148,3 +1148,63 @@ def test_keyboard_capture_stays_dictation_even_when_panel_selects_agent(monkeypa
     h.exit_daemon()
     assert selected and not hub.tasks and hub.capture is None
     hub.close()
+
+
+# ---------------------------------------------------------------------------
+# Adaptive silence meter (continuous segmentation)
+# ---------------------------------------------------------------------------
+
+from recordian.duration_guard import AdaptiveSilenceMeter  # noqa: E402
+
+
+def test_segment_soft_cut_window_is_eight_seconds() -> None:
+    from recordian import duration_guard as guard
+
+    assert guard.CONTINUOUS_SEGMENT_MIN_S == 8.0
+    # Hard cap unchanged: still 6 s under the 30 s server budget.
+    assert guard.CONTINUOUS_SEGMENT_MAX_S == 24.0
+    assert guard.CONTINUOUS_SEGMENT_MAX_S < guard.CONFUCIUS_SERVER_SESSION_BUDGET_S
+
+
+def test_adaptive_meter_quiet_room_quiet_speaker() -> None:
+    """Quiet room: floor hugs the noise, soft speech is not silence,
+    pauses are — the old fixed 0.008 threshold misjudged both."""
+    meter = AdaptiveSilenceMeter()
+    assert meter.observe(0.001) is False  # seed piece
+    for _ in range(5):
+        assert meter.observe(0.001) is True  # room noise settles the floor
+    assert meter.threshold == pytest.approx(0.0025)  # abs-min clamp
+    assert meter.observe(0.006) is False  # quiet speech stays speech
+    assert meter.observe(0.001) is True  # a pause is a pause
+
+
+def test_adaptive_meter_steady_noise_still_cuts() -> None:
+    """Steady room noise at RMS 0.01 sat ABOVE the old fixed threshold
+    forever, so no soft cut ever fired. The adaptive floor converges to
+    the noise and pauses classify as silence again."""
+    meter = AdaptiveSilenceMeter()
+    assert meter.observe(0.01) is False  # seed
+    results = [meter.observe(0.01) for _ in range(6)]
+    assert results[-1] is True  # noise itself becomes the silence baseline
+    assert meter.noise_floor == pytest.approx(0.01, abs=0.002)
+    assert meter.observe(0.05) is False  # speech above the noise
+    assert meter.observe(0.01) is True  # pause at noise level cuts
+
+
+def test_adaptive_meter_threshold_capped_in_loud_room() -> None:
+    meter = AdaptiveSilenceMeter()
+    meter.observe(0.05)  # seed at loud floor
+    for _ in range(4):
+        meter.observe(0.05)
+    assert meter.threshold <= 0.03  # ABS_MAX cap
+
+
+def test_adaptive_meter_speech_does_not_inflate_floor() -> None:
+    meter = AdaptiveSilenceMeter()
+    meter.observe(0.001)
+    for _ in range(4):
+        meter.observe(0.001)
+    floor_before = meter.noise_floor
+    for _ in range(10):
+        assert meter.observe(0.08) is False  # loud speech
+    assert meter.noise_floor == floor_before

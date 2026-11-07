@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -10,10 +11,69 @@ from ..models import ASRResult
 from .asr_context import ASRContextComposer
 from .base import ASRProvider, ASRProviderCapabilities, _estimate_english_ratio
 
+logger = logging.getLogger(__name__)
+
 _STREAM_SAMPLE_RATE = 16000
 _STREAM_MIN_SAMPLES = int(_STREAM_SAMPLE_RATE * 0.45)
 _STREAM_PARTIAL_NEW_SAMPLES = int(_STREAM_SAMPLE_RATE * 0.7)
 _STREAM_PARTIAL_MAX_SAMPLES = int(_STREAM_SAMPLE_RATE * 24)
+
+_SILERO_VAD_SAMPLE_RATE = 16000
+_SILERO_VAD_WINDOW = 512
+_SILERO_VAD_PAD_S = 0.15
+
+
+def _resolve_silero_vad_model() -> Path | None:
+    """Locate the bundled Silero VAD model, or None when not provisioned.
+
+    The model file lives in the project ``models/`` directory next to the
+    KWS models (it is a downloaded asset, not source). Only the classic
+    silero_vad.onnx format is compatible with sherpa-onnx's SileroVad —
+    the v6 asset shipped by faster-whisper is rejected by the runtime —
+    so no other package's asset is borrowed here.
+    """
+    candidate = Path(__file__).resolve().parents[3] / "models" / "silero_vad.onnx"
+    return candidate if candidate.is_file() else None
+
+
+def _silero_speech_bounds(
+    samples: np.ndarray, sample_rate: int, model_path: Path
+) -> tuple[int, int] | None:
+    """Speech (start, end) sample bounds via sherpa-onnx Silero VAD.
+
+    Returns None when the runtime/model cannot run or no speech is
+    found, leaving the caller to fall back to the energy VAD. Only
+    16 kHz audio is supported (the Silero model's native rate).
+    """
+    if sample_rate != _SILERO_VAD_SAMPLE_RATE or samples.size == 0:
+        return None
+    try:
+        import sherpa_onnx
+    except ImportError:
+        return None
+    config = sherpa_onnx.VadModelConfig()
+    config.silero_vad.model = str(model_path)
+    config.silero_vad.threshold = 0.5
+    config.silero_vad.min_silence_duration = 0.25
+    config.sample_rate = _SILERO_VAD_SAMPLE_RATE
+    detector = sherpa_onnx.VoiceActivityDetector(config, buffer_size_in_seconds=60)
+    audio = np.asarray(samples, dtype=np.float32)
+    for offset in range(0, audio.size, _SILERO_VAD_WINDOW):
+        detector.accept_waveform(audio[offset : offset + _SILERO_VAD_WINDOW].tolist())
+    detector.flush()
+    start: int | None = None
+    end = 0
+    while not detector.empty():
+        segment = detector.front
+        seg_start = int(segment.start)
+        seg_end = seg_start + len(segment.samples)
+        start = seg_start if start is None else min(start, seg_start)
+        end = max(end, seg_end)
+        detector.pop()
+    if start is None:
+        return None
+    pad = int(_SILERO_VAD_PAD_S * sample_rate)
+    return max(0, start - pad), min(int(audio.size), end + pad)
 
 
 def _compose_qwen_context(base_context: str, hotwords: list[str], *, max_hotwords: int = 40) -> str:
@@ -95,52 +155,65 @@ class QwenASRProvider(ASRProvider):
             max_inference_batch_size=self.max_inference_batch_size,
         )
 
+    def _energy_speech_bounds(self, waveform, sample_rate: int) -> tuple[int, int] | None:  # noqa: ANN001
+        """Legacy energy VAD bounds (fallback): mean-energy threshold.
+
+        Kept as the fallback when the Silero model is not provisioned.
+        Its known limits: only the edges are trimmed and constant
+        background noise raises the mean until nothing qualifies.
+        """
+        import torch
+
+        frame_length = int(sample_rate * 0.02)  # 20ms
+        hop_length = int(sample_rate * 0.01)  # 10ms
+        energy = []
+        for i in range(0, waveform.shape[1] - frame_length, hop_length):
+            frame = waveform[:, i : i + frame_length]
+            energy.append(torch.sqrt(torch.mean(frame**2)).item())
+        if not energy:
+            return None
+        threshold = sum(energy) / len(energy) * 0.2
+        speech_frames = [i for i, e in enumerate(energy) if e > threshold]
+        if not speech_frames:
+            return None
+        start_frame = max(0, speech_frames[0] - 5)
+        end_frame = min(len(energy), speech_frames[-1] + 5)
+        start_sample = start_frame * hop_length
+        end_sample = min(waveform.shape[1], end_frame * hop_length + frame_length)
+        return start_sample, end_sample
+
     def _apply_vad(self, wav_path: Path) -> str:
-        """使用 VAD 移除静音部分，返回处理后的音频路径或原路径"""
+        """使用 VAD 移除首尾静音，返回处理后的音频路径或原路径。
+
+        Silero VAD (sherpa-onnx) runs first when its model file is
+        provisioned; the energy VAD remains as fallback. A VAD failure
+        never loses the utterance — the original file is returned — but
+        it is logged at debug level instead of being silently swallowed.
+        """
         try:
-            import torch
             import torchaudio
 
-            # 加载音频
             waveform, sample_rate = torchaudio.load(str(wav_path))
 
             # 如果音频太短（<0.5秒），直接返回
             if waveform.shape[1] < sample_rate * 0.5:
                 return str(wav_path)
 
-            # 简单的能量阈值 VAD
-            # 计算每帧的能量
-            frame_length = int(sample_rate * 0.02)  # 20ms
-            hop_length = int(sample_rate * 0.01)    # 10ms
-
-            # 计算 RMS 能量
-            energy = []
-            for i in range(0, waveform.shape[1] - frame_length, hop_length):
-                frame = waveform[:, i:i+frame_length]
-                rms = torch.sqrt(torch.mean(frame ** 2))
-                energy.append(rms.item())
-
-            if not energy:
+            bounds: tuple[int, int] | None = None
+            model_path = _resolve_silero_vad_model()
+            if model_path is not None:
+                try:
+                    mono = waveform.mean(dim=0) if waveform.shape[0] > 1 else waveform[0]
+                    bounds = _silero_speech_bounds(mono.numpy(), sample_rate, model_path)
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug("silero vad failed, using energy vad: %s", exc)
+                    bounds = None
+            if bounds is None:
+                bounds = self._energy_speech_bounds(waveform, sample_rate)
+            if bounds is None:
                 return str(wav_path)
 
-            # 动态阈值：平均能量的 20%
-            threshold = sum(energy) / len(energy) * 0.2
-
-            # 找到有声音的区域
-            speech_frames = [i for i, e in enumerate(energy) if e > threshold]
-
-            if not speech_frames:
-                return str(wav_path)
-
-            # 扩展边界（前后各 5 帧）
-            start_frame = max(0, speech_frames[0] - 5)
-            end_frame = min(len(energy), speech_frames[-1] + 5)
-
-            # 转换为样本索引
-            start_sample = start_frame * hop_length
-            end_sample = min(waveform.shape[1], end_frame * hop_length + frame_length)
-
-            # 裁剪音频
+            start_sample, end_sample = bounds
             trimmed = waveform[:, start_sample:end_sample]
 
             # 如果裁剪后太短，返回原音频
@@ -149,15 +222,16 @@ class QwenASRProvider(ASRProvider):
 
             # 保存到临时文件
             import tempfile
-            temp_file = tempfile.NamedTemporaryFile(suffix='.wav', delete=False)
+
+            temp_file = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
             temp_path = temp_file.name
             temp_file.close()
 
             torchaudio.save(temp_path, trimmed, sample_rate)
             return temp_path
 
-        except Exception:
-            # VAD 失败，返回原音频
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("vad preprocessing failed for %s: %s", wav_path, exc)
             return str(wav_path)
 
     def transcribe_file(self, wav_path: Path, *, hotwords: list[str]) -> ASRResult:

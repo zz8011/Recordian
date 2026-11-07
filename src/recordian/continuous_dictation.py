@@ -106,6 +106,11 @@ def run_continuous_dictation(
     context_tail = ""
     segment_samples = 0
     silence_run = 0
+    # Noise-adaptive silence detection for the soft segment cut: the
+    # threshold follows this turn's own noise floor (duration_guard),
+    # replacing the fixed absolute RMS value a quiet speaker could never
+    # cross and steady room noise could never fall below.
+    silence_meter = guard.AdaptiveSilenceMeter()
     pending = bytearray()
     eof = False
     asr: Any = None
@@ -678,7 +683,7 @@ def run_continuous_dictation(
                 return
             segment_samples += take
             ime_idle_samples += take
-            if _pcm_rms(piece) < float(guard.CONTINUOUS_SILENCE_RMS):
+            if silence_meter.observe(_pcm_rms(piece)):
                 silence_run += take
             else:
                 silence_run = 0
