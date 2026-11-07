@@ -26,7 +26,7 @@ MAX_SEMIF_TIMEOUT_S = 0.35
 DEFAULT_JEV_TIMEOUT_S = 1.5
 MAX_JEV_TIMEOUT_S = 2.0
 CORRECTION_PROVIDER_CHOICES = ("jev", "semif")
-ASR_PROVIDER_CHOICES = ("qwen-asr", "http-cloud", "confucius-asr")
+ASR_PROVIDER_CHOICES = ("qwen-asr", "http-cloud", "confucius-asr", "qwen-asr-service")
 
 
 def normalize_correction_provider(value: object, *, fallback: str = "jev") -> str:
@@ -247,6 +247,9 @@ def normalize_runtime_config(
     normalized["enable_streaming_commit"] = bool(normalized.get("enable_streaming_commit", False))
     normalized["asr_provider"] = normalize_asr_provider(normalized.get("asr_provider", "qwen-asr"))
     normalized["asr_realtime_endpoint"] = str(normalized.get("asr_realtime_endpoint") or "").strip()
+    normalized["qwen_service_endpoint"] = (
+        str(normalized.get("qwen_service_endpoint") or "").strip() or "http://127.0.0.1:8323"
+    )
     normalized["enable_particle_correction"] = bool(normalized.get("enable_particle_correction", False))
     normalized["enable_semif_correction"] = bool(normalized.get("enable_semif_correction", False))
     normalized["correction_provider"] = normalize_correction_provider(normalized.get("correction_provider", "jev"))

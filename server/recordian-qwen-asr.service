@@ -1,0 +1,19 @@
+[Unit]
+Description=Recordian Qwen3-ASR-1.7B production ASR service (127.0.0.1:8323)
+# The service code lives in the feat/qwen-asr-production worktree until
+# the branch merges; after merging, repoint WorkingDirectory/PYTHONPATH
+# and the script path to %h/Projects/recordian (2 lines + ExecStart).
+
+[Service]
+Type=simple
+WorkingDirectory=%h/Projects/recordian-qwen-prod
+ExecStart=%h/Projects/recordian/.venv-asr/bin/python %h/Projects/recordian-qwen-prod/server/qwen_asr_service.py --host 127.0.0.1 --port 8323 --model %h/Projects/recordian/models/Qwen3-ASR-1.7B --token-file %h/.config/recordian/qwen_service_token.txt
+Restart=on-failure
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONPATH=%h/Projects/recordian-qwen-prod/src
+Environment=HF_HUB_OFFLINE=1
+Environment=TRANSFORMERS_OFFLINE=1
+
+[Install]
+WantedBy=default.target

@@ -681,6 +681,7 @@ def _save_runtime_config(args: argparse.Namespace) -> None:
         "asr_api_key": getattr(args, "asr_api_key", ""),
         "asr_timeout_s": getattr(args, "asr_timeout_s", 30.0),
         "asr_realtime_endpoint": str(getattr(args, "asr_realtime_endpoint", "") or "").strip(),
+        "qwen_service_endpoint": str(getattr(args, "qwen_service_endpoint", "") or "").strip(),
         "enable_streaming_commit": bool(getattr(args, "enable_streaming_commit", False)),
         "enable_text_refine": getattr(args, "enable_text_refine", False),
         "refine_provider": getattr(args, "refine_provider", "local"),
