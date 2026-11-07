@@ -6,6 +6,7 @@ The final pass shares the hotword corrector's deadline and never judges partials
 
 from __future__ import annotations
 
+import logging
 import re
 import threading
 import time
@@ -15,6 +16,9 @@ from typing import Any
 from .contextual_choice import CandidateEdit, Choice, judge_choices
 from .hotword_corrector import _protected_spans
 from .jev_judge import request_jev_choices
+from .judge_observability import emit_judge_event
+
+logger = logging.getLogger(__name__)
 
 MIN_TOP = 0.75
 MIN_MARGIN = 0.35
@@ -132,6 +136,7 @@ class ParticleCorrector:
                 return original
         remaining = deadline - time.monotonic()
         if choices and remaining >= 0.15:
+            started = time.perf_counter()
             result = judge_choices(
                 original, _STATE, choices,
                 request=request_jev_choices, timeout_s=remaining,
@@ -140,8 +145,21 @@ class ParticleCorrector:
                 min_margin=MIN_MARGIN,
                 on_process=lambda proc: self._register(proc, generation),
             )
+            emit_judge_event(
+                logger, site="particle_corrector",
+                outcome="corrected" if result != original else "no_change",
+                latency_ms=(time.perf_counter() - started) * 1000,
+                timeout_budget_ms=self.timeout_s * 1000, text_len=len(text),
+                correction_applied=result != original,
+            )
         else:
             result = original
+            emit_judge_event(
+                logger, site="particle_corrector",
+                outcome="skipped_budget" if choices else "skipped_no_questions",
+                timeout_budget_ms=self.timeout_s * 1000, text_len=len(text),
+                correction_applied=False,
+            )
         with self._lock:
             if self._closed or generation != self._generation:
                 return original

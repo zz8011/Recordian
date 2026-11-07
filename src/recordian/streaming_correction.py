@@ -9,6 +9,7 @@ a thread and does not call the network.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import threading
@@ -29,6 +30,7 @@ from .hotword_corrector import (
     correct_hotwords,
 )
 from .jev_judge import request_jev_choices
+from .judge_observability import emit_judge_event
 from .particle_correction import ParticleCorrector
 from .runtime_config import (
     DEFAULT_JEV_TIMEOUT_S,
@@ -38,6 +40,8 @@ from .runtime_config import (
     normalize_semif_timeout_s,
 )
 from .semif_judge import request_choices
+
+logger = logging.getLogger(__name__)
 
 _CACHE_LIMIT = 32
 _LEXICON_LIMIT = 64
@@ -722,7 +726,23 @@ class StreamingHotwordCorrector:
                 endpoint = self._endpoint
                 timeout_s = self._timeout_s
                 stale = job.dropped or job.generation != self._generation or job.epoch != self._epoch
-            result = job.deterministic if stale else self._judge(job, session, endpoint, timeout_s)
+            if stale:
+                result = job.deterministic
+                emit_judge_event(
+                    logger, site="streaming_corrector", outcome="skipped_stale",
+                    timeout_budget_ms=timeout_s * 1000, text_len=len(job.origin),
+                    correction_applied=False,
+                )
+            else:
+                started = time.perf_counter()
+                result = self._judge(job, session, endpoint, timeout_s)
+                emit_judge_event(
+                    logger, site="streaming_corrector",
+                    outcome="corrected" if result != job.deterministic else "no_change",
+                    latency_ms=(time.perf_counter() - started) * 1000,
+                    timeout_budget_ms=timeout_s * 1000, text_len=len(job.origin),
+                    correction_applied=result != job.deterministic,
+                )
             with self._cv:
                 if (
                     not job.dropped
