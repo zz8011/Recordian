@@ -11,6 +11,7 @@ from typing import Any
 
 from . import streaming_correction as _streaming_correction
 from .audio import wav_mono_rms
+from .continuous_dictation import MAX_IME_REBINDS
 from .hotword_corrector import correct_hotwords, lexicon_from_args
 from .linux_commit import (
     CompositionRefusedError,
@@ -962,6 +963,96 @@ def _session_final_commit(
     return commit_info
 
 
+def _commit_info_is_stale(commit_info: Mapping[str, object]) -> bool:
+    """Mirror of the continuous path's stale test: a "stale" outcome (or a
+    stale detail marker) means the plugin REJECTED the write — the text
+    provably never landed, so a rebind-and-retry cannot duplicate it."""
+    outcome = str(commit_info.get("outcome", "") or "")
+    detail = str(commit_info.get("detail", "") or "")
+    return outcome == "stale" or "preedit_stale" in detail or "commit_stale" in detail
+
+
+def _refine_session_commit_with_rebind(
+    *,
+    context: PostprocessPipelineContext,
+    session: Any,
+    final_text: str,
+    auto_hard_enter: bool,
+) -> dict[str, object]:
+    """Commit the refined text through the worker-carried session, applying
+    the continuous path's stale discipline to the refine wait.
+
+    The primary commit is exactly the historical one. A stale result proves
+    the write was rejected (2026-11-07 17:59: the carried token was
+    invalidated during the ~2 s refinement while the user never left the
+    field), so — exactly like the continuous final commit landing on a
+    rebound session — the FINAL whole-utterance commit is retried on a
+    fresh session from the plugin's own BeginSession validation
+    (``open_composition_session``, the same factory the realtime worker's
+    rebind uses), bounded by MAX_IME_REBINDS. Plain CommitText / global
+    fallbacks stay forbidden: BeginSession refusal (no focused
+    non-sensitive context, user preedit present) fails closed. An
+    "uncertain" result is never retried — the write may have landed and a
+    retry could duplicate it. Any terminal failure marks the commit
+    incomplete and attaches the refined text as ``recovery_text`` so the
+    tray's provably-uncommitted auto-copy rescue fires: the text is never
+    silently dropped.
+    """
+    streaming_committer = resolve_streaming_committer(context.committer)
+    commit_info = _session_final_commit(
+        session,
+        streaming_committer,
+        final_text,
+        auto_hard_enter=auto_hard_enter,
+    )
+    rebinds_left = MAX_IME_REBINDS
+    while (
+        not bool(commit_info.get("committed"))
+        and _commit_info_is_stale(commit_info)
+        and final_text
+        and rebinds_left > 0
+    ):
+        rebinds_left -= 1
+        try:
+            rebound = open_composition_session(streaming_committer)
+        except CompositionRefusedError:
+            break
+        except Exception:  # noqa: BLE001
+            break
+        if rebound is None:
+            break
+        context.on_state({"event": "ime_session_rebound", "backend": "fcitx"})
+        context.on_state(
+            {
+                "event": "log",
+                "message": (
+                    "ime_session_rebound: refine commit re-bound after stale; "
+                    "retrying the final commit on the fresh session"
+                ),
+            }
+        )
+        commit_info = _session_final_commit(
+            rebound,
+            streaming_committer,
+            final_text,
+            auto_hard_enter=auto_hard_enter,
+        )
+        if bool(commit_info.get("committed")):
+            detail = str(commit_info.get("detail", "")).strip()
+            commit_info["detail"] = (
+                f"{detail};refine_commit_rebound" if detail else "refine_commit_rebound"
+            )
+            break
+    if (
+        not bool(commit_info.get("committed"))
+        and final_text
+        and str(commit_info.get("outcome", "") or "") != "cancelled"
+    ):
+        commit_info["incomplete"] = True
+        commit_info["recovery_text"] = final_text
+    return commit_info
+
+
 def _run_asr_streaming_commit(
     *,
     context: PostprocessPipelineContext,
@@ -1459,12 +1550,15 @@ def run_postprocess_pipeline(context: PostprocessPipelineContext) -> None:
             and context.composition_session is not None
         ):
             # The realtime worker kept its composition session alive for the
-            # refiner. Refine the (already SemIf-judged) text and commit
-            # exactly once through the SAME session token: this preserves
-            # the binding to the original input context even if the user
-            # clicked elsewhere during refinement — a stale/replaced session
-            # then fails the commit instead of writing into the new focus,
-            # and no fallback path may retry afterwards.
+            # refiner. Refine the (already SemIf-judged) text and commit it
+            # through the SAME session token. The refine wait can outlive
+            # the token (an editor re-render / focus flicker invalidates it
+            # while the user never left the field), so the commit goes
+            # through _refine_session_commit_with_rebind: a proven-stale
+            # final commit is retried on a BeginSession-validated fresh
+            # session, and a terminal failure degrades to the tray's
+            # recovery auto-copy instead of dropping the text. A plain
+            # CommitText fallback remains forbidden either way.
             streamed_commit = True
             asr_path = "realtime_refine_session_commit"
             raw_text = str(getattr(context, "prefetched_asr_text", "") or "")
@@ -1488,10 +1582,10 @@ def run_postprocess_pipeline(context: PostprocessPipelineContext) -> None:
                     refine_postprocess_rule=context.refine_postprocess_rule,
                     on_state=context.on_state,
                 )
-            commit_info = _session_final_commit(
-                context.composition_session,
-                resolve_streaming_committer(context.committer),
-                text.strip(),
+            commit_info = _refine_session_commit_with_rebind(
+                context=context,
+                session=context.composition_session,
+                final_text=text.strip(),
                 auto_hard_enter=auto_hard_enter,
             )
             if not bool(commit_info.get("committed")):
@@ -1501,7 +1595,7 @@ def run_postprocess_pipeline(context: PostprocessPipelineContext) -> None:
                         "message": (
                             "refine_session_commit_failed: "
                             f"{commit_info.get('detail', '')} outcome={commit_info.get('outcome', '')}"
-                            " — 会话终止，不回退到全局提交；文本保留供手动复制"
+                            " — 会话终止，不回退到全局提交；未上屏文本已保留为恢复文本（托盘自动复制）"
                         ),
                     }
                 )
