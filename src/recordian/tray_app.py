@@ -348,14 +348,36 @@ class TrayApp:
                 # successful turn. Preserve last_run for manual copy, but
                 # never recommend replaying text that may already be written.
                 self.state.status = "error"
-                self.state.detail = "听写中断，请核对输入框后恢复保留文字"
-                detail = "Dictation incomplete — check field before copying"
-                self.overlay.set_state("error", detail)
-                self._schedule_off_cue_from_overlay("error", detail)
-                self._notify_backend(
-                    "Recordian 听写未完成",
-                    "请先核对输入框；部分文字可能已经写入。保留文字可从最近结果复制，避免重复粘贴已写入内容。",
-                )
+                # Auto-copy ONLY the text that provably never reached the
+                # field: the uncommitted recovery tail, or — when nothing
+                # was committed at all — the whole preserved text. The
+                # committed prefix is never part of the auto-copy, so
+                # pasting it cannot duplicate what is already written.
+                recovery_text = str(commit_info.get("recovery_text", "") or "").strip()
+                if not recovery_text and not committed:
+                    recovery_text = observation.text
+                if recovery_text and self._copy_text_to_clipboard(recovery_text):
+                    self.state.detail = "听写中断，未上屏文字已自动复制，可直接粘贴"
+                    detail = "Dictation incomplete — uncommitted text auto-copied, paste directly"
+                    self.overlay.set_state("error", detail)
+                    self._schedule_off_cue_from_overlay("error", detail)
+                    self._notify_backend(
+                        "Recordian 听写未完成",
+                        (
+                            "已写入输入框的前缀请勿重复粘贴；未上屏的保留文字已自动复制到剪贴板，可直接粘贴。"
+                            if committed
+                            else "保留文字已自动复制到剪贴板，可直接粘贴。"
+                        ),
+                    )
+                else:
+                    self.state.detail = "听写中断，请核对输入框后恢复保留文字"
+                    detail = "Dictation incomplete — check field before copying"
+                    self.overlay.set_state("error", detail)
+                    self._schedule_off_cue_from_overlay("error", detail)
+                    self._notify_backend(
+                        "Recordian 听写未完成",
+                        "请先核对输入框；部分文字可能已经写入。保留文字可从最近结果复制，避免重复粘贴已写入内容。",
+                    )
             elif observation.text:
                 if committed:
                     self.state.detail = truncate(observation.text, 42)
@@ -688,17 +710,22 @@ class TrayApp:
 
             self._update_tray_menu()
 
+    def _copy_text_to_clipboard(self, text: str) -> bool:
+        try:
+            self.root.clipboard_clear()
+            self.root.clipboard_append(text)
+            self.root.update()
+            self.events.put({"event": "log", "message": f"已复制: {text[:30]}..."})
+            return True
+        except Exception as e:
+            self.events.put({"event": "log", "message": f"复制失败: {e}"})
+            return False
+
     def copy_last_text(self) -> None:
         """复制最后识别的文本到剪贴板"""
         if not self.state.last_run.text:
             return
-        try:
-            self.root.clipboard_clear()
-            self.root.clipboard_append(self.state.last_run.text)
-            self.root.update()
-            self.events.put({"event": "log", "message": f"已复制: {self.state.last_run.text[:30]}..."})
-        except Exception as e:
-            self.events.put({"event": "log", "message": f"复制失败: {e}"})
+        self._copy_text_to_clipboard(self.state.last_run.text)
 
     def switch_preset(self, preset_name: str) -> None:
         """切换文字优化 preset"""

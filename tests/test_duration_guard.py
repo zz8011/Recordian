@@ -709,12 +709,19 @@ def _make_fake_tray():  # noqa: ANN202
     overlay_calls: list[tuple] = []
     notifications: list[tuple[str, str]] = []
     logs: list[str] = []
+    clipboard: list[str] = []
     fake = SimpleNamespace(
         state=UiState(),
         overlay=SimpleNamespace(
             set_state=lambda *a: overlay_calls.append(a),
             set_level=lambda *a: None,
         ),
+        root=SimpleNamespace(
+            clipboard_clear=lambda: clipboard.clear(),
+            clipboard_append=lambda text: clipboard.append(text),
+            update=lambda: None,
+        ),
+        clipboard=clipboard,
         events=queue.Queue(),
         _off_cue_armed=False,
         _warmup_done=True,
@@ -729,6 +736,7 @@ def _make_fake_tray():  # noqa: ANN202
         _extract_recent_run_observation=TrayApp._extract_recent_run_observation,
         _format_recent_run_log_suffix=TrayApp._format_recent_run_log_suffix,
     )
+    fake._copy_text_to_clipboard = lambda text: TrayApp._copy_text_to_clipboard(fake, text)
     return fake, overlay_calls, notifications, logs
 
 

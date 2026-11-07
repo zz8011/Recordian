@@ -151,12 +151,15 @@ def test_partial_prefix_result_reports_incomplete_in_fake_tray():
                    "recovery_text": "尾段。", "segments_committed": 1},
     }})
     assert fake.state.status == "error"
-    assert "核对" in fake.state.detail
+    assert "已自动复制" in fake.state.detail
     assert fake.state.last_run.text == "第一段。尾段。"
     assert overlay_calls[-1][0] == "error"
     assert len(notifications) == 1
-    assert "核对" in notifications[0][1]
+    assert "自动复制" in notifications[0][1]
     assert "尾段。" not in notifications[0][1], "notification must not contain transcript"
+    # Only the uncommitted recovery tail is auto-copied — never the prefix
+    # that is already written in the field (pasting must not duplicate it).
+    assert fake.clipboard == ["尾段。"]
 
 
 def test_socket_reopen_failure_preserves_held_tail(monkeypatch):
