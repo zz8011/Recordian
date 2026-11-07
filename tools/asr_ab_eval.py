@@ -273,26 +273,62 @@ def chunk_wav(wav: Path, chunk_s: float, tmpdir: Path) -> list[Path]:
     return parts
 
 
+def _transcribe_once(provider, wav_path: Path) -> str:
+    return str(getattr(provider.transcribe_file(wav_path, hotwords=[]), "text", "") or "")
+
+
+def _transcribe_resilient(provider, wav_path: Path, split_s: float | None,
+                          tmpdir: Path, depth: int = 0) -> tuple[str, int]:
+    """Transcribe one file/chunk; returns (text, failed_chunks).
+
+    Two fresh-session attempts, then (when a split size is given and this is
+    the first level) split in halves and try each half the same way. A chunk
+    that still fails is zero-filled and counted, so one bad decode never
+    aborts the arm; the loss stays visible in the row's chunk_errors.
+    """
+    for _ in range(2):
+        try:
+            return _transcribe_once(provider, wav_path), 0
+        except Exception:
+            continue
+    if split_s is None or depth >= 1:
+        return "", 1
+    texts: list[str] = []
+    failed = 0
+    for half in chunk_wav(wav_path, split_s / 2, tmpdir):
+        text, err = _transcribe_resilient(provider, half, split_s / 2, tmpdir, depth + 1)
+        texts.append(text)
+        failed += err
+    return "".join(texts), failed
+
+
 def transcribe_all(provider, clips: list[dict], *, chunk_s: float | None = None,
                    sink: list[dict] | None = None) -> list[dict]:
     """Transcribe every clip; long clips are split into <= chunk_s sessions.
 
     A whole long file in one Confucius session never finishes (see module
     constants), so each chunk gets its own session and the hypotheses are
-    concatenated. ``sink`` (when given) receives each finished row immediately
-    so a mid-run crash does not lose completed clips.
+    concatenated. Each chunk is transcribed resiliently (retry, then split in
+    halves, then zero-fill and count the loss) so one flaky native decode
+    cannot abort the arm. ``sink`` (when given) receives each finished row
+    immediately so a mid-run crash does not lose completed clips.
     """
     results = []
     with tempfile.TemporaryDirectory(prefix="asr-ab-chunks-") as tmp:
         for clip in clips:
             duration = wav_duration_s(clip["wav"])
             start = time.perf_counter()
+            failed = 0
             if chunk_s and duration > chunk_s:
                 parts = chunk_wav(clip["wav"], chunk_s, Path(tmp))
-                hyp = "".join(
-                    str(getattr(provider.transcribe_file(part, hotwords=[]), "text", "") or "")
-                    for part in parts
-                )
+                hyp_parts: list[str] = []
+                for part in parts:
+                    text, err = _transcribe_resilient(provider, part, chunk_s, Path(tmp))
+                    hyp_parts.append(text)
+                    failed += err
+                hyp = "".join(hyp_parts)
+            elif chunk_s:
+                hyp, failed = _transcribe_resilient(provider, clip["wav"], chunk_s, Path(tmp))
             else:
                 result = provider.transcribe_file(clip["wav"], hotwords=[])
                 hyp = str(getattr(result, "text", "") or "")
@@ -300,6 +336,7 @@ def transcribe_all(provider, clips: list[dict], *, chunk_s: float | None = None,
             row = {
                 "id": clip["id"],
                 "gold": bool(clip.get("gold")),
+                "chunk_errors": failed,
                 "duration_s": round(duration, 3),
                 "elapsed_s": round(elapsed, 3),
                 "rtf": round(elapsed / duration, 4) if duration else 0.0,

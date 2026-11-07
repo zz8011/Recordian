@@ -112,3 +112,64 @@ def test_build_payload_partial_marks_and_aggregates_subset():
     assert payload["gold_clips"] == 0
     full = mod.build_payload("A", Path("/d"), clips, completed)
     assert "partial" not in full and "error" not in full
+
+
+class FlakyProvider:
+    """Fails the first N calls, then returns texts in order."""
+
+    def __init__(self, fail_count, texts):
+        self.fail_count = fail_count
+        self.texts = list(texts)
+        self.calls: list[Path] = []
+
+    def transcribe_file(self, wav_path, hotwords=None):
+        self.calls.append(Path(wav_path))
+        if self.fail_count > 0:
+            self.fail_count -= 1
+            raise RuntimeError("flaky native decode")
+        return SimpleNamespace(text=self.texts.pop(0) if self.texts else "")
+
+
+def test_resilient_retries_once_then_succeeds(tmp_path):
+    mod = _load_harness()
+    wav = tmp_path / "c.wav"
+    _make_wav(wav, 5.0)
+    provider = FlakyProvider(1, ["hello"])
+    text, errors = mod._transcribe_resilient(provider, wav, 24.0, tmp_path)
+    assert text == "hello"
+    assert errors == 0
+    assert len(provider.calls) == 2
+
+
+def test_resilient_splits_when_chunk_deterministically_fails(tmp_path):
+    mod = _load_harness()
+    wav = tmp_path / "c.wav"
+    _make_wav(wav, 30.0)
+    # Fail the whole-file attempts, succeed on the 12s halves.
+    provider = FlakyProvider(2, ["AA", "BB", "CC"])
+    text, errors = mod._transcribe_resilient(provider, wav, 24.0, tmp_path)
+    assert text == "AABBCC"
+    assert errors == 0
+
+
+def test_resilient_zero_fills_when_everything_fails(tmp_path):
+    mod = _load_harness()
+    wav = tmp_path / "c.wav"
+    _make_wav(wav, 30.0)
+    provider = FlakyProvider(99, [])
+    text, errors = mod._transcribe_resilient(provider, wav, 24.0, tmp_path)
+    assert text == ""
+    assert errors == 3  # three 12s halves, each zero-filled
+
+
+def test_transcribe_all_survives_a_dead_chunk(tmp_path):
+    mod = _load_harness()
+    wav = tmp_path / "long.wav"
+    _make_wav(wav, 50.0)
+    provider = FlakyProvider(99, [])
+    clips = [{"id": "long", "wav": wav, "reference": "ABC", "gold": False}]
+    rows = mod.transcribe_all(provider, clips, chunk_s=24.0)
+    assert len(rows) == 1
+    assert rows[0]["hypothesis"] == ""
+    # 24s chunk -> 2 failed halves each; 2s chunk -> 1 failed half.
+    assert rows[0]["chunk_errors"] == 5
