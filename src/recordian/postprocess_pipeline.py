@@ -11,6 +11,7 @@ from typing import Any
 
 from . import streaming_correction as _streaming_correction
 from .audio import wav_mono_rms
+from .eval_capture import append_eval_sample, resolve_eval_capture_dir
 from .hotword_corrector import correct_hotwords, lexicon_from_args
 from .linux_commit import (
     CompositionRefusedError,
@@ -569,6 +570,48 @@ def _capture_refine_sample(
     )
     if getattr(args, "debug_diagnostics", False):
         on_state({"event": "log", "message": f"diag refine_sample_captured={output_path}"})
+
+
+def _capture_eval_sample(
+    *,
+    args: argparse.Namespace,
+    audio_path: Path,
+    record_backend: str,
+    raw_text: str,
+    final_text: str,
+    transcribe_latency_ms: float,
+    on_state: EventCallback,
+) -> None:
+    """Persist an ASR eval pair (audio copy + raw/final text) when enabled.
+
+    Fully self-guarded: eval capture is passive observation and must never
+    break dictation, so every failure is swallowed (and only surfaced
+    under debug diagnostics).
+    """
+    if not bool(getattr(args, "capture_eval_samples", False)):
+        return
+    if not str(raw_text).strip() and not str(final_text).strip():
+        return
+    try:
+        append_eval_sample(
+            output_dir=resolve_eval_capture_dir(
+                getattr(args, "capture_eval_samples_path", "")
+            ),
+            audio_path=audio_path,
+            raw_asr_text=raw_text,
+            final_text=final_text,
+            record_backend=record_backend,
+            source="dictation",
+            transcribe_latency_ms=transcribe_latency_ms,
+        )
+    except Exception as exc:  # noqa: BLE001
+        if getattr(args, "debug_diagnostics", False):
+            on_state(
+                {
+                    "event": "log",
+                    "message": f"diag eval_sample_capture_failed: {type(exc).__name__}: {exc}",
+                }
+            )
 
 
 def _resolve_refine_llm_max_len(args: argparse.Namespace) -> int:
@@ -1680,6 +1723,16 @@ def run_postprocess_pipeline(context: PostprocessPipelineContext) -> None:
             transcribe_latency_ms=transcribe_latency_ms,
             refine_latency_ms=refine_latency_ms,
             commit_info=commit_info,
+            on_state=context.on_state,
+        )
+
+        _capture_eval_sample(
+            args=context.args,
+            audio_path=context.audio_path,
+            record_backend=context.record_backend,
+            raw_text=raw_text,
+            final_text=text,
+            transcribe_latency_ms=transcribe_latency_ms,
             on_state=context.on_state,
         )
 

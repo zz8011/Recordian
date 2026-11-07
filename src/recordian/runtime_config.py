@@ -15,6 +15,7 @@ DEFAULT_WAKE_NAME = ["小二"]
 DEFAULT_OWNER_PROFILE = "~/.config/recordian/owner_voice_profile.json"
 DEFAULT_AUTO_LEXICON_DB = "~/.config/recordian/auto_lexicon.db"
 DEFAULT_REFINE_CAPTURE_PATH = "~/.local/share/recordian/refine-samples.jsonl"
+DEFAULT_EVAL_CAPTURE_DIR = "~/.local/share/recordian/eval-capture"
 
 # SemIf 候选纠错配置合同（实现逻辑在 hotword_corrector/semif 链路）：
 # 默认关闭，端点留空，超时是有界正值。
@@ -275,6 +276,11 @@ def normalize_runtime_config(
     if "capture_refine_samples_path" in normalized:
         normalized["capture_refine_samples_path"] = _normalize_path_string(
             normalized.get("capture_refine_samples_path", DEFAULT_REFINE_CAPTURE_PATH),
+            base_dir=config_base_dir,
+        )
+    if "capture_eval_samples_path" in normalized:
+        normalized["capture_eval_samples_path"] = _normalize_path_string(
+            normalized.get("capture_eval_samples_path", DEFAULT_EVAL_CAPTURE_DIR),
             base_dir=config_base_dir,
         )
     normalized["deskflow_active_screen_path"] = _normalize_path_string(
