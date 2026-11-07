@@ -13,6 +13,7 @@ import threading
 from pathlib import Path
 from types import SimpleNamespace
 
+from recordian.continuous_dictation import MAX_IME_REBINDS
 from recordian.linux_commit import (
     CommitterWithFallback,
     FcitxCommitter,
@@ -1222,10 +1223,12 @@ def test_refine_session_commit_through_same_token_once(monkeypatch) -> None:
     assert result["asr_path"] == "realtime_refine_session_commit"
 
 
-def test_refine_session_focus_lost_during_refine_rejects_commit(monkeypatch) -> None:
-    """Refine counter-example: the user clicks away / resets / types while
-    the refiner runs. The carried session goes stale; the commit through the
-    original token FAILS and no fallback may write into the new focus."""
+def test_refine_session_stale_during_refine_rebinds_and_commits(monkeypatch) -> None:
+    """2026-11-07 17:59 regression: the carried token is invalidated during
+    the refine wait (editor re-render / focus flicker — the user never left
+    the field). The stale result proves the plugin rejected the write, so
+    the final commit is retried on a BeginSession-validated fresh session
+    and the refined text lands. A plain CommitText stays forbidden."""
     bus = FakeFcitxBus()
     provider = _RealtimeProvider(_ScriptedSession(["草稿"], finish_text="嗯，最终草稿"))
     worker, _events = _run_worker(monkeypatch, bus, provider, refine_enabled=True)
@@ -1236,7 +1239,7 @@ def test_refine_session_focus_lost_during_refine_rejects_commit(monkeypatch) -> 
         prompt_template = "请整理：{text}"
 
         def refine(self, text: str) -> str:
-            # The user moved focus / reset / typed while we were refining.
+            # The session is invalidated while we are refining.
             bus.lose_focus()
             return "整理后的最终草稿"
 
@@ -1262,20 +1265,142 @@ def test_refine_session_focus_lost_during_refine_rejects_commit(monkeypatch) -> 
     run_postprocess_pipeline(context)
 
     assert not error_events
-    # The stale session refused the commit; nothing was applied.
+    # First attempt through the carried (stale) token, then exactly one
+    # rebind and the final commit through the fresh token.
+    commits = [(args[0], args[1]) for method, args in bus.calls if method == "CommitSession"]
+    assert commits[0] == (carried.token, "整理后的最终草稿")
+    assert len(commits) == 2 and commits[1][0] != carried.token
+    assert bus.applied_commits == ["整理后的最终草稿"]
+    methods = [method for method, _ in bus.calls]
+    assert methods.count("BeginSession") == 2  # the worker's bind + the rebind
+    assert "CommitText" not in methods  # never a plain global commit
+    assert provider.transcribe_file_calls == 0
+    assert any(e.get("event") == "ime_session_rebound" for e in state_events)
+    result = result_events[0]["result"]
+    assert result["commit"]["committed"] is True
+    assert "refine_commit_rebound" in str(result["commit"]["detail"])
+    assert result["text"] == "整理后的最终草稿"
+    assert result["asr_path"] == "realtime_refine_session_commit"
+
+
+def test_refine_session_stale_and_rebind_refused_recovers_text(monkeypatch) -> None:
+    """Stale at refine-commit AND BeginSession refuses (focus truly gone /
+    user composing elsewhere): nothing is written anywhere, and the refined
+    text reaches the tray's recovery auto-copy via incomplete +
+    recovery_text instead of being silently dropped."""
+    bus = FakeFcitxBus()
+    provider = _RealtimeProvider(_ScriptedSession(["草稿"], finish_text="嗯，最终草稿"))
+    worker, _events = _run_worker(monkeypatch, bus, provider, refine_enabled=True)
+    carried = worker.composition_session
+    assert carried is not None and carried.active
+
+    class _Refiner:
+        prompt_template = "请整理：{text}"
+
+        def refine(self, text: str) -> str:
+            bus.lose_focus()
+            return "整理后的最终草稿"
+
+    # The worker already holds its session; every NEW BeginSession refuses.
+    bus.begin_fails = True
+    state_events: list[dict[str, object]] = []
+    result_events: list[dict[str, object]] = []
+    error_events: list[dict[str, object]] = []
+    _patch_pipeline_env(monkeypatch)
+    context = _pipeline_context(
+        provider=provider,
+        committer=FcitxCommitter(),
+        args=_pipeline_args(),
+        prefetched_asr_text=worker.final_text,
+        prefetched_commit_info=worker.commit_info,
+        prefetched_transcribe_latency_ms=worker.transcribe_latency_ms,
+        prefetched_outcome=worker.outcome,
+        composition_session=carried,
+        prefetched_semif_applied=True,
+        refiner=_Refiner(),
+        state_events=state_events,
+        result_events=result_events,
+        error_events=error_events,
+    )
+    run_postprocess_pipeline(context)
+
+    assert not error_events
     assert bus.applied_commits == []
     methods = [method for method, _ in bus.calls]
-    assert "CommitSession" in methods  # attempted once through the old token
-    assert "CommitText" not in methods  # never into the new focus
+    assert "CommitText" not in methods
     assert provider.transcribe_file_calls == 0
     result = result_events[0]["result"]
-    assert result["commit"]["committed"] is False
-    assert result["commit"]["outcome"] == "stale"
-    # Transcript preserved for manual copy.
+    commit = result["commit"]
+    assert commit["committed"] is False
+    assert commit["outcome"] == "stale"
+    # The degradation contract: the tray auto-copy fires on incomplete and
+    # pastes exactly this recovery text.
+    assert commit["incomplete"] is True
+    assert commit["recovery_text"] == "整理后的最终草稿"
     assert result["text"] == "整理后的最终草稿"
     assert any(
         "refine_session_commit_failed" in str(e.get("message", "")) for e in state_events
     )
+
+
+def test_refine_session_rebind_budget_is_bounded(monkeypatch) -> None:
+    """Hostile editor: every fresh token is invalidated before it can be
+    used. The rebind loop must stop at MAX_IME_REBINDS instead of
+    BeginSession-looping, then degrade to recovery."""
+
+    class _HostileBus(FakeFcitxBus):
+        arm_instant_stale = False
+
+        def call(self, method, signature, args):
+            result = super().call(method, signature, args)
+            if method == "BeginSession" and self.arm_instant_stale:
+                self.stale_tokens.update(self.sessions.keys())
+            return result
+
+    bus = _HostileBus()
+    provider = _RealtimeProvider(_ScriptedSession(["草稿"], finish_text="嗯，最终草稿"))
+    worker, _events = _run_worker(monkeypatch, bus, provider, refine_enabled=True)
+    carried = worker.composition_session
+    assert carried is not None and carried.active
+
+    class _Refiner:
+        prompt_template = "请整理：{text}"
+
+        def refine(self, text: str) -> str:
+            bus.lose_focus()
+            bus.arm_instant_stale = True
+            return "整理后的最终草稿"
+
+    state_events: list[dict[str, object]] = []
+    result_events: list[dict[str, object]] = []
+    error_events: list[dict[str, object]] = []
+    _patch_pipeline_env(monkeypatch)
+    context = _pipeline_context(
+        provider=provider,
+        committer=FcitxCommitter(),
+        args=_pipeline_args(),
+        prefetched_asr_text=worker.final_text,
+        prefetched_commit_info=worker.commit_info,
+        prefetched_transcribe_latency_ms=worker.transcribe_latency_ms,
+        prefetched_outcome=worker.outcome,
+        composition_session=carried,
+        prefetched_semif_applied=True,
+        refiner=_Refiner(),
+        state_events=state_events,
+        result_events=result_events,
+        error_events=error_events,
+    )
+    begins_before = [m for m, _ in bus.calls].count("BeginSession")
+    run_postprocess_pipeline(context)
+
+    assert not error_events
+    begins_after = [m for m, _ in bus.calls].count("BeginSession")
+    assert begins_after - begins_before == MAX_IME_REBINDS
+    assert bus.applied_commits == []
+    commit = result_events[0]["result"]["commit"]
+    assert commit["committed"] is False
+    assert commit["incomplete"] is True
+    assert commit["recovery_text"] == "整理后的最终草稿"
 
 
 def test_pipeline_refine_stream_begin_refused_zero_commits(monkeypatch) -> None:
