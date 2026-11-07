@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from recordian.config import ConfigManager
+from recordian.eval_capture import DEFAULT_EVAL_CAPTURE_DIR
 from recordian.refine_capture import DEFAULT_REFINE_CAPTURE_PATH
 from recordian.runtime_config import (
     DEFAULT_JEV_TIMEOUT_S,
@@ -185,6 +186,17 @@ def build_parser() -> argparse.ArgumentParser:
         "--capture-refine-samples-path",
         default=DEFAULT_REFINE_CAPTURE_PATH,
         help="Output path for captured refinement samples (JSONL)",
+    )
+    parser.add_argument(
+        "--capture-eval-samples",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Copy dictation audio + raw/final text pairs into an eval-capture directory (ASR accuracy corpus)",
+    )
+    parser.add_argument(
+        "--capture-eval-samples-path",
+        default=DEFAULT_EVAL_CAPTURE_DIR,
+        help="Output directory for captured ASR eval samples",
     )
     parser.add_argument(
         "--enable-voice-wake",
@@ -687,6 +699,8 @@ def _save_runtime_config(args: argparse.Namespace) -> None:
         "enable_streaming_refine": getattr(args, "enable_streaming_refine", False),
         "capture_refine_samples": getattr(args, "capture_refine_samples", False),
         "capture_refine_samples_path": getattr(args, "capture_refine_samples_path", DEFAULT_REFINE_CAPTURE_PATH),
+        "capture_eval_samples": getattr(args, "capture_eval_samples", False),
+        "capture_eval_samples_path": getattr(args, "capture_eval_samples_path", DEFAULT_EVAL_CAPTURE_DIR),
         "enable_voice_wake": getattr(args, "enable_voice_wake", False),
         "wake_prefix": wake_runtime.prefixes,
         "wake_name": wake_runtime.names,
