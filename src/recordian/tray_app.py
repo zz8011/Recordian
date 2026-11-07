@@ -120,6 +120,21 @@ def confirm_text_in_lexicon(db_path: Path, text: str) -> int:
         lexicon.close()
 
 
+def mark_last_text_gold(capture_dir: Path, text: str) -> str:
+    """Gold-mark the newest eval-capture row whose final text is ``text``.
+
+    Thin wrapper over :func:`recordian.eval_capture.mark_eval_sample_gold`
+    (same short-lived, no-shared-state pattern as ``confirm_text_in_lexicon``):
+    the user's confirm vouch promotes the matching captured sample to a gold
+    reference for the A/B eval set. Returns the marking outcome
+    (``"marked"`` / ``"already_gold"`` / ``"no_match"``); raises on storage
+    failure — callers treat gold marking as best-effort.
+    """
+    from recordian.eval_capture import mark_eval_sample_gold
+
+    return mark_eval_sample_gold(output_dir=capture_dir, final_text=text)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Recordian tray GUI with waveform overlay.")
     parser.add_argument("--config-path", default=DEFAULT_CONFIG_PATH)
@@ -745,7 +760,7 @@ class TrayApp:
         self._copy_text_to_clipboard(self.state.last_run.text)
 
     def confirm_last_text_lexicon(self) -> None:
-        """记入词库：用户显式确认上次文字无误（user_confirmed 学习信号）。
+        """确认上次文字：记入词库（user_confirmed）＋对应评测样本标金标。
 
         This is the only tray action that feeds the auto-lexicon's
         ``user_confirmed`` channel: the user looked at the last result and
@@ -766,6 +781,33 @@ class TrayApp:
         except Exception as exc:  # noqa: BLE001
             self.events.put(
                 {"event": "log", "message": f"记入词库失败: {type(exc).__name__}"}
+            )
+
+        # 标金标：同一次确认也等于用户担保「上屏文本就是我说的原话」，
+        # 把评测集里对应的样本翻成 gold。与上面的词库结果完全独立：
+        # 这里任何失败只记日志，绝不影响确认动作本身。
+        try:
+            from recordian.eval_capture import resolve_eval_capture_dir
+
+            config = self._get_cached_config()
+            capture_dir = resolve_eval_capture_dir(
+                config.get("capture_eval_samples_path", "")
+            )
+            outcome = mark_last_text_gold(capture_dir, text)
+            gold_messages = {
+                "marked": "已将上次文字对应的评测样本标为金标",
+                "already_gold": "上次文字对应的评测样本已是金标",
+                "no_match": "上次文字没有对应的评测样本，未标金标",
+            }
+            self.events.put(
+                {
+                    "event": "log",
+                    "message": gold_messages.get(outcome, f"标金标结果: {outcome}"),
+                }
+            )
+        except Exception as exc:  # noqa: BLE001
+            self.events.put(
+                {"event": "log", "message": f"标金标失败: {type(exc).__name__}"}
             )
 
     def switch_preset(self, preset_name: str) -> None:
