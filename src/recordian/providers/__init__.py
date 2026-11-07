@@ -27,6 +27,7 @@ if TYPE_CHECKING:
     from .http_cloud import HttpCloudProvider
     from .llamacpp_text_refiner import LlamaCppTextRefiner
     from .qwen_asr import QwenASRProvider
+    from .qwen_service_asr import QwenServiceASRProvider
     from .qwen_text_refiner import Qwen3TextRefiner
 
 _LAZY_EXPORTS = {
@@ -36,6 +37,7 @@ _LAZY_EXPORTS = {
     "HttpCloudProvider": "http_cloud",
     "LlamaCppTextRefiner": "llamacpp_text_refiner",
     "QwenASRProvider": "qwen_asr",
+    "QwenServiceASRProvider": "qwen_service_asr",
     "Qwen3TextRefiner": "qwen_text_refiner",
 }
 
@@ -50,6 +52,7 @@ __all__ = [
     "ConfuciusASRProvider",
     "ConfuciusProtocolError",
     "QwenASRProvider",
+    "QwenServiceASRProvider",
     "Qwen3TextRefiner",
     "CloudLLMRefiner",
     "LlamaCppTextRefiner",

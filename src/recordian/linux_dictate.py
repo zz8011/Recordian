@@ -536,6 +536,26 @@ def create_provider(args: argparse.Namespace) -> ASRProvider:
             max_new_tokens=int(getattr(args, "qwen_max_new_tokens", 8192)),
         )
 
+    if asr_provider == "qwen-asr-service":
+        # Qwen3-ASR-1.7B via the local production service (the wave-2
+        # B-arm provider, hosted by server/qwen_asr_service.py). The
+        # client is a thin HTTP provider; the model lives in the
+        # service process (.venv-asr), never in the tray.
+        from .providers.qwen_service_asr import QwenServiceASRProvider
+
+        endpoint = (
+            str(getattr(args, "qwen_service_endpoint", "") or "").strip()
+            or "http://127.0.0.1:8323"
+        )
+        # Whole-segment decode latency scales with audio length; the
+        # Confucius-shaped 60 s default is too tight for long presses.
+        timeout_s = max(float(getattr(args, "asr_timeout_s", 60) or 60), 120.0)
+        return QwenServiceASRProvider(
+            endpoint=endpoint,
+            timeout_s=timeout_s,
+            context=asr_context,
+        )
+
     if asr_provider == "confucius-asr":
         # Confucius4-R2T2 streaming ASR over WebSocket. Endpoint comes from
         # asr_realtime_endpoint; asr_api_key is reused as the protocol secret_key.
