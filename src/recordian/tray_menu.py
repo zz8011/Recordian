@@ -165,7 +165,7 @@ def build_appindicator_menu(
     menu.append(copy_text_item)
     app._appindicator_copy_text_item = copy_text_item
 
-    confirm_text_item = Gtk.MenuItem(label="确认上次文字（记入词库）")
+    confirm_text_item = Gtk.MenuItem(label="确认上次文字（记入词库＋标金标）")
     confirm_text_item.connect("activate", lambda _: app.root.after(0, app.confirm_last_text_lexicon))
     confirm_text_item.set_sensitive(bool(app.state.last_run.text))
     menu.append(confirm_text_item)

@@ -235,6 +235,7 @@ def transcribe_all(provider, clips: list[dict]) -> list[dict]:
         hyp = str(getattr(result, "text", "") or "")
         row = {
             "id": clip["id"],
+            "gold": bool(clip.get("gold")),
             "duration_s": round(duration, 3),
             "elapsed_s": round(elapsed, 3),
             "rtf": round(elapsed / duration, 4) if duration else 0.0,
@@ -282,6 +283,7 @@ def cmd_run(args: argparse.Namespace) -> None:
         "arm": args.arm,
         "dataset": str(dataset_dir),
         "gold_references": all(c.get("gold") for c in clips),
+        "gold_clips": sum(1 for c in clips if c.get("gold")),
         "aggregate": aggregate(results),
         "clips": results,
     }
