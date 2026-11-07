@@ -32,6 +32,9 @@ Usage
 Run arms sequentially: each arm loads its model in its own process and the
 GPU (RTX 4070 Laptop 8GB) is shared with the production :8321 server,
 which this harness never touches (arms A/D use scratch ports 8331/8332).
+Confucius arms split clips over 24s into per-session chunks (production
+never feeds more than 24s per session) and run the scratch server with a
+120s session budget; scratch-server output is kept in server-<arm>.log.
 """
 from __future__ import annotations
 
@@ -42,6 +45,7 @@ import re
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 import wave
 from pathlib import Path
@@ -61,6 +65,17 @@ HOTKEY_CONFIG = HOME / ".config/recordian/hotkey.json"
 QWEN_MODEL_DIR = MAIN_REPO / "models/Qwen3-ASR-1.7B"
 Q8_GGUF_DIR = HOME / ".local/share/recordian/eval-models/q8"
 PROD_GGUF_DIR = MAIN_REPO / "models/Confucius4-R2T2-GGUF"
+
+# Scratch-server session budget: production caps a Confucius session at 30s
+# of audio (server DEFAULT_MAX_SESSION_SECONDS) and the eval set has 12 clips
+# over 30s (longest 98s). Raising the SCRATCH budget to 120s removes the hard
+# rejection; chunking below keeps each session in the regime production
+# itself uses (duration_guard.CONTINUOUS_SEGMENT_MAX_S = 24s), where the
+# streaming model stays near realtime (a whole 98s file in one session never
+# finishes: per-chunk cost grows with accumulated audio and EOS was still
+# unreached after 180s).
+SCRATCH_MAX_SESSION_SECONDS = 120.0
+CONFUCIUS_CHUNK_S = 24.0
 
 
 def norm(text: str) -> str:
@@ -141,7 +156,8 @@ def load_context() -> str:
         return ""
 
 
-def run_confuius_arm(arm: str, clips: list[dict], context: str) -> list[dict]:
+def run_confuius_arm(arm: str, clips: list[dict], context: str, *, server_log: Path | None = None,
+                      chunk_s: float | None = None, sink: list[dict] | None = None) -> list[dict]:
     if arm == "A":
         gguf_dir, gguf_model, port = PROD_GGUF_DIR, "Confucius4-R2T2-Q4_K_M.gguf", 8331
     else:  # D
@@ -166,6 +182,7 @@ def run_confuius_arm(arm: str, clips: list[dict], context: str) -> list[dict]:
         "--host", "127.0.0.1",
         "--port", str(port),
         "--max-queued-frames", "512",
+        "--max-session-seconds", str(SCRATCH_MAX_SESSION_SECONDS),
         "--token-file", str(TOKEN_FILE),
         "--warmup-wav", str(MAIN_REPO / "runtime/Confucius4-R2T2/resources/test.wav"),
         "--ready-file", str(ready_file),
@@ -175,14 +192,26 @@ def run_confuius_arm(arm: str, clips: list[dict], context: str) -> list[dict]:
     env["RECORDIAN_NATIVE_CORE"] = "required"
     gguf_libs = str(MAIN_REPO / "runtime/gguf-cuda-libs")
     env["LD_LIBRARY_PATH"] = gguf_libs + (":" + env["LD_LIBRARY_PATH"] if env.get("LD_LIBRARY_PATH") else "")
-    proc = subprocess.Popen(
-        cmd,
-        cwd=str(MAIN_REPO),
-        env=env,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        start_new_session=True,
-    )
+    # Scratch-server output used to go to DEVNULL, which hid the server side of
+    # every failure (the client deliberately never echoes the server error
+    # detail). Keep it in a file next to the arm output instead.
+    log_fp = open(server_log, "wb") if server_log is not None else None
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            cwd=str(MAIN_REPO),
+            env=env,
+            stdout=log_fp if log_fp is not None else subprocess.DEVNULL,
+            stderr=subprocess.STDOUT if log_fp is not None else subprocess.DEVNULL,
+            start_new_session=True,
+        )
+        return _run_confuius_with_server(proc, ready_file, arm, clips, context, port, chunk_s, sink)
+    finally:
+        if log_fp is not None:
+            log_fp.close()
+
+
+def _run_confuius_with_server(proc, ready_file, arm, clips, context, port, chunk_s, sink) -> list[dict]:
     try:
         deadline = time.monotonic() + 300
         while not ready_file.exists():
@@ -199,7 +228,7 @@ def run_confuius_arm(arm: str, clips: list[dict], context: str) -> list[dict]:
             context=context,
             timeout_s=60,
         )
-        return transcribe_all(provider, clips)
+        return transcribe_all(provider, clips, chunk_s=chunk_s, sink=sink)
     finally:
         try:
             os.killpg(proc.pid, signal.SIGTERM)
@@ -225,25 +254,62 @@ def run_qwen_arm(clips: list[dict], context: str) -> list[dict]:
     return transcribe_all(provider, clips)
 
 
-def transcribe_all(provider, clips: list[dict]) -> list[dict]:
+def chunk_wav(wav: Path, chunk_s: float, tmpdir: Path) -> list[Path]:
+    """Split a wav into <= chunk_s segments (same format); returns part paths."""
+    with wave.open(str(wav), "rb") as handle:
+        params = handle.getparams()
+        pcm = handle.readframes(handle.getnframes())
+    frames_per_chunk = max(1, int(chunk_s * params.framerate))
+    bytes_per_frame = params.sampwidth * params.nchannels
+    total_frames = len(pcm) // bytes_per_frame
+    parts: list[Path] = []
+    for i, start in enumerate(range(0, total_frames, frames_per_chunk)):
+        seg = pcm[start * bytes_per_frame : (start + frames_per_chunk) * bytes_per_frame]
+        part = tmpdir / f"{wav.stem}-chunk{i}.wav"
+        with wave.open(str(part), "wb") as out:
+            out.setparams(params)
+            out.writeframes(seg)
+        parts.append(part)
+    return parts
+
+
+def transcribe_all(provider, clips: list[dict], *, chunk_s: float | None = None,
+                   sink: list[dict] | None = None) -> list[dict]:
+    """Transcribe every clip; long clips are split into <= chunk_s sessions.
+
+    A whole long file in one Confucius session never finishes (see module
+    constants), so each chunk gets its own session and the hypotheses are
+    concatenated. ``sink`` (when given) receives each finished row immediately
+    so a mid-run crash does not lose completed clips.
+    """
     results = []
-    for clip in clips:
-        duration = wav_duration_s(clip["wav"])
-        start = time.perf_counter()
-        result = provider.transcribe_file(clip["wav"], hotwords=[])
-        elapsed = time.perf_counter() - start
-        hyp = str(getattr(result, "text", "") or "")
-        row = {
-            "id": clip["id"],
-            "gold": bool(clip.get("gold")),
-            "duration_s": round(duration, 3),
-            "elapsed_s": round(elapsed, 3),
-            "rtf": round(elapsed / duration, 4) if duration else 0.0,
-            "hypothesis": hyp,
-            **score_clip(clip["reference"], hyp),
-        }
-        results.append(row)
-        print(f"  {clip['id']}: cer={row['cer']:.3f} rtf={row['rtf']:.3f}", flush=True)
+    with tempfile.TemporaryDirectory(prefix="asr-ab-chunks-") as tmp:
+        for clip in clips:
+            duration = wav_duration_s(clip["wav"])
+            start = time.perf_counter()
+            if chunk_s and duration > chunk_s:
+                parts = chunk_wav(clip["wav"], chunk_s, Path(tmp))
+                hyp = "".join(
+                    str(getattr(provider.transcribe_file(part, hotwords=[]), "text", "") or "")
+                    for part in parts
+                )
+            else:
+                result = provider.transcribe_file(clip["wav"], hotwords=[])
+                hyp = str(getattr(result, "text", "") or "")
+            elapsed = time.perf_counter() - start
+            row = {
+                "id": clip["id"],
+                "gold": bool(clip.get("gold")),
+                "duration_s": round(duration, 3),
+                "elapsed_s": round(elapsed, 3),
+                "rtf": round(elapsed / duration, 4) if duration else 0.0,
+                "hypothesis": hyp,
+                **score_clip(clip["reference"], hyp),
+            }
+            results.append(row)
+            if sink is not None:
+                sink.append(row)
+            print(f"  {clip['id']}: cer={row['cer']:.3f} rtf={row['rtf']:.3f}", flush=True)
     return results
 
 
@@ -266,6 +332,22 @@ def aggregate(results: list[dict]) -> dict:
     }
 
 
+def build_payload(arm: str, dataset_dir: Path, clips: list[dict], results: list[dict],
+                  *, partial: bool = False, error: str = "") -> dict:
+    payload = {
+        "arm": arm,
+        "dataset": str(dataset_dir),
+        "gold_references": all(c.get("gold") for c in clips),
+        "gold_clips": sum(1 for c in clips if c.get("gold")),
+        "aggregate": aggregate(results),
+        "clips": results,
+    }
+    if partial:
+        payload["partial"] = True
+        payload["error"] = error
+    return payload
+
+
 def cmd_run(args: argparse.Namespace) -> None:
     dataset_dir = Path(args.dataset).expanduser()
     clips = load_dataset(dataset_dir)
@@ -273,21 +355,29 @@ def cmd_run(args: argparse.Namespace) -> None:
         raise SystemExit(f"no clips found in {dataset_dir}")
     print(f"arm {args.arm}: {len(clips)} clips from {dataset_dir}")
     context = load_context()
-    if args.arm in ("A", "D"):
-        results = run_confuius_arm(args.arm, clips, context)
-    elif args.arm == "B":
-        results = run_qwen_arm(clips, context)
-    else:
-        raise SystemExit("arm C is computed by the report step, not run")
-    payload = {
-        "arm": args.arm,
-        "dataset": str(dataset_dir),
-        "gold_references": all(c.get("gold") for c in clips),
-        "gold_clips": sum(1 for c in clips if c.get("gold")),
-        "aggregate": aggregate(results),
-        "clips": results,
-    }
     out = Path(args.out)
+    completed: list[dict] = []
+    try:
+        if args.arm in ("A", "D"):
+            server_log = out.with_name(f"server-{args.arm}.log")
+            results = run_confuius_arm(
+                args.arm, clips, context, server_log=server_log,
+                chunk_s=CONFUCIUS_CHUNK_S, sink=completed,
+            )
+        elif args.arm == "B":
+            results = run_qwen_arm(clips, context)
+        else:
+            raise SystemExit("arm C is computed by the report step, not run")
+    except Exception as exc:
+        # Never lose completed clips to a mid-run crash again: persist the
+        # partial arm output, then re-raise so the failure stays visible.
+        if completed:
+            payload = build_payload(args.arm, dataset_dir, clips, completed,
+                                    partial=True, error=f"{type(exc).__name__}: {exc}")
+            out.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+            print(f"arm {args.arm} PARTIAL: {len(completed)}/{len(clips)} clips saved -> {out}")
+        raise
+    payload = build_payload(args.arm, dataset_dir, clips, results)
     out.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     agg = payload["aggregate"]
     print(
