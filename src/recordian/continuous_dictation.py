@@ -1,8 +1,16 @@
 """Sample-counted Confucius segments on one microphone and one IME token.
 
 The server keeps its 30s sample cap. This module never opens a second
-recorder and never calls BeginSession again. Segment text goes through
+recorder and never calls BeginSession itself. Segment text goes through
 ``commit_segment``; the user-stop tail goes through ``CommitSession`` once.
+
+The one exception to the one-token rule is the caller-provided
+``rebind_session`` factory: when the plugin invalidates the token
+(ime_stale — focus loss, context change, web editors replacing the
+preedit), a rebind re-validates focus through the plugin's own
+BeginSession and only re-shows PREEDIT on the new token. Commits still
+go through the validated session exactly as before, and a refused
+rebind fails closed exactly as a stale did before rebind existed.
 
 Raw seam rule: ASR text stays RAW until after the held-tail split/join.
 Formatting (corrector.finish) and normalisation (spoken numbers/URLs) run
@@ -26,6 +34,10 @@ from .realtime_asr import _pcm_rms, _split_held_tail
 
 _HISTORY_CHARS = 262144
 _PUSH_WAIT_S = 8.0
+# Per-turn budget for ime_stale rebinds. Fixed on purpose (same spirit as
+# duration_guard): a turn that keeps losing its IME context must still
+# fail closed instead of BeginSession-looping against a hostile editor.
+MAX_IME_REBINDS = 3
 
 
 def join_raw_tail(held_raw: str, hypothesis: str) -> str:
@@ -75,12 +87,19 @@ def run_continuous_dictation(
     refine_enabled: bool,
     auto_hard_enter: bool,
     streaming_committer: Any,
+    rebind_session: Callable[[], Any] | None = None,
 ) -> None:
     """Rotate ASR sockets until the reader EOFs or the turn fails closed."""
     from .linux_commit import paste_to_enter_delay_seconds, send_hard_enter
 
     worker.continuous = True
     backend_name = str(getattr(session, "backend_name", "fcitx"))
+    # Mutable holder for the composition session: an ime_stale rebind swaps
+    # the CURRENT session so every closure below (preedit, segment commit,
+    # final commit, fail-cancel, keepalive) acts on the live token, never
+    # on the invalidated one.
+    live_session: dict[str, Any] = {"current": session}
+    rebinds_left = MAX_IME_REBINDS
     bps = 4 * max(1, int(channels))
     rate = max(1, int(sample_rate))
     held_raw = ""
@@ -166,10 +185,54 @@ def run_continuous_dictation(
         # prefix is preserved: commit_segment results stay, the dangling
         # token must not leak a live preedit. Best-effort, never a retry.
         try:
-            session.cancel()
+            live_session["current"].cancel()
         except Exception:  # noqa: BLE001
             pass
         _fatal(reason)
+
+    def _is_stale_result(result: Any) -> bool:
+        return str(getattr(result, "outcome", "") or "") == "stale" or "preedit_stale" in str(
+            getattr(result, "detail", "")
+        )
+
+    def _try_rebind() -> bool:
+        """Best-effort BeginSession rebind after the token went stale.
+
+        Safety: the factory goes through the plugin's own BeginSession,
+        which itself refuses when there is no valid focused non-sensitive
+        context — so a successful rebind is exactly as trustworthy as the
+        initial bind, and after it we only re-show PREEDIT. Returns False
+        (the caller then fails closed, as before rebind existed) when no
+        factory was given, the per-turn budget is spent, a cancel is
+        pending, or the factory declines (returns None / raises — e.g.
+        CompositionRefusedError when focus is truly gone).
+        """
+        nonlocal rebinds_left
+        if rebind_session is None or rebinds_left <= 0 or cancel_event.is_set():
+            return False
+        rebinds_left -= 1
+        try:
+            live_session["current"].cancel()
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            rebound = rebind_session()
+        except Exception:  # noqa: BLE001
+            return False
+        if rebound is None:
+            return False
+        live_session["current"] = rebound
+        on_state({"event": "ime_session_rebound", "backend": backend_name})
+        on_state(
+            {
+                "event": "log",
+                "message": (
+                    "ime_session_rebound: composition session re-bound after "
+                    "stale; resuming with preedit only, no commit replay"
+                ),
+            }
+        )
+        return True
 
     def _cancel_live() -> None:
         cancel_event.set()
@@ -282,16 +345,23 @@ def run_continuous_dictation(
         last_display = shown
         if not shown and not refresh:
             return True
-        result = session.update_preedit(shown)
+        result = live_session["current"].update_preedit(shown)
+        if _is_stale_result(result) and _try_rebind():
+            # The invalidated token is gone and the new session starts with
+            # an empty preedit: show the same text once on it. A second
+            # stale falls through to the fail-closed path below — rebind is
+            # recovery, never a retry loop.
+            last_display = ""
+            result = live_session["current"].update_preedit(shown)
+            last_display = shown
         if bool(getattr(result, "committed", False)):
             ime_idle_samples = 0
-            if not bool(getattr(session, "supports_segments", False)):
+            if not bool(getattr(live_session["current"], "supports_segments", False)):
                 commit_segments = False
             if changed:
                 on_state({"event": "realtime_asr_partial", "text": shown})
             return True
-        outcome = str(getattr(result, "outcome", "") or "")
-        if outcome == "stale" or "preedit_stale" in str(getattr(result, "detail", "")):
+        if _is_stale_result(result):
             _fail("ime_stale", outcome="stale")
         else:
             _fail(f"ime_preedit_failed:{getattr(result, 'detail', '')}", outcome="uncertain")
@@ -352,12 +422,22 @@ def run_continuous_dictation(
         if cancel_event.is_set():
             _fail("realtime_cancelled", outcome="cancelled")
             return False
-        result = session.commit_segment(canonical)
+        result = live_session["current"].commit_segment(canonical)
         if not bool(getattr(result, "committed", False)):
             outcome = str(getattr(result, "outcome", "") or "uncertain")
             if outcome == "buffered":
                 commit_segments = False
                 return _buffer_piece(canonical, already_shown=True)
+            if outcome == "stale" and _try_rebind():
+                # NEVER retry commit_segment on the new token: whether the
+                # stale piece was written is not the question here (a stale
+                # reply means the plugin rejected it), but replaying a
+                # segment commit is exactly how duplicates happen. The piece
+                # was never committed, so degrade it — and the rest of the
+                # turn — to buffered mode: it is re-preedited on the new
+                # session and lands via the one final CommitSession.
+                commit_segments = False
+                return _buffer_piece(canonical)
             if outcome not in {"stale", "uncertain"}:
                 outcome = "uncertain"
             _fail(f"segment_commit_{outcome}", outcome=outcome)
@@ -452,7 +532,7 @@ def run_continuous_dictation(
             return False
         if refine_enabled and int(worker.segments_committed) == 0 and final_text.strip():
             _note(canonical)
-            worker.composition_session = session
+            worker.composition_session = live_session["current"]
             worker.outcome = "released_for_refine"
             worker.commit_info = {
                 "backend": backend_name,
@@ -464,7 +544,7 @@ def run_continuous_dictation(
             return True
         if not final_text.strip():
             try:
-                session.cancel()
+                live_session["current"].cancel()
             except Exception:  # noqa: BLE001
                 pass
             if int(worker.segments_committed) > 0:
@@ -496,7 +576,7 @@ def run_continuous_dictation(
         if cancel_event.is_set():
             _fail("realtime_cancelled_before_commit", outcome="cancelled")
             return False
-        result = session.commit(final_text)
+        result = live_session["current"].commit(final_text)
         committed = bool(getattr(result, "committed", False))
         outcome = str(getattr(result, "outcome", "") or ("committed" if committed else "uncertain"))
         if not committed:

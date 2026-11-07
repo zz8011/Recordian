@@ -20,7 +20,7 @@ from types import SimpleNamespace
 import pytest
 
 from recordian import duration_guard as guard
-from recordian.continuous_dictation import join_raw_tail, run_continuous_dictation
+from recordian.continuous_dictation import MAX_IME_REBINDS, join_raw_tail, run_continuous_dictation
 from recordian.linux_dictate import MonitorOverflowError
 from recordian.realtime_asr import _RealtimeASRWorkerHandle, _split_held_tail
 from recordian.streaming_correction import corrector_from_args
@@ -225,10 +225,12 @@ class _Harness:
         auto_hard_enter: bool = False,
         hotwords: list[str] | None = None,
         build_corrector: object = None,
+        rebind_session: object = None,
     ) -> None:
         self.reader = reader
         self.provider = provider
         self.session = session or _FakeCompositionSession()
+        self.rebind_session = rebind_session
         self.events: list[dict[str, object]] = []
         self.fatals: list[str] = []
         self.corrector_contexts: list[str] = []
@@ -265,6 +267,7 @@ class _Harness:
             refine_enabled=self.refine_enabled,
             auto_hard_enter=self.auto_hard_enter,
             streaming_committer=SimpleNamespace(backend_name="fcitx"),
+            rebind_session=self.rebind_session,
         )
         return self.worker
 
@@ -852,6 +855,153 @@ def test_stale_preedit_stops_without_any_commit() -> None:
     assert session.segments == []
     assert session.commits == []
     assert h.fatals == ["ime_stale"]
+
+
+# ---------------------------------------------------------------------------
+# ime_stale rebind: re-validate through BeginSession, resume preedit-only
+# ---------------------------------------------------------------------------
+
+def test_preedit_stale_rebinds_and_turn_completes() -> None:
+    stale_session = _FakeCompositionSession()
+    stale_session.preedit_result = _Result(False, outcome="stale", detail="preedit_stale")
+    rebound = _FakeCompositionSession()
+    rebind_calls: list[int] = []
+
+    def _rebind() -> _FakeCompositionSession:
+        rebind_calls.append(1)
+        return rebound
+
+    provider = _FakeProvider(["文本"], partials=["文本"])
+    h = _Harness(
+        reader=_Reader(_speech(1.0)), provider=provider, session=stale_session,
+        rebind_session=_rebind,
+    )
+    worker = h.run()
+
+    assert rebind_calls == [1]
+    assert worker.outcome == "committed"
+    assert worker.session_stale is False, "a recovered rebind is not a stale turn"
+    assert h.fatals == []
+    # The text was committed exactly once, on the rebound session only.
+    assert rebound.commits == ["文本"]
+    assert rebound.segments == []
+    assert stale_session.commits == []
+    assert stale_session.segments == []
+    assert stale_session.cancelled >= 1, "the invalidated token is retracted"
+    assert worker.final_text == "文本"
+    assert any(e.get("event") == "ime_session_rebound" for e in h.events)
+
+
+def test_segment_commit_stale_rebinds_and_buffers_piece(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _short_segment_settings(monkeypatch)
+    payload = _speech(1.5) + _silence(0.4) + _speech(1.5) + _silence(0.4) + _speech(0.5)
+    session = _FakeCompositionSession()
+    session.fail_segment_at = 1
+    session.fail_segment_outcome = "stale"
+    rebound = _FakeCompositionSession()
+    provider = _FakeProvider(["第一段。", "第二段。", "第三段。"])
+    h = _Harness(
+        reader=_Reader(payload), provider=provider, session=session,
+        rebind_session=lambda: rebound,
+    )
+    worker = h.run()
+
+    assert worker.outcome == "committed"
+    assert worker.session_stale is False
+    assert h.fatals == []
+    # commit_segment was attempted once on the dead token and NEVER retried
+    # on the new one: the piece degraded to buffered mode and everything
+    # landed via the single final commit on the rebound session.
+    assert session.segments == ["第一段。"]
+    assert session.commits == []
+    assert rebound.segments == []
+    assert rebound.commits == ["第一段。第二段。第三段。"]
+    assert worker.segments_committed == 0
+    assert worker.final_text == "第一段。第二段。第三段。"
+
+
+def test_rebind_refused_keeps_fail_closed() -> None:
+    session = _FakeCompositionSession()
+    session.preedit_result = _Result(False, outcome="stale", detail="preedit_stale")
+    rebind_calls: list[int] = []
+
+    def _refused() -> None:
+        rebind_calls.append(1)
+        return None
+
+    provider = _FakeProvider(["不应等到最终识别"], partials=["已经说到一半"])
+    h = _Harness(
+        reader=_Reader(_speech(1.0)), provider=provider, session=session,
+        rebind_session=_refused,
+    )
+    worker = h.run()
+
+    assert rebind_calls == [1]
+    assert worker.session_stale is True
+    assert worker.outcome == "stale"
+    assert session.segments == []
+    assert session.commits == []
+    assert h.fatals == ["ime_stale"]
+    # The uncommitted text survives for manual copy, exactly as before.
+    assert worker.commit_info["recovery_text"] == "已经说到一半"
+    assert worker.final_text == "已经说到一半"
+
+
+class _StaleOnNewTextSession(_FakeCompositionSession):
+    """Stale the first time a text is shown (a web editor replaced the
+    preedit); the same text re-shown afterwards is accepted. The seen-set
+    is shared across sessions, like the editor state that caused it."""
+
+    def __init__(self, seen: set[str]) -> None:
+        super().__init__()
+        self._seen = seen
+
+    def update_preedit(self, text: str) -> _Result:
+        self.preedits.append(text)
+        if text not in self._seen:
+            self._seen.add(text)
+            return _Result(False, outcome="stale", detail="preedit_stale")
+        return _Result(True)
+
+
+def test_rebind_budget_exhausted_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+    _short_segment_settings(monkeypatch)
+    seen: set[str] = set()
+    rebind_calls: list[int] = []
+    created: list[_StaleOnNewTextSession] = []
+
+    def _rebind() -> _StaleOnNewTextSession:
+        rebind_calls.append(1)
+        session = _StaleOnNewTextSession(seen)
+        created.append(session)
+        return session
+
+    payload = (_speech(1.5) + _silence(0.4)) * 4 + _speech(0.5)
+    provider = _FakeProvider(["第一段。", "第二段。", "第三段。", "第四段。", "尾巴。"])
+    h = _Harness(
+        reader=_Reader(payload), provider=provider,
+        session=_StaleOnNewTextSession(seen), rebind_session=_rebind,
+    )
+    worker = h.run()
+
+    # One rebind per segment preedit; the budget (MAX_IME_REBINDS) covers
+    # three recoveries, the fourth stale fails closed with the prefix kept.
+    assert len(rebind_calls) == MAX_IME_REBINDS == 3
+    assert worker.outcome == "stale"
+    assert worker.session_stale is True
+    assert worker.segments_committed == 3
+    assert worker.commit_info["committed"] is True
+    assert "continuous_prefix_kept" in str(worker.commit_info["detail"])
+    assert h.fatals
+    # Committed prefix plus the uncommitted fourth segment stay recoverable.
+    assert worker.final_text == "第一段。第二段。第三段。第四段。"
+    # Exactly three segment commits happened (one per recovered segment),
+    # each exactly once, and no session ever received a final commit.
+    all_sessions = [h.session, *created]
+    assert sum(len(s.segments) for s in all_sessions) == 3
+    assert all(s.commits == [] for s in all_sessions)
 
 
 @pytest.mark.parametrize("outcome", ["stale", "uncertain"])

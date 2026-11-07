@@ -615,6 +615,23 @@ def _start_realtime_asr_worker(
                 worker.continuous = True
                 from .continuous_dictation import run_continuous_dictation
 
+                def _rebind_composition_session() -> Any:
+                    # Rebind after ime_stale goes through EXACTLY the same
+                    # creation path as the initial session above, so the
+                    # plugin's own BeginSession validation decides whether
+                    # a focused non-sensitive context exists. A refusal (or
+                    # a pending cancel) means focus is truly gone: translate
+                    # it to None so the continuous worker fails closed
+                    # exactly as it did before rebind existed.
+                    if cancel_event.is_set():
+                        return None
+                    try:
+                        return open_composition_session(streaming_committer)
+                    except CompositionRefusedError:
+                        return None
+                    except Exception:  # noqa: BLE001
+                        return None
+
                 run_continuous_dictation(
                     worker=worker,
                     session=session,
@@ -633,6 +650,7 @@ def _start_realtime_asr_worker(
                     refine_enabled=refine_enabled,
                     auto_hard_enter=auto_hard_enter,
                     streaming_committer=streaming_committer,
+                    rebind_session=_rebind_composition_session,
                 )
                 return
 
