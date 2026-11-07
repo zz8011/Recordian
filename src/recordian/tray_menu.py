@@ -165,6 +165,12 @@ def build_appindicator_menu(
     menu.append(copy_text_item)
     app._appindicator_copy_text_item = copy_text_item
 
+    confirm_text_item = Gtk.MenuItem(label="确认上次文字（记入词库）")
+    confirm_text_item.connect("activate", lambda _: app.root.after(0, app.confirm_last_text_lexicon))
+    confirm_text_item.set_sensitive(bool(app.state.last_run.text))
+    menu.append(confirm_text_item)
+    app._appindicator_confirm_text_item = confirm_text_item
+
     menu.append(Gtk.SeparatorMenuItem())
 
     text_refine_enabled = bool(config.get("enable_text_refine", False))
@@ -333,6 +339,9 @@ def update_tray_menu(app: Any) -> None:
         copy_text_item = getattr(app, "_appindicator_copy_text_item", None)
         if copy_text_item is not None:
             copy_text_item.set_sensitive(bool(app.state.last_run.text))
+        confirm_text_item = getattr(app, "_appindicator_confirm_text_item", None)
+        if confirm_text_item is not None:
+            confirm_text_item.set_sensitive(bool(app.state.last_run.text))
         _set_check_active(
             app,
             getattr(app, "_appindicator_streaming_item", None),

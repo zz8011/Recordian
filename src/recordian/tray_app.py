@@ -103,6 +103,23 @@ def notify_desktop(title: str, body: str, *, urgency: str = "normal", backend: s
         pass
 
 
+def confirm_text_in_lexicon(db_path: Path, text: str) -> int:
+    """Record ``text`` as user-confirmed in the auto lexicon at ``db_path``.
+
+    Opens a short-lived handle (the dictation backend keeps its own;
+    SQLite WAL allows both) and closes it before returning. Returns the
+    number of terms recorded. Raises on storage failure; callers treat
+    confirmation as best-effort.
+    """
+    from recordian.auto_lexicon import AutoLexicon
+
+    lexicon = AutoLexicon(db_path=db_path)
+    try:
+        return lexicon.observe_accepted(text, source="user_confirmed")
+    finally:
+        lexicon.close()
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Recordian tray GUI with waveform overlay.")
     parser.add_argument("--config-path", default=DEFAULT_CONFIG_PATH)
@@ -726,6 +743,30 @@ class TrayApp:
         if not self.state.last_run.text:
             return
         self._copy_text_to_clipboard(self.state.last_run.text)
+
+    def confirm_last_text_lexicon(self) -> None:
+        """记入词库：用户显式确认上次文字无误（user_confirmed 学习信号）。
+
+        This is the only tray action that feeds the auto-lexicon's
+        ``user_confirmed`` channel: the user looked at the last result and
+        vouched for it. The write is a short-lived AutoLexicon handle on
+        the configured DB (SQLite WAL tolerates the backend's own handle);
+        it is best-effort and never surfaces text content in logs.
+        """
+        text = self.state.last_run.text
+        if not text:
+            return
+        try:
+            config = self._get_cached_config()
+            db_raw = str(config.get("auto_lexicon_db", DEFAULT_AUTO_LEXICON_DB_PATH)).strip()
+            learned = confirm_text_in_lexicon(Path(db_raw).expanduser(), text)
+            self.events.put(
+                {"event": "log", "message": f"已确认上次文字并记入词库（{learned} 个词条）"}
+            )
+        except Exception as exc:  # noqa: BLE001
+            self.events.put(
+                {"event": "log", "message": f"记入词库失败: {type(exc).__name__}"}
+            )
 
     def switch_preset(self, preset_name: str) -> None:
         """切换文字优化 preset"""

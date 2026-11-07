@@ -92,19 +92,111 @@ def test_pipeline_sources_do_not_confirm_terms(tmp_path: Path) -> None:
         lexicon.observe_accepted("Recordian 项目", source="asr")
         lexicon.observe_accepted("Recordian 发布", source="refined")
         lexicon.observe_accepted("Recordian 说明", source="corrected")
-        assert lexicon.compose_hotwords([]) == []
         info = lexicon.term_info("recordian")
         assert info is not None
+        # Pipeline sources never *confirm*: both counters stay at zero and
+        # no user_confirmed source row appears.
         assert info["accept_count"] == 0
         assert info["confirm_count"] == 0
         assert info["sources"].get("user_confirmed", 0) == 0
         assert info["sources"]["asr"] >= 1
         assert info["sources"]["refined"] >= 1
         assert info["sources"]["corrected"] >= 1
+        # But corrected/refined observations are qualifying evidence for
+        # promotion (min_accepts=1 here): the term may be promoted without
+        # ever being "confirmed".
+        assert "recordian" in lexicon.compose_hotwords([])
         lexicon.observe_accepted("Recordian 定稿", source="user_confirmed")
         confirmed = lexicon.term_info("recordian")
         assert confirmed is not None
         assert confirmed["confirm_count"] == 1
+        assert "recordian" in lexicon.compose_hotwords([])
+    finally:
+        lexicon.close()
+
+
+def test_asr_only_observations_never_promote(tmp_path: Path) -> None:
+    """Anti self-poisoning: a repeated raw-ASR error must not promote."""
+    db_path = tmp_path / "auto_lexicon.db"
+    lexicon = AutoLexicon(db_path=db_path, min_accepts=2, max_terms=1000)
+    try:
+        for _ in range(5):
+            lexicon.observe_accepted("Recordian 项目", source="asr")
+        assert "recordian" not in lexicon.compose_hotwords([])
+        info = lexicon.term_info("recordian")
+        assert info is not None
+        assert info["sources"]["asr"] == 5
+        assert info["accept_count"] == 0
+    finally:
+        lexicon.close()
+
+
+def test_corrected_observations_promote_at_threshold(tmp_path: Path) -> None:
+    db_path = tmp_path / "auto_lexicon.db"
+    lexicon = AutoLexicon(db_path=db_path, min_accepts=2, max_terms=1000)
+    try:
+        lexicon.observe_accepted("Recordian 项目", source="corrected")
+        assert "recordian" not in lexicon.compose_hotwords([])
+        lexicon.observe_accepted("Recordian 发布", source="corrected")
+        assert "recordian" in lexicon.compose_hotwords([])
+    finally:
+        lexicon.close()
+
+
+def test_mixed_refined_and_corrected_observations_promote(tmp_path: Path) -> None:
+    db_path = tmp_path / "auto_lexicon.db"
+    lexicon = AutoLexicon(db_path=db_path, min_accepts=2, max_terms=1000)
+    try:
+        lexicon.observe_accepted("Recordian 项目", source="asr")
+        lexicon.observe_accepted("Recordian 项目", source="refined")
+        assert "recordian" not in lexicon.compose_hotwords([])
+        lexicon.observe_accepted("Recordian 项目", source="corrected")
+        assert "recordian" in lexicon.compose_hotwords([])
+    finally:
+        lexicon.close()
+
+
+def test_user_rejection_blocks_promotion_until_reconfirmed(tmp_path: Path) -> None:
+    db_path = tmp_path / "auto_lexicon.db"
+    lexicon = AutoLexicon(db_path=db_path, min_accepts=2, max_terms=1000)
+    try:
+        lexicon.observe_accepted("Recordian 项目", source="corrected")
+        lexicon.observe_accepted("Recordian 发布", source="corrected")
+        assert "recordian" in lexicon.compose_hotwords([])
+
+        struck = lexicon.record_user_rejection("Recordian 项目")
+        assert struck >= 1
+        assert "recordian" not in lexicon.compose_hotwords([])
+        info = lexicon.term_info("recordian")
+        assert info is not None
+        assert info["strike_count"] == 1
+
+        # More pipeline evidence does not clear a user rejection.
+        lexicon.observe_accepted("Recordian 说明", source="corrected")
+        assert "recordian" not in lexicon.compose_hotwords([])
+
+        # Only an explicit user confirmation clears strikes and re-promotes.
+        lexicon.observe_accepted("Recordian 定稿", source="user_confirmed")
+        assert "recordian" in lexicon.compose_hotwords([])
+        confirmed = lexicon.term_info("recordian")
+        assert confirmed is not None
+        assert confirmed["strike_count"] == 0
+    finally:
+        lexicon.close()
+
+
+def test_confirm_text_in_lexicon_records_user_confirmed(tmp_path: Path) -> None:
+    from recordian.tray_app import confirm_text_in_lexicon
+
+    db_path = tmp_path / "auto_lexicon.db"
+    learned = confirm_text_in_lexicon(db_path, "Recordian 项目")
+    assert learned >= 1
+    lexicon = AutoLexicon(db_path=db_path, min_accepts=2, max_terms=1000)
+    try:
+        info = lexicon.term_info("recordian")
+        assert info is not None
+        assert info["confirm_count"] == 1
+        assert info["sources"]["user_confirmed"] == 1
         assert "recordian" in lexicon.compose_hotwords([])
     finally:
         lexicon.close()

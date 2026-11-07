@@ -197,7 +197,8 @@ class AutoLexicon:
                     last_accept INTEGER NOT NULL DEFAULT 0,
                     blocked INTEGER NOT NULL DEFAULT 0,
                     last_source TEXT NOT NULL DEFAULT '',
-                    confirm_count INTEGER NOT NULL DEFAULT 0
+                    confirm_count INTEGER NOT NULL DEFAULT 0,
+                    strike_count INTEGER NOT NULL DEFAULT 0
                 )
                 """
             )
@@ -217,6 +218,10 @@ class AutoLexicon:
         if "confirm_count" not in columns:
             self._conn.execute(
                 "ALTER TABLE lexicon_terms ADD COLUMN confirm_count INTEGER NOT NULL DEFAULT 0"
+            )
+        if "strike_count" not in columns:
+            self._conn.execute(
+                "ALTER TABLE lexicon_terms ADD COLUMN strike_count INTEGER NOT NULL DEFAULT 0"
             )
         self._conn.execute(
             """
@@ -252,16 +257,40 @@ class AutoLexicon:
         auto_budget = min(self.max_auto_hotwords, self.max_hotwords - len(merged))
         auto_added = 0
         with self._lock:
+            # Promotion gate (anti self-poisoning): a term is eligible only
+            # when it has real evidence behind it —
+            #   * the legacy/confirmed accept counter reached min_accepts, or
+            #   * the user explicitly confirmed it once, or
+            #   * it was observed at least min_accepts times in text that a
+            #     deterministic correction or an LLM refine produced
+            #     (sources 'corrected' / 'refined').
+            # Observations from raw ASR output alone NEVER promote: a
+            # repeated recognition error must not bias future recognition.
+            # Terms the user rejected (strike_count > 0) stay out until a
+            # later user confirmation clears the strikes.
             cursor = self._conn.execute(
                 """
-                SELECT term
-                FROM lexicon_terms
-                WHERE blocked = 0
-                  AND accept_count >= ?
-                ORDER BY accept_count DESC, last_accept DESC
+                SELECT t.term
+                FROM lexicon_terms t
+                LEFT JOIN (
+                    SELECT term, SUM(count) AS qualifying
+                    FROM lexicon_term_sources
+                    WHERE source IN ('corrected', 'refined')
+                    GROUP BY term
+                ) q ON q.term = t.term
+                WHERE t.blocked = 0
+                  AND t.strike_count = 0
+                  AND (
+                        t.accept_count >= ?
+                        OR t.confirm_count >= 1
+                        OR COALESCE(q.qualifying, 0) >= ?
+                      )
+                ORDER BY t.confirm_count DESC,
+                         (t.accept_count + COALESCE(q.qualifying, 0)) DESC,
+                         t.last_accept DESC
                 LIMIT ?
                 """,
-                (self.min_accepts, self.max_terms),
+                (self.min_accepts, self.min_accepts, self.max_terms),
             )
             for (term,) in cursor:
                 if auto_added >= auto_budget:
@@ -294,8 +323,12 @@ class AutoLexicon:
         ``accept_count`` and ``confirm_count``.
 
         ``source='asr'``, ``'refined'``, and ``'corrected'`` increment
-        ``seen_count`` only. They do not become confirmed hotwords. Any other
-        explicit source is recorded the same way.
+        ``seen_count`` only; they never touch ``accept_count`` or
+        ``confirm_count``. Promotion is decided in ``compose_hotwords``:
+        raw-``asr`` observations never qualify on their own, while
+        ``corrected``/``refined`` observations count toward the
+        ``min_accepts`` threshold as qualifying evidence. Any other
+        explicit source is recorded the same way as ``asr``.
         """
         terms = extract_terms(text)
         if not terms:
@@ -345,12 +378,13 @@ class AutoLexicon:
                 """
                 INSERT INTO lexicon_terms (
                     term, seen_count, accept_count, last_seen, last_accept, blocked,
-                    last_source, confirm_count
-                ) VALUES (?, 1, 1, ?, ?, 0, ?, 1)
+                    last_source, confirm_count, strike_count
+                ) VALUES (?, 1, 1, ?, ?, 0, ?, 1, 0)
                 ON CONFLICT(term) DO UPDATE SET
                     seen_count = seen_count + 1,
                     accept_count = accept_count + 1,
                     confirm_count = confirm_count + 1,
+                    strike_count = 0,
                     last_seen = excluded.last_seen,
                     last_accept = excluded.last_accept,
                     last_source = excluded.last_source
@@ -398,12 +432,55 @@ class AutoLexicon:
             (term, source_name, now_ts),
         )
 
+    def record_user_rejection(self, text: str) -> int:
+        """Record that the user rejected the learned terms in ``text``.
+
+        Each extracted term gains a strike. A struck term is excluded from
+        hotword promotion until a later ``user_confirmed`` observation
+        clears its strikes — a term the user deleted or rewrote must not
+        sail back into the ASR context on pipeline evidence alone. Terms
+        never seen before are created with a strike so a rejected coinage
+        cannot promote later without confirmation either. Returns the
+        number of terms struck.
+        """
+        terms = extract_terms(text)
+        if not terms:
+            return 0
+        now_ts = int(time.time())
+        with self._lock:
+            with self._conn:
+                for term in terms:
+                    self._conn.execute(
+                        """
+                        INSERT INTO lexicon_terms (
+                            term, seen_count, accept_count, last_seen, last_accept,
+                            blocked, last_source, confirm_count, strike_count
+                        ) VALUES (?, 1, 0, ?, 0, 0, 'user_rejected', 0, 1)
+                        ON CONFLICT(term) DO UPDATE SET
+                            strike_count = strike_count + 1,
+                            last_seen = excluded.last_seen
+                        """,
+                        (term, now_ts),
+                    )
+                    self._conn.execute(
+                        """
+                        INSERT INTO lexicon_term_sources (term, source, count, last_seen)
+                        VALUES (?, 'user_rejected', 1, ?)
+                        ON CONFLICT(term, source) DO UPDATE SET
+                            count = count + 1,
+                            last_seen = excluded.last_seen
+                        """,
+                        (term, now_ts),
+                    )
+        return len(terms)
+
     def term_info(self, term: str) -> dict[str, object] | None:
         """Return stored counts for an exact term, including source rows."""
         with self._lock:
             row = self._conn.execute(
                 """
-                SELECT term, seen_count, accept_count, confirm_count, last_source, blocked
+                SELECT term, seen_count, accept_count, confirm_count, last_source, blocked,
+                       strike_count
                 FROM lexicon_terms
                 WHERE term = ?
                 """,
@@ -424,6 +501,7 @@ class AutoLexicon:
             "confirm_count": row[3],
             "last_source": row[4],
             "blocked": row[5],
+            "strike_count": row[6],
             "sources": sources,
         }
 
