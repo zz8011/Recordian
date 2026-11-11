@@ -181,6 +181,29 @@ def test_session_finish_after_cancel_raises() -> None:
         realtime.finish()
 
 
+def test_session_cancel_during_finish_stops_remaining_chunks(monkeypatch: pytest.MonkeyPatch) -> None:
+    import recordian.providers.qwen_service_asr as module
+
+    monkeypatch.setattr(module, "_FINISH_CHUNK_S", 2.0)
+    session = _FakeSession([_ok("甲"), _ok("乙"), _ok("丙")])
+    provider = _provider(session)
+    realtime = provider.start_realtime_session(hotwords=[])
+    realtime.push_audio(_f32_silence(5.0))
+    original_post = provider._post_transcribe
+
+    def post_then_cancel(*args, **kwargs):
+        data = original_post(*args, **kwargs)
+        realtime.cancel()  # 第一块解码完成后用户取消
+        return data
+
+    monkeypatch.setattr(provider, "_post_transcribe", post_then_cancel)
+
+    with pytest.raises(RuntimeError, match="cancelled"):
+        realtime.finish()
+
+    assert len(session.posts) == 1  # 剩余两块不再占用服务
+
+
 def test_session_preview_updates_partial_text() -> None:
     session = _FakeSession([_ok("预览文本"), _ok("最终文本")])
     provider = _provider(

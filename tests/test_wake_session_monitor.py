@@ -92,6 +92,25 @@ def test_effective_wake_auto_stop_silence_honors_short_user_pause() -> None:
 
 
 def test_persistent_soft_noise_cannot_keep_wake_recording_alive(monkeypatch) -> None:
+    clock, stops = _run_soft_noise_session(monkeypatch)
+    assert len(stops) == 1 and stops[0]['reason'] == 'silence'
+    assert 1.0 <= clock['now'] - clock['last_vad'] <= 1.4
+    assert 1.0 <= stops[0]['since_last_speech_s'] <= 1.07
+
+
+def test_disabled_owner_filter_does_not_extend_silence_threshold(monkeypatch, tmp_path) -> None:
+    # 配置要求声纹验证，但档案缺失 -> monitor 运行时已关闭过滤；静音阈值不应再被 extend 拉长。
+    clock, stops = _run_soft_noise_session(
+        monkeypatch,
+        args_extra={'wake_owner_verify': True, 'wake_owner_silence_extend_s': 2.0,
+                    'wake_owner_profile': str(tmp_path / 'missing-profile.json')},
+        state_extra={'voice_owner_filter_enabled': True},
+    )
+    assert len(stops) == 1 and stops[0]['reason'] == 'silence'
+    assert 1.0 <= clock['now'] - clock['last_vad'] <= 1.4
+
+
+def _run_soft_noise_session(monkeypatch, *, args_extra=None, state_extra=None):
     import sys
     import threading
 
@@ -115,13 +134,17 @@ def test_persistent_soft_noise_cannot_keep_wake_recording_alive(monkeypatch) -> 
     monkeypatch.setitem(sys.modules, 'webrtcvad', SimpleNamespace(Vad=Vad))
     monkeypatch.setattr(monitor.time, 'monotonic', lambda: clock['now'])
     monkeypatch.setattr(monitor, '_is_soft_keepalive_speech_frame', lambda **kw: True)
-    state = {'voice_session_active': True, 'voice_started_ts': 10.0, 'voice_last_speech_ts': 10.0}
+    state = {'voice_session_active': True, 'voice_started_ts': 10.0, 'voice_last_speech_ts': 10.0,
+             **(state_extra or {})}
     events = []
     stopped = threading.Event()
     context = WakeSessionMonitorContext(
-        args=argparse.Namespace(input_device='default', debug_diagnostics=True, wake_use_webrtcvad=True,
-            wake_auto_stop_silence_s=1.0, wake_owner_silence_extend_s=0.0, wake_owner_verify=False,
-            wake_speech_confirm_s=.18, wake_min_speech_s=.5, wake_no_speech_timeout_s=4.0),
+        args=argparse.Namespace(**{
+            'input_device': 'default', 'debug_diagnostics': True, 'wake_use_webrtcvad': True,
+            'wake_auto_stop_silence_s': 1.0, 'wake_owner_silence_extend_s': 0.0, 'wake_owner_verify': False,
+            'wake_speech_confirm_s': .18, 'wake_min_speech_s': .5, 'wake_no_speech_timeout_s': 4.0,
+            **(args_extra or {}),
+        }),
         record_handle=SimpleNamespace(monitor_stream=Stream(), monitor_sample_rate=16000,
             monitor_channels=1, process=SimpleNamespace(poll=lambda: 0)),
         provider=SimpleNamespace(), stop_event=threading.Event(), get_state=state.get,
@@ -131,7 +154,4 @@ def test_persistent_soft_noise_cannot_keep_wake_recording_alive(monkeypatch) -> 
     thread = start_wake_session_monitor(context)
     thread.join(timeout=2)
     assert not thread.is_alive() and stopped.wait(1)
-    stops = [e for e in events if e['event'] == 'voice_wake_auto_stop']
-    assert len(stops) == 1 and stops[0]['reason'] == 'silence'
-    assert 1.0 <= clock['now'] - clock['last_vad'] <= 1.4
-    assert 1.0 <= stops[0]['since_last_speech_s'] <= 1.07
+    return clock, [e for e in events if e['event'] == 'voice_wake_auto_stop']

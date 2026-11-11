@@ -42,6 +42,7 @@
 | --- | --- |
 | [`API.md`](API.md) | 核心模块的接口说明（配置管理、识别与精炼管线） |
 | [`CODE-AUDIT-2026-10-10.zh-CN.md`](CODE-AUDIT-2026-10-10.zh-CN.md) | 代码和安全审核、缺陷修复、依赖风险及验证边界 |
+| [`STATE-MACHINES.zh-CN.md`](STATE-MACHINES.zh-CN.md) | 隐式状态机清单：状态编码、已知矛盾、哪些被测试钉死、哪些不能动 |
 | [`SECURE-NETWORK.zh-CN.md`](SECURE-NETWORK.zh-CN.md) | 网络服务的鉴权、TLS、隧道与请求预算 |
 | [`RUST-RUNTIME.zh-CN.md`](RUST-RUNTIME.zh-CN.md) | Rust ABI1、离线构建、平台 wheel、双 Python 环境部署、显式回滚、已测 CPU/全回归与待完成的模型验收 |
 | [`../INDEX.md`](../INDEX.md) | 项目结构、模块地图与「改哪里」导航 |

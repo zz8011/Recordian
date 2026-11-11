@@ -447,8 +447,9 @@ def start_wake_session_monitor(context: WakeSessionMonitorContext) -> threading.
                 base_silence_s = _effective_wake_auto_stop_silence_s(
                     float(getattr(context.args, "wake_auto_stop_silence_s", 1.5))
                 )
-                owner_filter_enabled_runtime = bool(getattr(context.args, "wake_owner_verify", False))
-                if owner_filter_enabled_runtime:
+                # 读运行时实际结果：声纹档案缺失/版本不符时 owner_filter_enabled 已被置 False，
+                # 不能再看 args.wake_owner_verify（配置意图），否则静音阈值仍会被错误延长。
+                if owner_filter_enabled:
                     owner_active = bool(context.get_state("voice_owner_active"))
                     if owner_active:
                         owner_extend_s = max(0.0, float(getattr(context.args, "wake_owner_silence_extend_s", 0.5)))
