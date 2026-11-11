@@ -449,9 +449,12 @@ class TrayApp:
                     self.overlay.set_state("idle", detail)
                     self._schedule_off_cue_from_overlay("idle", detail)
         elif et == "busy":
-            self.state.status = "busy"
-            self.state.detail = "Busy"
-            self.overlay.set_state("processing", "Still processing previous input")
+            # 录音期间 controller 的 lock 也被持有：此时再按热键同样会发 busy，
+            # 不能把正在进行的录音降级成 busy（会隐藏 overlay、停掉 stream_partial 刷新）。
+            if self.state.status != "recording":
+                self.state.status = "busy"
+                self.state.detail = "Busy"
+                self.overlay.set_state("processing", "Still processing previous input")
             self._log_runtime(f"busy: {event.get('reason', 'dictation_in_progress')}")
         elif et == "error":
             self.state.status = "error"

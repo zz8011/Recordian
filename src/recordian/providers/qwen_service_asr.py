@@ -324,6 +324,9 @@ class _QwenServiceRealtimeSession:
         model_name = self._provider.provider_name
         decode_total = 0.0
         for offset in range(0, len(pcm), chunk_bytes):
+            # 取消后不再占用单槽服务去解码剩余分块。
+            if self._cancelled or (self._cancel_event is not None and self._cancel_event.is_set()):
+                raise RuntimeError("qwen-asr-service session was cancelled")
             data = self._provider._post_transcribe(
                 pcm16le_to_wav_bytes(pcm[offset : offset + chunk_bytes]),
                 self._hotwords,

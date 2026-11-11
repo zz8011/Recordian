@@ -167,6 +167,27 @@ def test_error_event_is_logged_to_stderr(capsys) -> None:
     assert "[recordian-tray] error: HTTPError: 500 Server Error" in err
 
 
+def test_busy_event_does_not_downgrade_active_recording() -> None:
+    # 录音期间 controller 的 lock 也被持有，再按热键会发 busy：不能冲掉 recording 状态。
+    app = _make_tray_app(backend=_FakeBackend(alive=True))
+    app.state.status = "recording"
+
+    app._handle_event({"event": "busy", "reason": "dictation_in_progress"})
+
+    assert app.state.status == "recording"
+    assert app.overlay.states == []
+
+
+def test_busy_event_marks_idle_tray_busy() -> None:
+    app = _make_tray_app(backend=_FakeBackend(alive=True))
+    app.state.status = "idle"
+
+    app._handle_event({"event": "busy", "reason": "dictation_in_progress"})
+
+    assert app.state.status == "busy"
+    assert app.overlay.states == [("processing", "Still processing previous input")]
+
+
 def test_log_event_is_logged_to_stderr(capsys) -> None:
     app = _make_tray_app(backend=_FakeBackend())
 

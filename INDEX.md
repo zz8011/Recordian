@@ -95,6 +95,7 @@
 - **Local streaming ASR server** → `server/confucius_streaming_server.py` + `server/README-confucius.md`
 - **Agent voice entry** → `agent_entry.py` + `docs/AGENT-VOICE.zh-CN.md` (Hermes + Claude Code implemented)
 - **Wake word** → `voice_wake.py`; local setup and validation: `docs/VOICE-WAKE.zh-CN.md`
+- **State / lifecycle changes**（录音、托盘、提交、流式会话）→ `docs/STATE-MACHINES.zh-CN.md`（改前先看：哪些状态值是协议、哪些标志被测试钉死）
 - **Config schema** → `runtime_config.py` + `pyproject.toml`
 - **Running the daemon** → `recordian-hotkey-dictate --help`
 - **Testing** → `pytest tests/ -v`
