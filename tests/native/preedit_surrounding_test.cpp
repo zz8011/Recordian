@@ -215,4 +215,42 @@ int main() {
     assert(acceptPreeditSurrounding(longExact,
         {true, longLeft + "登录" + longRight, 1802, 1802}));
     assert(longExact.segmentSafe);
+
+    // Wrong first baseline (another input's snapshot, as logged in orca:
+    // baseline "abc" caret 3, then the real editor's empty layout). Before
+    // any segment commit it is corrected once and the turn is buffered.
+    StreamingSession foreignBaseline;
+    foreignBaseline.frontend = "wayland_v2";
+    foreignBaseline.segmentSafe = true;
+    foreignBaseline.lastPreedit = "你";
+    rememberPreedit(foreignBaseline, "你");
+    assert(acceptPreeditSurrounding(foreignBaseline, {true, "abc", 3, 3}));
+    const SurroundSnap realEditor{true, "", 0, 0};
+    assert(acceptPreeditSurrounding(foreignBaseline, realEditor));
+    assert(foreignBaseline.rebased && !foreignBaseline.segmentSafe);
+    assert(sameSnap(foreignBaseline.ack.accepted, realEditor));
+    assert(acceptPreeditSurrounding(foreignBaseline, realEditor));
+    // One shot only: the next unexplained change is still an edit.
+    assert(!acceptPreeditSurrounding(foreignBaseline, {true, "外部编辑", 2, 2}));
+    assert(sameSnap(foreignBaseline.ack.accepted, realEditor));
+
+    // A baseline the editor already repeated is its own: changes are edits.
+    StreamingSession confirmed;
+    confirmed.frontend = "wayland_v2";
+    confirmed.lastPreedit = "你";
+    rememberPreedit(confirmed, "你");
+    assert(acceptPreeditSurrounding(confirmed, {true, "abc", 3, 3}));
+    assert(acceptPreeditSurrounding(confirmed, {true, "abc", 3, 3}));
+    assert(!acceptPreeditSurrounding(confirmed, realEditor));
+    assert(!confirmed.rebased);
+
+    // Never after a segment was committed: our text is in the document.
+    StreamingSession committedPrefix;
+    committedPrefix.frontend = "wayland_v2";
+    committedPrefix.lastPreedit = "你";
+    rememberPreedit(committedPrefix, "你");
+    assert(acceptPreeditSurrounding(committedPrefix, {true, "abc", 3, 3}));
+    committedPrefix.nextSegment = 2;
+    assert(!acceptPreeditSurrounding(committedPrefix, realEditor));
+    assert(!committedPrefix.rebased);
 }
