@@ -284,6 +284,12 @@ struct StreamingSession {
     // live preedit updates must not be hard-expired 120 s after Begin and
     // silently drop the tail of the utterance.
     std::chrono::steady_clock::time_point lastActive{};
+    // BeginSession time; only used to date surrounding-text diagnostics.
+    std::chrono::steady_clock::time_point began{};
+    // A later snapshot matched the baseline, so it is this editor's own.
+    bool baselineConfirmed = false;
+    // The one-shot correction of an unconfirmed baseline has been spent.
+    bool rebased = false;
     bool finished = false;
     // Next CommitSegment sequence. Starts at 1; only an accepted segment
     // advances it by one. The token stays live across those commits.
@@ -307,6 +313,12 @@ void rememberPreedit(StreamingSession &session, const std::string &text) {
             session.preeditHistory.erase(session.preeditHistory.begin());
         }
     }
+}
+
+long long msSinceBegin(const StreamingSession &session) {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+               std::chrono::steady_clock::now() - session.began)
+        .count();
 }
 
 bool removeOwnPreedit(const SurroundSnap &observed, const std::string &text,
@@ -485,8 +497,8 @@ void initializeSurroundingBaseline(StreamingSession &session,
 // first preedit. Unknown -> known initializes the baseline, while later
 // text, caret, selection, or validity changes invalidate it. Commit echoes
 // have a separate provenance check and must never enter this path.
-bool acceptPreeditSurrounding(StreamingSession &session,
-                             const SurroundSnap &observed) {
+bool acceptPreeditSurroundingStrict(StreamingSession &session,
+                                   const SurroundSnap &observed) {
     auto &ack = session.ack;
     if (ack.poisoned || ack.armed) {
         return false;
@@ -567,6 +579,42 @@ bool acceptPreeditSurrounding(StreamingSession &session,
         ack.hasAccepted = true;
         session.initialEchoCandidates = session.preeditHistory;
     }
+    return true;
+}
+
+// The first "fresh" Wayland snapshot can belong to the previously focused
+// text input (observed: another client's surrounding text arriving around a
+// window switch); the real editor's first report then looks like an edit.
+// While that baseline was never matched by a later snapshot and no segment
+// was committed, nothing of ours is in the document: correct it once and
+// buffer the turn for one final CommitSession instead of dropping it. Key,
+// focus and reset guards still apply; any later unexplained change, and any
+// change to a confirmed baseline, fails closed as before.
+bool acceptPreeditSurrounding(StreamingSession &session,
+                             const SurroundSnap &observed) {
+    auto &ack = session.ack;
+    const bool hadBaseline = ack.hasAccepted;
+    if (acceptPreeditSurroundingStrict(session, observed)) {
+        session.baselineConfirmed = session.baselineConfirmed || hadBaseline;
+        return true;
+    }
+    if (session.frontend != "wayland_v2" || !hadBaseline ||
+        session.baselineConfirmed || session.rebased ||
+        session.nextSegment != 1 || session.lastPreedit.empty() ||
+        !observed.valid || ack.armed || ack.poisoned) {
+        return false;
+    }
+    session.rebased = true;
+    session.segmentSafe = false;
+    FCITX_WARN() << "Recordian surrounding rebaselined msSinceBegin="
+                 << msSinceBegin(session)
+                 << " baselineBytes=" << ack.accepted.text.size()
+                 << " baselineCursor=" << ack.accepted.cursor
+                 << " obsBytes=" << observed.text.size()
+                 << " obsCursor=" << observed.cursor
+                 << " program=" << session.program;
+    ack.accepted = observed;
+    session.initialEchoCandidates.clear();
     return true;
 }
 
@@ -714,6 +762,7 @@ public:
         session.preeditCapable =
             ic->capabilityFlags().test(fcitx::CapabilityFlag::Preedit);
         session.lastActive = std::chrono::steady_clock::now();
+        session.began = session.lastActive;
         const SurroundSnap initialSurround = readSurround(ic);
         session.segmentSafe = initialSurround.valid;
         const bool segmentSafe = session.segmentSafe;
@@ -1233,7 +1282,11 @@ private:
                          << " obsBytes=" << observed.text.size()
                          << " obsCursor=" << observed.cursor
                          << " obsAnchor=" << observed.anchor
-                         << " preeditBytes=" << session.lastPreedit.size();
+                         << " preeditBytes=" << session.lastPreedit.size()
+                         << " msSinceBegin=" << msSinceBegin(session)
+                         << " nextSegment=" << session.nextSegment
+                         << " rebased=" << session.rebased
+                         << " baselineConfirmed=" << session.baselineConfirmed;
         }
         return accepted;
     }
