@@ -50,6 +50,7 @@
 ```python
 from abc import ABC, abstractmethod
 
+
 class BaseTextRefiner(ABC):
     """文本精炼器抽象基类，提供公共功能"""
 
@@ -81,6 +82,7 @@ class BaseTextRefiner(ABC):
     def update_preset(self, preset_name: str) -> None:
         """动态更新 preset（热切换）"""
         from recordian.preset_manager import PresetManager
+
         preset_mgr = PresetManager()
         try:
             self.prompt_template = preset_mgr.load_preset(preset_name)
@@ -102,6 +104,7 @@ class BaseTextRefiner(ABC):
 
         # 提取 <output> 标签内容
         import re
+
         match = re.search(r"<output>(.*?)</output>", response, re.DOTALL)
         if match:
             return match.group(1).strip()
@@ -205,6 +208,7 @@ from pathlib import Path
 import json
 from typing import Any
 
+
 class ConfigManager:
     """统一的配置管理器"""
 
@@ -224,10 +228,7 @@ class ConfigManager:
         """保存配置文件"""
         path = Path(path).expanduser()
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
-            json.dumps(config, ensure_ascii=False, indent=2),
-            encoding="utf-8"
-        )
+        path.write_text(json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8")
 
     @staticmethod
     def merge_config(base: dict, override: dict) -> dict:
@@ -469,6 +470,7 @@ import numpy as np
 from pathlib import Path
 import wave
 
+
 def read_wav_mono_f32(path: Path, *, sample_rate: int = 16000) -> np.ndarray:
     """读取 WAV 文件，返回 float32 numpy 数组"""
     with wave.open(str(path), "rb") as wf:
@@ -494,6 +496,7 @@ def read_wav_mono_f32(path: Path, *, sample_rate: int = 16000) -> np.ndarray:
     mono = pcm.mean(axis=1).astype(np.float32) / 32768.0
     return mono
 
+
 def chunk_samples(samples: np.ndarray, *, sample_rate: int = 16000, chunk_ms: int = 480) -> list[np.ndarray]:
     """分块音频样本"""
     stride = int(sample_rate * chunk_ms / 1000)
@@ -504,7 +507,8 @@ def chunk_samples(samples: np.ndarray, *, sample_rate: int = 16000, chunk_ms: in
         return []
 
     # 使用 numpy 切片（比 Python 循环快 10-100 倍）
-    return [samples[i:i+stride] for i in range(0, len(samples), stride)]
+    return [samples[i : i + stride] for i in range(0, len(samples), stride)]
+
 
 def write_wav_mono_f32(path: Path, samples: np.ndarray, *, sample_rate: int = 16000) -> None:
     """写入 WAV 文件"""

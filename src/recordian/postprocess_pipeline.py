@@ -107,13 +107,7 @@ def _commit_suppresses_fallback(
     if composition_started:
         return True
     detail = str(commit_info.get("detail", "")).lower() if isinstance(commit_info, Mapping) else ""
-    return (
-        "stale" in detail
-        or "focus_lost" in detail
-        or "user_typed" in detail
-        or "timeout_suppressed" in detail
-    )
-
+    return "stale" in detail or "focus_lost" in detail or "user_typed" in detail or "timeout_suppressed" in detail
 
 
 def _extract_refine_postprocess_rule(prompt_template: str | None) -> tuple[str, str | None]:
@@ -291,9 +285,7 @@ def _build_refine_prompt_with_protected_terms(prompt_template: str | None, prote
         return prompt_template
     term_line = "、".join(terms)
     guard = (
-        "附加约束（必须遵守）：下列词语如果在原文中出现，输出时必须原样保留，"
-        "不得改写、同义替换或删除："
-        f"{term_line}\n"
+        f"附加约束（必须遵守）：下列词语如果在原文中出现，输出时必须原样保留，不得改写、同义替换或删除：{term_line}\n"
     )
     return guard + "\n" + prompt_template
 
@@ -352,10 +344,7 @@ def _build_refine_prompt_with_guards(
     protected = [str(t).strip() for t in protected_terms if str(t).strip()]
     if protected:
         term_line = "、".join(protected)
-        sections.append(
-            "2. 下列词语已在原文中出现，输出时必须原样保留，不得改写、同义替换或删除："
-            f"{term_line}"
-        )
+        sections.append(f"2. 下列词语已在原文中出现，输出时必须原样保留，不得改写、同义替换或删除：{term_line}")
     guard = "附加约束（必须遵守）：\n" + "\n".join(sections) + "\n"
     return guard + "\n" + prompt_template
 
@@ -546,9 +535,7 @@ def _capture_refine_sample(
     if not str(raw_text).strip() and not str(final_text).strip():
         return
 
-    output_path = resolve_refine_capture_path(
-        getattr(args, "capture_refine_samples_path", "")
-    )
+    output_path = resolve_refine_capture_path(getattr(args, "capture_refine_samples_path", ""))
     refine_enabled = bool(getattr(args, "enable_text_refine", False))
     refiner_ready = refiner is not None
     refine_skipped = bool(getattr(refiner, "last_refine_skipped", False)) if refiner is not None else False
@@ -595,9 +582,7 @@ def _capture_eval_sample(
         return
     try:
         append_eval_sample(
-            output_dir=resolve_eval_capture_dir(
-                getattr(args, "capture_eval_samples_path", "")
-            ),
+            output_dir=resolve_eval_capture_dir(getattr(args, "capture_eval_samples_path", "")),
             audio_path=audio_path,
             raw_asr_text=raw_text,
             final_text=final_text,
@@ -737,10 +722,7 @@ def _run_refinement(
             {
                 "event": "refine_triaged_skip",
                 "text_chars": len(text),
-                "message": (
-                    f"refine_triaged_skip: len={len(text)}"
-                    " — 短句无填充词，跳过 LLM 精炼，仅做确定性清洗"
-                ),
+                "message": (f"refine_triaged_skip: len={len(text)} — 短句无填充词，跳过 LLM 精炼，仅做确定性清洗"),
             }
         )
         cleaned = _apply_refine_postprocess(text, rule=refine_postprocess_rule)
@@ -761,8 +743,7 @@ def _run_refinement(
             {
                 "event": "log",
                 "message": (
-                    f"diag refine_protected_terms={protected_terms}"
-                    f" refine_correction_terms={correction_terms}"
+                    f"diag refine_protected_terms={protected_terms} refine_correction_terms={correction_terms}"
                 ),
             }
         )
@@ -790,10 +771,7 @@ def _run_refinement(
         on_state(
             {
                 "event": "log",
-                "message": (
-                    f"text_refine_failed: {type(exc).__name__}: {exc}"
-                    " — 精炼失败，将按 ASR 原文提交"
-                ),
+                "message": (f"text_refine_failed: {type(exc).__name__}: {exc} — 精炼失败，将按 ASR 原文提交"),
             }
         )
     finally:
@@ -866,9 +844,7 @@ def _apply_final_semif(
         return text
     particle_on = (
         bool(getattr(args, "enable_particle_correction", False))
-        and _streaming_correction.normalize_correction_provider(
-            getattr(args, "correction_provider", "jev")
-        ) == "jev"
+        and _streaming_correction.normalize_correction_provider(getattr(args, "correction_provider", "jev")) == "jev"
     )
     if not (bool(getattr(args, "enable_semif_correction", False)) or particle_on):
         return text
@@ -988,9 +964,7 @@ def _session_final_commit(
         result = session.commit(final_text)
         committed = bool(getattr(result, "committed", False))
         detail = str(getattr(result, "detail", ""))
-        outcome = str(getattr(result, "outcome", "") or "") or (
-            "committed" if committed else "uncertain"
-        )
+        outcome = str(getattr(result, "outcome", "") or "") or ("committed" if committed else "uncertain")
         if committed and auto_hard_enter:
             enter_delay_s = paste_to_enter_delay_seconds(result)
             if enter_delay_s > 0.0:
@@ -1082,9 +1056,7 @@ def _refine_session_commit_with_rebind(
         )
         if bool(commit_info.get("committed")):
             detail = str(commit_info.get("detail", "")).strip()
-            commit_info["detail"] = (
-                f"{detail};refine_commit_rebound" if detail else "refine_commit_rebound"
-            )
+            commit_info["detail"] = f"{detail};refine_commit_rebound" if detail else "refine_commit_rebound"
             break
     if (
         not bool(commit_info.get("committed"))
@@ -1114,10 +1086,7 @@ def _run_asr_streaming_commit(
         context.on_state(
             {
                 "event": "log",
-                "message": (
-                    f"stream_composition_refused: {exc} — "
-                    "本次不提交不退格，不做任何本地回退"
-                ),
+                "message": (f"stream_composition_refused: {exc} — 本次不提交不退格，不做任何本地回退"),
             }
         )
         return "", 0.0, _composition_refused_info(exc)
@@ -1148,12 +1117,16 @@ def _run_asr_streaming_commit(
                 # Focus lost / user typed: stop streaming, never fall back to a
                 # commit that could write into the wrong window.
                 transcribe_latency_ms = (time.perf_counter() - t0) * 1000
-                return display_text, transcribe_latency_ms, {
-                    "backend": "fcitx",
-                    "committed": False,
-                    "detail": "stream_session_stale_focus_lost",
-                    "outcome": "stale",
-                }
+                return (
+                    display_text,
+                    transcribe_latency_ms,
+                    {
+                        "backend": "fcitx",
+                        "committed": False,
+                        "detail": "stream_session_stale_focus_lost",
+                        "outcome": "stale",
+                    },
+                )
     except Exception:
         if session is not None:
             # A composition session was already bound: the failure is
@@ -1163,12 +1136,16 @@ def _run_asr_streaming_commit(
             except Exception:  # noqa: BLE001
                 pass
             transcribe_latency_ms = (time.perf_counter() - t0) * 1000
-            return display_text, transcribe_latency_ms, {
-                "backend": "fcitx",
-                "committed": False,
-                "detail": "stream_session_failed_no_fallback",
-                "outcome": "cancelled",
-            }
+            return (
+                display_text,
+                transcribe_latency_ms,
+                {
+                    "backend": "fcitx",
+                    "committed": False,
+                    "detail": "stream_session_failed_no_fallback",
+                    "outcome": "cancelled",
+                },
+            )
         raise
     transcribe_latency_ms = (time.perf_counter() - t0) * 1000
     final_text = display_text.strip()
@@ -1181,21 +1158,23 @@ def _run_asr_streaming_commit(
         # fails stale and no fallback path may write into the new focus.
         # Failed or partial streams never reach here — they are terminal.
         try:
-            oneshot = context.provider.transcribe_file(
-                context.audio_path, hotwords=effective_hotwords
-            )
+            oneshot = context.provider.transcribe_file(context.audio_path, hotwords=effective_hotwords)
         except Exception:
             try:
                 session.cancel()
             except Exception:  # noqa: BLE001
                 pass
             transcribe_latency_ms = (time.perf_counter() - t0) * 1000
-            return "", transcribe_latency_ms, {
-                "backend": "fcitx",
-                "committed": False,
-                "detail": "stream_oneshot_retry_failed_no_fallback",
-                "outcome": "cancelled",
-            }
+            return (
+                "",
+                transcribe_latency_ms,
+                {
+                    "backend": "fcitx",
+                    "committed": False,
+                    "detail": "stream_oneshot_retry_failed_no_fallback",
+                    "outcome": "cancelled",
+                },
+            )
         transcribe_latency_ms = (time.perf_counter() - t0) * 1000
         retry_text = context.normalize_final_text(str(getattr(oneshot, "text", "")))
         if retry_text.strip():
@@ -1256,8 +1235,7 @@ def _run_refinement_streaming_commit(
             {
                 "event": "log",
                 "message": (
-                    f"diag refine_protected_terms={protected_terms}"
-                    f" refine_correction_terms={correction_terms}"
+                    f"diag refine_protected_terms={protected_terms} refine_correction_terms={correction_terms}"
                 ),
             }
         )
@@ -1270,10 +1248,7 @@ def _run_refinement_streaming_commit(
         context.on_state(
             {
                 "event": "log",
-                "message": (
-                    f"stream_composition_refused: {exc} — "
-                    "本次不提交不退格，不做任何本地回退"
-                ),
+                "message": (f"stream_composition_refused: {exc} — 本次不提交不退格，不做任何本地回退"),
             }
         )
         return text, 0.0, _composition_refused_info(exc)
@@ -1315,21 +1290,29 @@ def _run_refinement_streaming_commit(
     refine_latency_ms = (time.perf_counter() - t1) * 1000
     final_text = refined_text.strip()
     if stale:
-        return final_text, refine_latency_ms, {
-            "backend": "fcitx",
-            "committed": False,
-            "detail": "stream_session_stale_focus_lost",
-            "outcome": "stale",
-        }
+        return (
+            final_text,
+            refine_latency_ms,
+            {
+                "backend": "fcitx",
+                "committed": False,
+                "detail": "stream_session_stale_focus_lost",
+                "outcome": "stale",
+            },
+        )
     if failed_terminal:
         # The bound preedit was cancelled: preserve the original for manual
         # recovery, without replaying through another token/global committer.
-        return text, refine_latency_ms, {
-            "backend": "fcitx",
-            "committed": False,
-            "detail": "refine_stream_failed_no_fallback",
-            "outcome": "cancelled",
-        }
+        return (
+            text,
+            refine_latency_ms,
+            {
+                "backend": "fcitx",
+                "committed": False,
+                "detail": "refine_stream_failed_no_fallback",
+                "outcome": "cancelled",
+            },
+        )
     if final_text:
         context.on_state({"event": "log", "message": f"精炼后输出: text_chars={len(final_text)}"})
     # Streaming refine finalizes through the SAME deterministic cleanup as
@@ -1482,8 +1465,7 @@ def run_postprocess_pipeline(context: PostprocessPipelineContext) -> None:
         streamed_commit = False
         hotword_corrected = False
         realtime_already_committed = bool(
-            isinstance(context.prefetched_commit_info, dict)
-            and context.prefetched_commit_info.get("committed")
+            isinstance(context.prefetched_commit_info, dict) and context.prefetched_commit_info.get("committed")
         )
         # A realtime session may already have typed the utterance. Do not run a
         # second file-stream commit on key release.
@@ -1527,10 +1509,7 @@ def run_postprocess_pipeline(context: PostprocessPipelineContext) -> None:
                         context.on_state(
                             {
                                 "event": "log",
-                                "message": (
-                                    "stream_commit_suppressed: session stale "
-                                    "(focus lost / user typed)"
-                                ),
+                                "message": ("stream_commit_suppressed: session stale (focus lost / user typed)"),
                             }
                         )
                 else:
@@ -1802,7 +1781,12 @@ def run_postprocess_pipeline(context: PostprocessPipelineContext) -> None:
                     source=lexicon_source,
                 )
                 if context.args.debug_diagnostics:
-                    context.on_state({"event": "log", "message": f"diag auto_lexicon_learned_terms={learned_terms} source={lexicon_source}"})
+                    context.on_state(
+                        {
+                            "event": "log",
+                            "message": f"diag auto_lexicon_learned_terms={learned_terms} source={lexicon_source}",
+                        }
+                    )
             except Exception as exc:  # noqa: BLE001
                 if context.args.debug_diagnostics:
                     context.on_state({"event": "log", "message": f"diag auto_lexicon_learn_failed: {exc}"})

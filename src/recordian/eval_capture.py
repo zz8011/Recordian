@@ -140,7 +140,7 @@ def mark_eval_sample_gold(*, output_dir: Path, final_text: str) -> str:
         if flip_at is None:
             return GOLD_ALREADY if saw_exact_match else GOLD_NO_MATCH
 
-        flipped, count = _GOLD_FALSE_RE.subn(b"\"gold\": true", segments[flip_at], count=1)
+        flipped, count = _GOLD_FALSE_RE.subn(b'"gold": true', segments[flip_at], count=1)
         if count == 0:
             raise ValueError("matched eval row has no flippable gold field")
         segments[flip_at] = flipped

@@ -50,12 +50,7 @@ print(config["policy"]["confidence_threshold"])
 
 **示例**:
 ```python
-config = {
-    "version": "1.0",
-    "policy": {
-        "confidence_threshold": 0.9
-    }
-}
+config = {"version": "1.0", "policy": {"confidence_threshold": 0.9}}
 ConfigManager.save("config.json", config)
 ```
 
@@ -263,9 +258,11 @@ from recordian.performance_benchmark import PerformanceBenchmark
 
 benchmark = PerformanceBenchmark()
 
+
 def my_function():
     # 你的代码
     pass
+
 
 metrics = benchmark.measure("my_test", my_function, iterations=10)
 print(f"Average duration: {metrics.duration_ms:.2f}ms")
@@ -329,6 +326,7 @@ Provider 名称。
 from recordian.providers.base import ASRProvider
 from recordian.models import ASRResult
 from pathlib import Path
+
 
 class MyASRProvider(ASRProvider):
     @property

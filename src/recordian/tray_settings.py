@@ -496,9 +496,7 @@ def open_settings_gtk(
                 names.append(stem)
             return names
 
-        intro = Gtk.Label(
-            label="日常听写。适合中文和英文，在浏览器、微信和编辑器里按住说话即可。"
-        )
+        intro = Gtk.Label(label="日常听写。适合中文和英文，在浏览器、微信和编辑器里按住说话即可。")
         intro.set_xalign(0.0)
         intro.set_line_wrap(True)
         intro.set_max_width_chars(52)
@@ -519,13 +517,23 @@ def open_settings_gtk(
 
         sec_agent = _create_collapsible_section(daily_page, "Agent 语音入口（开关立即生效）")
         agent_row = _add_field(
-            sec_agent, 0, key="enable_agent", label="启用 Agent", kind="bool",
-            value=current.get("enable_agent", True), default_bool=True,
+            sec_agent,
+            0,
+            key="enable_agent",
+            label="启用 Agent",
+            kind="bool",
+            value=current.get("enable_agent", True),
+            default_bool=True,
             hint="切换立即保存，无需重启。关闭后不发送新任务，F9 照常输入；已开始的任务继续执行。",
         )
         agent_row = _add_field(
-            sec_agent, agent_row, key="wake_to_agent", label="唤醒后交给 Agent", kind="bool",
-            value=current.get("wake_to_agent", True), default_bool=True,
+            sec_agent,
+            agent_row,
+            key="wake_to_agent",
+            label="唤醒后交给 Agent",
+            kind="bool",
+            value=current.get("wake_to_agent", True),
+            default_bool=True,
             hint="开启：hey 小二交给 Agent；关闭：唤醒后普通语音输入。Agent 总开关关闭时，不响应发任务的唤醒。",
         )
         agent_transport = Gtk.Label(label="Hermes 连接方式可在 Agent 面板的实例设置中切换 · F9 始终用于普通语音输入")
@@ -651,7 +659,9 @@ def open_settings_gtk(
             value=current.get("stop_hotkey", ""),
             hint="留空则沿用原来的停止方式。推荐配置会把它设成右 Ctrl。",
         )
-        _add_field(sec_hotkey, row, key="cooldown_ms", label="两次触发间隔 (毫秒)", value=current.get("cooldown_ms", 300))
+        _add_field(
+            sec_hotkey, row, key="cooldown_ms", label="两次触发间隔 (毫秒)", value=current.get("cooldown_ms", 300)
+        )
 
         sec_record = _create_section(tab_basic, "录音")
         row = 0
@@ -859,8 +869,17 @@ def open_settings_gtk(
         row += 1
 
         # OpenAI-compatible endpoints can run on the LAN without an API key.
-        row = _add_field(sec_refine, row, key="refine_api_base", label="模型 API 地址", value=current.get("refine_api_base", ""))
-        row = _add_field(sec_refine, row, key="refine_api_key", label="API 密钥（可留空）", value=current.get("refine_api_key", ""), secret=True)
+        row = _add_field(
+            sec_refine, row, key="refine_api_base", label="模型 API 地址", value=current.get("refine_api_base", "")
+        )
+        row = _add_field(
+            sec_refine,
+            row,
+            key="refine_api_key",
+            label="API 密钥（可留空）",
+            value=current.get("refine_api_key", ""),
+            secret=True,
+        )
 
         # Cloud model selection: combo + refresh button
         model_label = Gtk.Label(label="模型名称")
@@ -926,6 +945,7 @@ def open_settings_gtk(
                     _apply()
 
             import threading
+
             threading.Thread(target=_do_fetch, daemon=True).start()
 
         refresh_btn.connect("clicked", _refresh_models)
@@ -962,8 +982,20 @@ def open_settings_gtk(
             kind="combo",
             options=("cuda", "cpu", "auto"),
         )
-        row = _add_field(sec_refine, row, key="refine_n_gpu_layers", label="llama.cpp GPU 层数", value=current.get("refine_n_gpu_layers", -1))
-        row = _add_field(sec_refine, row, key="refine_max_tokens", label="精炼 Max Tokens", value=current.get("refine_max_tokens", 512))
+        row = _add_field(
+            sec_refine,
+            row,
+            key="refine_n_gpu_layers",
+            label="llama.cpp GPU 层数",
+            value=current.get("refine_n_gpu_layers", -1),
+        )
+        row = _add_field(
+            sec_refine,
+            row,
+            key="refine_max_tokens",
+            label="精炼 Max Tokens",
+            value=current.get("refine_max_tokens", 512),
+        )
         row = _add_field(
             sec_refine,
             row,
@@ -1374,7 +1406,9 @@ def open_settings_gtk(
         field_rows["sound_off_path"] = [sound_off_label, sound_off_box]
         row += 1
 
-        wake_model_dir = Path(__file__).parent.parent.parent / "models" / "sherpa-onnx-kws-zipformer-wenetspeech-3.3M-2024-01-01"
+        wake_model_dir = (
+            Path(__file__).parent.parent.parent / "models" / "sherpa-onnx-kws-zipformer-wenetspeech-3.3M-2024-01-01"
+        )
         # Fields hidden from UI but preserved in save payload for backward compatibility
         _HIDDEN_WAKE_FIELDS = {
             "wake_use_semantic_gate",
@@ -1418,14 +1452,18 @@ def open_settings_gtk(
             row,
             key="wake_encoder",
             label="Encoder ONNX",
-            value=current.get("wake_encoder", str(wake_model_dir / "encoder-epoch-12-avg-2-chunk-16-left-64.int8.onnx")),
+            value=current.get(
+                "wake_encoder", str(wake_model_dir / "encoder-epoch-12-avg-2-chunk-16-left-64.int8.onnx")
+            ),
         )
         row = _add_field(
             sec_wake_advanced,
             row,
             key="wake_decoder",
             label="Decoder ONNX",
-            value=current.get("wake_decoder", str(wake_model_dir / "decoder-epoch-12-avg-2-chunk-16-left-64.int8.onnx")),
+            value=current.get(
+                "wake_decoder", str(wake_model_dir / "decoder-epoch-12-avg-2-chunk-16-left-64.int8.onnx")
+            ),
         )
         row = _add_field(
             sec_wake_advanced,
@@ -1741,7 +1779,9 @@ def open_settings_gtk(
             try:
                 app.switch_preset(str(selected))
                 _set_current_refine_preset_name(str(selected))
-                _set_status(f"当前精炼预设已设为：{selected}（{effect_label(combined_setting_effect(['refine_preset']))}）")
+                _set_status(
+                    f"当前精炼预设已设为：{selected}（{effect_label(combined_setting_effect(['refine_preset']))}）"
+                )
             except Exception as exc:  # noqa: BLE001
                 _set_status(f"设置失败：{exc}")
 
@@ -1845,10 +1885,7 @@ def open_settings_gtk(
             "capture_refine_samples",
             "capture_refine_samples_path",
         )
-        wake_dependent = tuple(
-            key for key in entries
-            if key.startswith("wake_") and key != "enable_voice_wake"
-        )
+        wake_dependent = tuple(key for key in entries if key.startswith("wake_") and key != "enable_voice_wake")
         remote_dependent = (
             "remote_paste_host",
             "remote_paste_port",
@@ -2000,25 +2037,30 @@ def open_settings_gtk(
                     "exit_hotkey": str(latest_config.get("exit_hotkey", "<ctrl>+<alt>+q")).strip(),
                     "cooldown_ms": _parse_int_field("cooldown_ms", int(current.get("cooldown_ms", 300))),
                     "trigger_mode": str(_get_value("trigger_mode")).strip() or str(current.get("trigger_mode", "ptt")),
-                    "notify_backend": str(_get_value("notify_backend")).strip() or str(current.get("notify_backend", "auto")),
+                    "notify_backend": str(_get_value("notify_backend")).strip()
+                    or str(current.get("notify_backend", "auto")),
                     "duration": _parse_float_field("duration", float(current.get("duration", 4.0))),
                     "sample_rate": _parse_int_field("sample_rate", int(current.get("sample_rate", 16000))),
                     "channels": _parse_int_field("channels", int(current.get("channels", 1))),
-                    "input_device": str(_get_value("input_device")).strip() or str(current.get("input_device", "default")),
+                    "input_device": str(_get_value("input_device")).strip()
+                    or str(current.get("input_device", "default")),
                     "record_format": str(_get_value("record_format")).strip(),
                     "record_backend": str(_get_value("record_backend")).strip(),
                     "commit_backend": str(_get_value("commit_backend")).strip(),
                     "auto_hard_enter": bool(_get_value("auto_hard_enter")),
                     "enable_streaming_commit": bool(_get_value("enable_streaming_commit")),
-                    "asr_provider": str(_get_value("asr_provider")).strip() or str(current.get("asr_provider", "qwen-asr")),
+                    "asr_provider": str(_get_value("asr_provider")).strip()
+                    or str(current.get("asr_provider", "qwen-asr")),
                     "qwen_model": str(_get_value("qwen_model")).strip(),
-                    "qwen_language": str(_get_value("qwen_language")).strip() or str(current.get("qwen_language", "Chinese")),
-                    "qwen_max_new_tokens": _parse_int_field("qwen_max_new_tokens", int(current.get("qwen_max_new_tokens", 8192))),
+                    "qwen_language": str(_get_value("qwen_language")).strip()
+                    or str(current.get("qwen_language", "Chinese")),
+                    "qwen_max_new_tokens": _parse_int_field(
+                        "qwen_max_new_tokens", int(current.get("qwen_max_new_tokens", 8192))
+                    ),
                     "asr_context_preset": str(_get_value("asr_context_preset")).strip(),
                     "asr_context": str(_get_value("asr_context")).strip(),
-                    "asr_endpoint": str(_get_value("asr_endpoint")).strip() or str(
-                        current.get("asr_endpoint", "http://127.0.0.1:8000/v1/audio/transcriptions")
-                    ),
+                    "asr_endpoint": str(_get_value("asr_endpoint")).strip()
+                    or str(current.get("asr_endpoint", "http://127.0.0.1:8000/v1/audio/transcriptions")),
                     "asr_realtime_endpoint": str(_get_value("asr_realtime_endpoint")).strip(),
                     "asr_api_key": str(_get_value("asr_api_key")).strip(),
                     "asr_timeout_s": _parse_float_field("asr_timeout_s", float(current.get("asr_timeout_s", 30.0))),
@@ -2026,7 +2068,9 @@ def open_settings_gtk(
                     "correction_provider": normalize_correction_provider(_get_value("correction_provider")),
                     "semif_endpoint": str(_get_value("semif_endpoint")).strip(),
                     "semif_timeout_s": normalize_semif_timeout_s(
-                        _parse_float_field("semif_timeout_s", float(current.get("semif_timeout_s", DEFAULT_SEMIF_TIMEOUT_S)))
+                        _parse_float_field(
+                            "semif_timeout_s", float(current.get("semif_timeout_s", DEFAULT_SEMIF_TIMEOUT_S))
+                        )
                     ),
                     "jev_timeout_s": normalize_jev_timeout_s(
                         _parse_float_field("jev_timeout_s", float(current.get("jev_timeout_s", DEFAULT_JEV_TIMEOUT_S)))
@@ -2037,9 +2081,14 @@ def open_settings_gtk(
                     "refine_provider": str(_get_value("refine_provider")).strip(),
                     "refine_preset": _get_current_refine_preset_name(),
                     "refine_model": str(_get_value("refine_model")).strip(),
-                    "refine_device": str(_get_value("refine_device")).strip() or str(current.get("refine_device", "cuda")),
-                    "refine_n_gpu_layers": _parse_int_field("refine_n_gpu_layers", int(current.get("refine_n_gpu_layers", -1))),
-                    "refine_max_tokens": _parse_int_field("refine_max_tokens", int(current.get("refine_max_tokens", 512))),
+                    "refine_device": str(_get_value("refine_device")).strip()
+                    or str(current.get("refine_device", "cuda")),
+                    "refine_n_gpu_layers": _parse_int_field(
+                        "refine_n_gpu_layers", int(current.get("refine_n_gpu_layers", -1))
+                    ),
+                    "refine_max_tokens": _parse_int_field(
+                        "refine_max_tokens", int(current.get("refine_max_tokens", 512))
+                    ),
                     "enable_thinking": bool(_get_value("enable_thinking")),
                     "refine_api_base": str(_get_value("refine_api_base")).strip(),
                     "refine_api_key": str(_get_value("refine_api_key")).strip(),
@@ -2056,9 +2105,8 @@ def open_settings_gtk(
                         "remote_paste_timeout_s",
                         float(current.get("remote_paste_timeout_s", 3.0)),
                     ),
-                    "remote_paste_mode": str(_get_value("remote_paste_mode")).strip() or str(
-                        current.get("remote_paste_mode", "direct")
-                    ),
+                    "remote_paste_mode": str(_get_value("remote_paste_mode")).strip()
+                    or str(current.get("remote_paste_mode", "direct")),
                     "remote_paste_sync_wait_s": _parse_float_field(
                         "remote_paste_sync_wait_s",
                         float(current.get("remote_paste_sync_wait_s", 0.35)),
@@ -2077,15 +2125,23 @@ def open_settings_gtk(
                     "wake_to_agent": bool(_get_value("wake_to_agent")),
                     "wake_prefix": _parse_csv_field("wake_prefix", list(current.get("wake_prefix", ["嗨", "嘿"]))),
                     "wake_name": _parse_csv_field("wake_name", list(current.get("wake_name", ["小二"]))),
-                    "wake_cooldown_s": _parse_float_field("wake_cooldown_s", float(current.get("wake_cooldown_s", 3.0))),
+                    "wake_cooldown_s": _parse_float_field(
+                        "wake_cooldown_s", float(current.get("wake_cooldown_s", 3.0))
+                    ),
                     "wake_auto_stop_silence_s": _parse_float_field(
                         "wake_auto_stop_silence_s",
                         float(current.get("wake_auto_stop_silence_s", 1.5)),
                     ),
-                    "wake_min_speech_s": _parse_float_field("wake_min_speech_s", float(current.get("wake_min_speech_s", 0.5))),
+                    "wake_min_speech_s": _parse_float_field(
+                        "wake_min_speech_s", float(current.get("wake_min_speech_s", 0.5))
+                    ),
                     "wake_use_webrtcvad": bool(_get_value("wake_use_webrtcvad")),
-                    "wake_vad_aggressiveness": _parse_int_field("wake_vad_aggressiveness", int(current.get("wake_vad_aggressiveness", 2))),
-                    "wake_vad_frame_ms": _parse_int_field("wake_vad_frame_ms", int(current.get("wake_vad_frame_ms", 30))),
+                    "wake_vad_aggressiveness": _parse_int_field(
+                        "wake_vad_aggressiveness", int(current.get("wake_vad_aggressiveness", 2))
+                    ),
+                    "wake_vad_frame_ms": _parse_int_field(
+                        "wake_vad_frame_ms", int(current.get("wake_vad_frame_ms", 30))
+                    ),
                     "wake_no_speech_timeout_s": _parse_float_field(
                         "wake_no_speech_timeout_s",
                         float(current.get("wake_no_speech_timeout_s", 2.0)),
@@ -2126,9 +2182,13 @@ def open_settings_gtk(
                     "wake_allow_name_only": bool(_get_value("wake_allow_name_only")),
                     # Hidden semantic gate settings — preserved from latest config, not shown in UI
                     "wake_use_semantic_gate": bool(latest_config.get("wake_use_semantic_gate", False)),
-                    "wake_semantic_probe_interval_s": float(cast(Any, latest_config.get("wake_semantic_probe_interval_s", 0.45))),
+                    "wake_semantic_probe_interval_s": float(
+                        cast(Any, latest_config.get("wake_semantic_probe_interval_s", 0.45))
+                    ),
                     "wake_semantic_window_s": float(cast(Any, latest_config.get("wake_semantic_window_s", 1.2))),
-                    "wake_semantic_end_silence_s": float(cast(Any, latest_config.get("wake_semantic_end_silence_s", 1.0))),
+                    "wake_semantic_end_silence_s": float(
+                        cast(Any, latest_config.get("wake_semantic_end_silence_s", 1.0))
+                    ),
                     "wake_semantic_min_chars": int(cast(Any, latest_config.get("wake_semantic_min_chars", 1))),
                     "wake_semantic_timeout_ms": int(cast(Any, latest_config.get("wake_semantic_timeout_ms", 1200))),
                     "wake_owner_verify": bool(_get_value("wake_owner_verify")),
@@ -2156,13 +2216,17 @@ def open_settings_gtk(
                     "wake_joiner": str(_get_value("wake_joiner")).strip(),
                     "wake_tokens": str(_get_value("wake_tokens")).strip(),
                     "wake_keywords_file": str(_get_value("wake_keywords_file")).strip(),
-                    "wake_tokens_type": str(_get_value("wake_tokens_type")).strip() or str(current.get("wake_tokens_type", "ppinyin")),
-                    "wake_provider": str(_get_value("wake_provider")).strip() or str(current.get("wake_provider", "cpu")),
+                    "wake_tokens_type": str(_get_value("wake_tokens_type")).strip()
+                    or str(current.get("wake_tokens_type", "ppinyin")),
+                    "wake_provider": str(_get_value("wake_provider")).strip()
+                    or str(current.get("wake_provider", "cpu")),
                     "wake_num_threads": _parse_int_field(
                         "wake_num_threads",
                         int(current.get("wake_num_threads", DEFAULT_WAKE_NUM_THREADS)),
                     ),
-                    "wake_sample_rate": _parse_int_field("wake_sample_rate", int(current.get("wake_sample_rate", 16000))),
+                    "wake_sample_rate": _parse_int_field(
+                        "wake_sample_rate", int(current.get("wake_sample_rate", 16000))
+                    ),
                     "wake_keyword_score": _parse_float_field(
                         "wake_keyword_score",
                         float(current.get("wake_keyword_score", 1.5)),

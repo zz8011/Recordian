@@ -89,9 +89,7 @@ _STOPWORDS = {
 # CJK tokens starting or ending with one of these characters are almost always
 # sentence fragments (口语碎块), not domain terms — e.g. "的这个", "我现在",
 # "是不是", "个项目". They pollute the hotword channel and dilute real hotwords.
-_CJK_BOUNDARY_GLUE_CHARS = frozenset(
-    "的了是我不在你他她它这那有没很也都就嘛吗呢吧啊哦嗯么得着呢啦个"
-)
+_CJK_BOUNDARY_GLUE_CHARS = frozenset("的了是我不在你他她它这那有没很也都就嘛吗呢吧啊哦嗯么得着呢啦个")
 
 
 def _normalize_term(term: str) -> str | None:
@@ -216,13 +214,9 @@ class AutoLexicon:
         if "last_source" not in columns:
             self._conn.execute("ALTER TABLE lexicon_terms ADD COLUMN last_source TEXT NOT NULL DEFAULT ''")
         if "confirm_count" not in columns:
-            self._conn.execute(
-                "ALTER TABLE lexicon_terms ADD COLUMN confirm_count INTEGER NOT NULL DEFAULT 0"
-            )
+            self._conn.execute("ALTER TABLE lexicon_terms ADD COLUMN confirm_count INTEGER NOT NULL DEFAULT 0")
         if "strike_count" not in columns:
-            self._conn.execute(
-                "ALTER TABLE lexicon_terms ADD COLUMN strike_count INTEGER NOT NULL DEFAULT 0"
-            )
+            self._conn.execute("ALTER TABLE lexicon_terms ADD COLUMN strike_count INTEGER NOT NULL DEFAULT 0")
         self._conn.execute(
             """
             CREATE TABLE IF NOT EXISTS lexicon_term_sources (

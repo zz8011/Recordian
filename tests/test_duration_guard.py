@@ -3,6 +3,7 @@
 All fakes: no GPU, no microphone, no real timers, no live processes.
 See .runs/20260924-desktop-setup/kimi-duration-guard.design.md for the contract.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -29,6 +30,7 @@ from recordian.realtime_asr import _RealtimeASRWorkerHandle
 # ---------------------------------------------------------------------------
 # Fakes
 # ---------------------------------------------------------------------------
+
 
 class _FakeTimer:
     """Manually fired timer. fire() honors cancel(); fire_force() simulates a
@@ -140,7 +142,9 @@ def _make_ptt(monkeypatch, provider, *, start_worker=None, timers=None, args_ove
         return None
 
     monkeypatch.setattr("recordian.recording_controller.ensure_ffmpeg_available", lambda: "/usr/bin/ffmpeg")
-    monkeypatch.setattr("recordian.recording_controller.choose_record_backend", lambda requested, ffmpeg_bin: "ffmpeg-pulse")
+    monkeypatch.setattr(
+        "recordian.recording_controller.choose_record_backend", lambda requested, ffmpeg_bin: "ffmpeg-pulse"
+    )
     monkeypatch.setattr("recordian.recording_controller.resolve_committer", lambda backend: _FakeCommitter())
     monkeypatch.setattr("recordian.recording_controller.create_provider", lambda args: provider)
     monkeypatch.setattr("recordian.recording_controller.get_focused_window_id", lambda: None)
@@ -188,6 +192,7 @@ def _limit_events(events: list[dict[str, object]]) -> list[dict[str, object]]:
 # Guard constants
 # ---------------------------------------------------------------------------
 
+
 def test_limit_is_below_server_budget() -> None:
     assert CONFUCIUS_RECORDING_LIMIT_S == 25.0
     assert CONFUCIUS_RECORDING_LIMIT_S < CONFUCIUS_SERVER_SESSION_BUDGET_S
@@ -202,6 +207,7 @@ def test_recording_limit_only_for_confucius() -> None:
 # ---------------------------------------------------------------------------
 # PTT / toggle guard behaviour
 # ---------------------------------------------------------------------------
+
 
 def test_confucius_limit_fires_exactly_one_normal_stop(monkeypatch) -> None:
     h = _make_ptt(monkeypatch, _ConfuciusProvider())
@@ -333,12 +339,17 @@ def test_timer_armed_only_after_realtime_worker_registered(monkeypatch) -> None:
         return RecordProcessHandle(process=_FakeProcess(), monitor_stream=io.BytesIO(b""))
 
     monkeypatch.setattr("recordian.recording_controller.ensure_ffmpeg_available", lambda: "/usr/bin/ffmpeg")
-    monkeypatch.setattr("recordian.recording_controller.choose_record_backend", lambda requested, ffmpeg_bin: "ffmpeg-pulse")
+    monkeypatch.setattr(
+        "recordian.recording_controller.choose_record_backend", lambda requested, ffmpeg_bin: "ffmpeg-pulse"
+    )
     monkeypatch.setattr("recordian.recording_controller.resolve_committer", lambda backend: _FakeCommitter())
     monkeypatch.setattr("recordian.recording_controller.create_provider", lambda args: _ConfuciusProvider())
     monkeypatch.setattr("recordian.recording_controller.get_focused_window_id", lambda: None)
     monkeypatch.setattr("recordian.recording_controller.start_record_process", _fake_start_record_process)
-    monkeypatch.setattr("recordian.recording_controller.stop_record_process", lambda *a, **k: stops.__setitem__("count", stops["count"] + 1))
+    monkeypatch.setattr(
+        "recordian.recording_controller.stop_record_process",
+        lambda *a, **k: stops.__setitem__("count", stops["count"] + 1),
+    )
     monkeypatch.setattr("recordian.recording_controller.start_wake_session_monitor", lambda context: SimpleNamespace())
     monkeypatch.setattr("recordian.recording_controller._start_realtime_asr_worker", _worker_start)
     monkeypatch.setattr(
@@ -407,6 +418,7 @@ def test_exit_stops_once_and_cancels_timer(monkeypatch) -> None:
 # ---------------------------------------------------------------------------
 # Registration ownership (grok-duration-review P1)
 # ---------------------------------------------------------------------------
+
 
 def test_concurrent_stop_during_registration_uses_registered_worker(monkeypatch) -> None:
     """Cross-thread, barrier-controlled: the stop thread arrives while the
@@ -593,6 +605,7 @@ def test_stale_start_exception_cannot_corrupt_newer_session(monkeypatch) -> None
         def __call__(self, delay: float, callback) -> _FakeTimer:  # noqa: ANN001
             timer = _FakeTimer(delay, callback)
             if not self.created:
+
                 def _exploding_start() -> None:
                     timer.started = True
                     # Manual stop consumes session1; its pipeline drains and
@@ -650,6 +663,7 @@ def test_stale_start_exception_cannot_corrupt_newer_session(monkeypatch) -> None
 # Oneshot clamp
 # ---------------------------------------------------------------------------
 
+
 def _run_oneshot_with_duration(monkeypatch, asr_provider: str, duration) -> float:  # noqa: ANN001, ANN202
     captured: list[float] = []
 
@@ -702,6 +716,7 @@ def test_clamp_oneshot_duration_s_pure() -> None:
 # ---------------------------------------------------------------------------
 # Tray-visible events (fake TrayApp self — no Tk, no live backend)
 # ---------------------------------------------------------------------------
+
 
 def _make_fake_tray():  # noqa: ANN202
     from recordian.tray_app import TrayApp, UiState
@@ -830,6 +845,7 @@ def test_tray_committed_result_unchanged() -> None:
 # Continuous capability vs the 25 s guard
 # ---------------------------------------------------------------------------
 
+
 def _continuous_worker(continuous: bool) -> _RealtimeASRWorkerHandle:  # noqa: ANN202
     thread = threading.Thread(target=lambda: None, daemon=True)
     thread.start()
@@ -918,6 +934,7 @@ def test_continuous_skip_is_bound_to_the_exact_handle(monkeypatch) -> None:
 # Fatal capture callback (handle-scoped mic stop)
 # ---------------------------------------------------------------------------
 
+
 def test_capture_fatal_callback_stops_exact_handle(monkeypatch) -> None:
     """The worker's fatal callback stops the microphone through the exact
     record handle it was bound to; a late fire from a dead session cannot
@@ -935,9 +952,7 @@ def test_capture_fatal_callback_stops_exact_handle(monkeypatch) -> None:
     captured[0]("monitor_backlog_overflow")
     assert h.pipeline_done.wait(timeout=1.0) is True
     assert h.stops["count"] == 1, "fatal from the live worker stops its own recording"
-    assert any(
-        "realtime_capture_fatal" in str(e.get("message", "")) for e in h.events
-    )
+    assert any("realtime_capture_fatal" in str(e.get("message", "")) for e in h.events)
 
     # Next session runs; the OLD callback firing late must be a no-op.
     _wait_next_start(h)
@@ -1034,10 +1049,14 @@ def test_output_restored_on_stop_before_postprocess(monkeypatch):
 
 def test_output_restored_when_recorder_start_fails(monkeypatch):
     order = []
-    monkeypatch.setattr("recordian.recording_controller.begin_output_mute", lambda: SimpleNamespace(end=lambda: order.append("restore")))
+    monkeypatch.setattr(
+        "recordian.recording_controller.begin_output_mute", lambda: SimpleNamespace(end=lambda: order.append("restore"))
+    )
     ptt = _make_ptt(monkeypatch, _ConfuciusProvider())
+
     def fail(**kwargs):
         raise RuntimeError("recorder unavailable")
+
     monkeypatch.setattr("recordian.recording_controller.start_record_process", fail)
     with pytest.raises(RuntimeError, match="recorder unavailable"):
         ptt.start()
@@ -1047,10 +1066,14 @@ def test_output_restored_when_recorder_start_fails(monkeypatch):
 
 def test_output_restored_when_recorder_stop_fails(monkeypatch):
     order = []
-    monkeypatch.setattr("recordian.recording_controller.begin_output_mute", lambda: SimpleNamespace(end=lambda: order.append("restore")))
+    monkeypatch.setattr(
+        "recordian.recording_controller.begin_output_mute", lambda: SimpleNamespace(end=lambda: order.append("restore"))
+    )
     ptt = _make_ptt(monkeypatch, _ConfuciusProvider())
+
     def fail(*args, **kwargs):
         raise RuntimeError("recorder failed")
+
     monkeypatch.setattr("recordian.recording_controller.stop_record_process", fail)
     assert ptt.start()
     assert not ptt.stop()
@@ -1066,40 +1089,54 @@ def test_agent_capture_uses_memory_sink_and_dispatches_final_only(monkeypatch, t
     from recordian.postprocess_pipeline import _resolve_auto_hard_enter
 
     calls = []
+
     class Adapter:
         def run(self, instance, text, session_id, cancel, on_event):
             calls.append(text)
-            return {'text': 'done'}
-    config = tmp_path/'agents.json'
-    config.write_text(json.dumps({'instances': [{'id': 'hermes', 'executable': sys.executable, 'workspace': str(tmp_path)}]}))
-    hub = AgentHub(config, tmp_path/'tasks.json', adapters={'hermes': Adapter})
-    hub.select('agent', 'hermes')
+            return {"text": "done"}
+
+    config = tmp_path / "agents.json"
+    config.write_text(
+        json.dumps({"instances": [{"id": "hermes", "executable": sys.executable, "workspace": str(tmp_path)}]})
+    )
+    hub = AgentHub(config, tmp_path / "tasks.json", adapters={"hermes": Adapter})
+    hub.select("agent", "hermes")
     workers = []
+
     def worker_start(**kwargs):
         workers.append(kwargs)
-        assert kwargs['committer'].backend_name == 'agent-buffer'
-        assert kwargs['args'].enable_remote_paste is False
-        assert _resolve_auto_hard_enter(kwargs['args']) is False
-        kwargs['committer'].begin_composition().update_preedit('还没说完')
+        assert kwargs["committer"].backend_name == "agent-buffer"
+        assert kwargs["args"].enable_remote_paste is False
+        assert _resolve_auto_hard_enter(kwargs["args"]) is False
+        kwargs["committer"].begin_composition().update_preedit("还没说完")
         assert calls == []
-    h = _make_ptt(monkeypatch, _ConfuciusProvider(), start_worker=worker_start,
-                  args_overrides={'_agent_hub': hub, 'auto_hard_enter': True, 'enable_remote_paste': True})
+
+    h = _make_ptt(
+        monkeypatch,
+        _ConfuciusProvider(),
+        start_worker=worker_start,
+        args_overrides={"_agent_hub": hub, "auto_hard_enter": True, "enable_remote_paste": True},
+    )
+
     def no_desktop(committer):
-        raise AssertionError('Agent recording must not select a desktop committer')
-    monkeypatch.setattr('recordian.wayland_desktop.select_desktop_committer', no_desktop)
+        raise AssertionError("Agent recording must not select a desktop committer")
+
+    monkeypatch.setattr("recordian.wayland_desktop.select_desktop_committer", no_desktop)
+
     def pipeline(context):
-        assert context.committer.backend_name == 'agent-buffer'
+        assert context.committer.backend_name == "agent-buffer"
         assert context.args.enable_remote_paste is False
-        context.on_result({'event': 'result', 'result': {'text': '完整的任务', 'commit': {'outcome': 'committed'}}})
-    monkeypatch.setattr('recordian.recording_controller.run_postprocess_pipeline', pipeline)
-    assert h.start('voice_wake')
+        context.on_result({"event": "result", "result": {"text": "完整的任务", "commit": {"outcome": "committed"}}})
+
+    monkeypatch.setattr("recordian.recording_controller.run_postprocess_pipeline", pipeline)
+    assert h.start("voice_wake")
     with pytest.raises(ValueError):
-        hub.select('dictation', 'hermes')
+        hub.select("dictation", "hermes")
     assert h.stop()
     h.exit_daemon()
     for thread in hub.threads.values():
         thread.join(timeout=2)
-    assert calls == ['完整的任务']
+    assert calls == ["完整的任务"]
     assert hub.capture is None
     assert workers
     hub.close()
@@ -1109,15 +1146,18 @@ def test_agent_begin_failure_releases_recording_lock(monkeypatch, tmp_path):
     class Hub:
         def __init__(self):
             self.count = 0
+
         def begin_capture(self, trigger_source):
             self.count += 1
-            raise RuntimeError('Agent busy')
+            raise RuntimeError("Agent busy")
+
         def end_capture(self, capture):
             pass
+
     hub = Hub()
-    h = _make_ptt(monkeypatch, _ConfuciusProvider(), args_overrides={'_agent_hub': hub})
+    h = _make_ptt(monkeypatch, _ConfuciusProvider(), args_overrides={"_agent_hub": hub})
     for _ in range(2):
-        with pytest.raises(RuntimeError, match='Agent busy'):
+        with pytest.raises(RuntimeError, match="Agent busy"):
             h.start()
     assert hub.count == 2
 
@@ -1128,22 +1168,28 @@ def test_keyboard_capture_stays_dictation_even_when_panel_selects_agent(monkeypa
 
     from recordian.agent_entry import AgentHub
 
-    config = tmp_path/'agents.json'
-    config.write_text(json.dumps({'instances': [{'id': 'hermes', 'executable': sys.executable, 'workspace': str(tmp_path)}]}))
-    hub = AgentHub(config, tmp_path/'tasks.json')
-    hub.select('agent', 'hermes')
+    config = tmp_path / "agents.json"
+    config.write_text(
+        json.dumps({"instances": [{"id": "hermes", "executable": sys.executable, "workspace": str(tmp_path)}]})
+    )
+    hub = AgentHub(config, tmp_path / "tasks.json")
+    hub.select("agent", "hermes")
     selected = []
+
     def select(committer):
         selected.append(committer)
         return committer
-    monkeypatch.setattr('recordian.wayland_desktop.select_desktop_committer', select)
+
+    monkeypatch.setattr("recordian.wayland_desktop.select_desktop_committer", select)
+
     def pipeline(context):
-        assert context.committer.backend_name != 'agent-buffer'
-        context.on_result({'event': 'result', 'result': {'text': '普通输入', 'commit': {'outcome': 'committed'}}})
-    monkeypatch.setattr('recordian.recording_controller.run_postprocess_pipeline', pipeline)
-    h = _make_ptt(monkeypatch, _ConfuciusProvider(), args_overrides={'_agent_hub': hub})
+        assert context.committer.backend_name != "agent-buffer"
+        context.on_result({"event": "result", "result": {"text": "普通输入", "commit": {"outcome": "committed"}}})
+
+    monkeypatch.setattr("recordian.recording_controller.run_postprocess_pipeline", pipeline)
+    h = _make_ptt(monkeypatch, _ConfuciusProvider(), args_overrides={"_agent_hub": hub})
     assert h.start()
-    assert hub.capture.mode == 'dictation'
+    assert hub.capture.mode == "dictation"
     assert h.stop()
     h.exit_daemon()
     assert selected and not hub.tasks and hub.capture is None

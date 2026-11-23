@@ -110,7 +110,7 @@ def _dbus_exception_error_name(error: Exception) -> str:
         name = error.dbus_error_name
         prefix = "org.fcitx.Fcitx.Recordian.Error."
         if isinstance(name, str) and name.startswith(prefix):
-            short = name[len(prefix):]
+            short = name[len(prefix) :]
             if re.fullmatch(r"[A-Za-z0-9_]+", short):
                 return short
         return ""
@@ -167,7 +167,7 @@ def _parse_busctl_string(output: str) -> str:
             data = payload.get("data", "")
             return data if isinstance(data, str) else text
         return text
-    match = re.match(r'^([a-z]{1,3})\s+(.*)$', text, re.S)
+    match = re.match(r"^([a-z]{1,3})\s+(.*)$", text, re.S)
     if match and match.group(2).startswith('"'):
         # Typed display format: 's "value"'. The quoted part is a C-style
         # string; json.loads handles \", \\, \uXXXX escapes the same way.
@@ -187,9 +187,7 @@ def _fcitx_busctl_call(method: str, signature: str, args: Sequence[str]) -> str:
     """Call a method on the Recordian fcitx addon and return its stdout string."""
     transport = native_bus.get_transport()
     if transport is not None:
-        return transport.call(
-            method, signature, args, timeout_ms=int(_FCITX_CALL_TIMEOUT_S * 1000)
-        )
+        return transport.call(method, signature, args, timeout_ms=int(_FCITX_CALL_TIMEOUT_S * 1000))
     if not which("busctl"):
         raise CommitError("busctl not found")
     cmd = ["busctl", "--user", "call", _FCITX_SERVICE, _FCITX_PATH, _FCITX_INTERFACE, method]
@@ -340,9 +338,7 @@ class FcitxStreamingSession:
             # by a follow-up call.
             self._next_segment = sequence + 1
         try:
-            detail = _fcitx_busctl_call(
-                "CommitSegment", "sus", [self.token, str(sequence), str(text)]
-            )
+            detail = _fcitx_busctl_call("CommitSegment", "sus", [self.token, str(sequence), str(text)])
         except (CommitError, OSError) as exc:
             message = str(exc)
             error_name = _dbus_exception_error_name(exc)
@@ -354,8 +350,10 @@ class FcitxStreamingSession:
                     self.supports_segments = False
                     self.supports_buffered_continuous = self.preedit_capable
                 return CommitResult(
-                    backend="fcitx", committed=False,
-                    detail="segments_unsafe_buffered", outcome="buffered",
+                    backend="fcitx",
+                    committed=False,
+                    detail="segments_unsafe_buffered",
+                    outcome="buffered",
                 )
             stale = error_name == "StaleSession"
             with self._lock:
@@ -512,8 +510,12 @@ class FcitxCommitter(TextCommitter):
     backend_name = "fcitx"
 
     def __init__(
-        self, target_window_id: int | None = None, *, streaming: bool = False,
-        target_window_address: str = "", target_xwayland: bool | None = None,
+        self,
+        target_window_id: int | None = None,
+        *,
+        streaming: bool = False,
+        target_window_address: str = "",
+        target_xwayland: bool | None = None,
     ) -> None:
         self.target_window_id = target_window_id
         self.streaming = bool(streaming)
@@ -571,7 +573,6 @@ class FcitxCommitter(TextCommitter):
             raise
         return CommitResult(backend=self.backend_name, committed=True, detail=detail or "committed")
 
-
     def delete_chars(self, count: int) -> CommitResult:
         n = max(0, int(count))
         if n <= 0:
@@ -580,6 +581,7 @@ class FcitxCommitter(TextCommitter):
         address = self.target_window_address
         if isinstance(address, str) and address:
             from .wayland_desktop import desktop_query
+
             try:
                 active = desktop_query("activewindow")
             except (CommitError, OSError, ValueError, subprocess.SubprocessError) as exc:
@@ -594,9 +596,8 @@ class FcitxCommitter(TextCommitter):
             ).delete_chars(n)
 
         is_explicit_xwayland = self.target_xwayland is True
-        is_native_wayland = (
-            self.target_xwayland is False
-            or (not is_explicit_xwayland and _is_wayland_session() and bool(which("wtype")))
+        is_native_wayland = self.target_xwayland is False or (
+            not is_explicit_xwayland and _is_wayland_session() and bool(which("wtype"))
         )
         if is_native_wayland and not is_explicit_xwayland:
             return WTypeCommitter().delete_chars(n)
@@ -630,6 +631,7 @@ class WTypeCommitter(TextCommitter):
 
 class XDoToolCommitter(TextCommitter):
     """xdotool type — fallback for apps that don't handle clipboard paste well."""
+
     backend_name = "xdotool"
 
     def __init__(self, target_window_id: int | None = None, *, streaming: bool = False) -> None:
@@ -663,9 +665,7 @@ class XDoToolCommitter(TextCommitter):
         self._ensure_focus()
         if _send_backspaces_via_xtest(n, window_id=None):
             return CommitResult(backend=self.backend_name, committed=True, detail=f"backspace:{n}:xtest")
-        _run_command(
-            ["xdotool", "key", "--clearmodifiers", "--repeat", str(n), "--delay", "0", "BackSpace"]
-        )
+        _run_command(["xdotool", "key", "--clearmodifiers", "--repeat", str(n), "--delay", "0", "BackSpace"])
         return CommitResult(backend=self.backend_name, committed=True, detail=f"backspace:{n}")
 
 
@@ -723,9 +723,8 @@ def send_hard_enter(committer: TextCommitter) -> CommitResult:
 
         if target_backend == "fcitx" and not (isinstance(address, str) and address):
             is_explicit_xwayland = getattr(target_committer, "target_xwayland", None) is True
-            is_native_wayland = (
-                getattr(target_committer, "target_xwayland", None) is False
-                or (not is_explicit_xwayland and _is_wayland_session())
+            is_native_wayland = getattr(target_committer, "target_xwayland", None) is False or (
+                not is_explicit_xwayland and _is_wayland_session()
             )
             if is_native_wayland and not is_explicit_xwayland:
                 if which("wtype"):
@@ -735,7 +734,11 @@ def send_hard_enter(committer: TextCommitter) -> CommitResult:
                 if getattr(target_committer, "target_xwayland", None) is False:
                     raise CommitError("wtype not found in PATH")
 
-        if target_backend == "fcitx" or target_backend.startswith("xdotool") or target_backend in {"auto", "auto-fallback", "fallback"}:
+        if (
+            target_backend == "fcitx"
+            or target_backend.startswith("xdotool")
+            or target_backend in {"auto", "auto-fallback", "fallback"}
+        ):
             if not which("xdotool"):
                 raise CommitError("xdotool not found in PATH")
             wid = getattr(target_committer, "target_window_id", None)
@@ -861,6 +864,7 @@ class XdotoolClipboardCommitter(TextCommitter):
 
     More reliable than xdotool type for CJK text and Electron apps (Obsidian etc.).
     """
+
     backend_name = "xdotool-clipboard"
 
     def __init__(
@@ -998,12 +1002,12 @@ class CommitterWithFallback(TextCommitter):
                 # If this is not the first committer, we fell back
                 if i > 0:
                     logger.warning(
-                        f"Fallback to {committer.backend_name} succeeded "
-                        f"after {i} failed attempt(s): {description}"
+                        f"Fallback to {committer.backend_name} succeeded after {i} failed attempt(s): {description}"
                     )
                     if self.notify_on_fallback:
                         try:
                             from .linux_notify import Notification, resolve_notifier
+
                             notifier = resolve_notifier("auto")
                             notifier.notify(
                                 Notification(
@@ -1017,7 +1021,7 @@ class CommitterWithFallback(TextCommitter):
 
                 # Add fallback info to result detail
                 if i > 0:
-                    detail = f"fallback:{i+1}/{len(self.committers)} {result.detail}"
+                    detail = f"fallback:{i + 1}/{len(self.committers)} {result.detail}"
                     return CommitResult(
                         backend=self.backend_name,
                         committed=result.committed,
@@ -1028,9 +1032,7 @@ class CommitterWithFallback(TextCommitter):
             except Exception as e:
                 last_error = e
                 attempts.append(f"{committer.backend_name}:{type(e).__name__}")
-                logger.debug(
-                    f"Committer {committer.backend_name} failed ({description}): {e}"
-                )
+                logger.debug(f"Committer {committer.backend_name} failed ({description}): {e}")
                 continue
 
         # All committers failed
@@ -1040,6 +1042,7 @@ class CommitterWithFallback(TextCommitter):
         if self.notify_on_fallback:
             try:
                 from .linux_notify import Notification, resolve_notifier
+
                 notifier = resolve_notifier("auto")
                 notifier.notify(
                     Notification(
@@ -1150,10 +1153,7 @@ def resolve_committer(backend: str, *, target_window_id: int | None = None) -> T
         return XDoToolCommitter(target_window_id=target_window_id)
     if normalized == "xdotool-clipboard":
         timeout_ms = _parse_clipboard_timeout_ms(os.environ.get("RECORDIAN_CLIPBOARD_TIMEOUT_MS"))
-        return XdotoolClipboardCommitter(
-            target_window_id=target_window_id,
-            clipboard_timeout_ms=timeout_ms
-        )
+        return XdotoolClipboardCommitter(target_window_id=target_window_id, clipboard_timeout_ms=timeout_ms)
     if normalized in ("auto", "auto-fallback"):
         # Auto mode: intelligent backend selection based on window type
         is_electron = False
@@ -1176,37 +1176,32 @@ def resolve_committer(backend: str, *, target_window_id: int | None = None) -> T
             timeout_ms = _parse_clipboard_timeout_ms(os.environ.get("RECORDIAN_CLIPBOARD_TIMEOUT_MS"))
 
             if _fcitx_channel_available():
-                committers.append((
-                    FcitxCommitter(target_window_id=target_window_id),
-                    "fcitx",
-                ))
+                committers.append(
+                    (
+                        FcitxCommitter(target_window_id=target_window_id),
+                        "fcitx",
+                    )
+                )
 
             # Try xdotool-clipboard first (best for CJK and Electron)
             if which("xdotool") and (which("xclip") or which("xsel")):
-                committers.append((
-                    XdotoolClipboardCommitter(target_window_id=target_window_id, clipboard_timeout_ms=timeout_ms),
-                    "xdotool-clipboard"
-                ))
+                committers.append(
+                    (
+                        XdotoolClipboardCommitter(target_window_id=target_window_id, clipboard_timeout_ms=timeout_ms),
+                        "xdotool-clipboard",
+                    )
+                )
 
             # Fallback to xdotool type
             if which("xdotool"):
-                committers.append((
-                    XDoToolCommitter(target_window_id=target_window_id),
-                    "xdotool"
-                ))
+                committers.append((XDoToolCommitter(target_window_id=target_window_id), "xdotool"))
 
             # Fallback to wtype (Wayland)
             if which("wtype"):
-                committers.append((
-                    WTypeCommitter(),
-                    "wtype"
-                ))
+                committers.append((WTypeCommitter(), "wtype"))
 
             # Last resort: stdout
-            committers.append((
-                StdoutCommitter(),
-                "stdout"
-            ))
+            committers.append((StdoutCommitter(), "stdout"))
 
             if len(committers) > 1:
                 return CommitterWithFallback(committers=committers, notify_on_fallback=True)
@@ -1220,10 +1215,7 @@ def resolve_committer(backend: str, *, target_window_id: int | None = None) -> T
         chosen: TextCommitter | None = None
         if which("xdotool") and (which("xclip") or which("xsel")):
             timeout_ms = _parse_clipboard_timeout_ms(os.environ.get("RECORDIAN_CLIPBOARD_TIMEOUT_MS"))
-            chosen = XdotoolClipboardCommitter(
-                target_window_id=target_window_id,
-                clipboard_timeout_ms=timeout_ms
-            )
+            chosen = XdotoolClipboardCommitter(target_window_id=target_window_id, clipboard_timeout_ms=timeout_ms)
         elif which("wtype"):
             chosen = WTypeCommitter()
         elif which("xdotool"):
@@ -1261,9 +1253,11 @@ def get_focused_window_id() -> int | None:
     except (FileNotFoundError, subprocess.CalledProcessError, ValueError):
         return None
 
+
 # Known terminal emulator WM_CLASS names (lowercase).
 _TERMINAL_WM_CLASSES = {
-    "gnome-terminal-server", "gnome-terminal",
+    "gnome-terminal-server",
+    "gnome-terminal",
     "konsole",
     "xterm",
     "uxterm",
@@ -1288,9 +1282,14 @@ _TERMINAL_WM_CLASSES = {
 # These apps often have complex input controls that require special handling.
 _ELECTRON_WM_CLASSES = {
     # WeChat variants
-    "wechatappex", "wechat", "wechat.exe", "deepin-wine-wechat",
+    "wechatappex",
+    "wechat",
+    "wechat.exe",
+    "deepin-wine-wechat",
     # VS Code
-    "code", "vscode", "code - insiders",
+    "code",
+    "vscode",
+    "code - insiders",
     # Obsidian
     "obsidian",
     # Slack
@@ -1331,6 +1330,7 @@ def _is_terminal_window(window_id: int) -> bool:
         if '"' in line:
             # Parse quoted strings
             import re
+
             classes = re.findall(r'"([^"]+)"', line)
             return any(cls in _TERMINAL_WM_CLASSES for cls in classes)
         return False
@@ -1394,6 +1394,7 @@ def _is_electron_window(window_id: int) -> bool:
         if '"' in line:
             # Parse quoted strings
             import re
+
             classes = re.findall(r'"([^"]+)"', line)
             result = any(cls in _ELECTRON_WM_CLASSES for cls in classes)
     except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
@@ -1406,7 +1407,7 @@ def _is_electron_window(window_id: int) -> bool:
     if len(_WINDOW_DETECTION_CACHE) > _CACHE_MAX_SIZE:
         # Remove oldest 10% of entries
         sorted_items = sorted(_WINDOW_DETECTION_CACHE.items(), key=lambda x: x[1][1])
-        for wid, _ in sorted_items[:_CACHE_MAX_SIZE // 10]:
+        for wid, _ in sorted_items[: _CACHE_MAX_SIZE // 10]:
             del _WINDOW_DETECTION_CACHE[wid]
 
     return result
@@ -1763,6 +1764,7 @@ def _should_refocus_window(window_id: int) -> bool:
     if current is None:
         return True
     return current != window_id
+
 
 def _run_command_with_input(cmd: list[str], text: str) -> None:
     try:

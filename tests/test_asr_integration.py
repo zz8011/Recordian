@@ -1,4 +1,5 @@
 """ASR 识别集成测试"""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -139,6 +140,7 @@ class TestASRIntegration:
 
             def transcribe_file(self, wav_path: Path, *, hotwords: list[str] | None = None) -> ASRResult:
                 import time
+
                 time.sleep(10)  # 模拟超时
                 return ASRResult(text="不应该返回", confidence=0.98, model_name="timeout")
 

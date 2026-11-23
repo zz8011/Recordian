@@ -1,4 +1,5 @@
 """Fcitx-shaped service on an explicitly supplied private test bus."""
+
 import json
 import sys
 import threading
@@ -7,8 +8,10 @@ from gi.repository import Gio, GLib
 
 address, log_path = sys.argv[1:]
 connection = Gio.DBusConnection.new_for_address_sync(
-    address, Gio.DBusConnectionFlags.AUTHENTICATION_CLIENT
-    | Gio.DBusConnectionFlags.MESSAGE_BUS_CONNECTION, None, None,
+    address,
+    Gio.DBusConnectionFlags.AUTHENTICATION_CLIENT | Gio.DBusConnectionFlags.MESSAGE_BUS_CONNECTION,
+    None,
+    None,
 )
 connection.set_exit_on_close(False)
 
@@ -17,27 +20,43 @@ def name_call(method):
     signature = "(su)" if method == "RequestName" else "(s)"
     values = ("org.fcitx.Fcitx5", 4) if method == "RequestName" else ("org.fcitx.Fcitx5",)
     return connection.call_sync(
-        "org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus",
-        method, GLib.Variant(signature, values), None, 0, 2000, None,
+        "org.freedesktop.DBus",
+        "/org/freedesktop/DBus",
+        "org.freedesktop.DBus",
+        method,
+        GLib.Variant(signature, values),
+        None,
+        0,
+        2000,
+        None,
     )
 
 
-methods = {"Ping": "", "BeginSession": "s", "UpdatePreedit": "ss",
-           "CommitSegment": "sus", "CommitSession": "ss", "CancelSession": "s",
-           "CommitText": "s"}
-xml = '<node><interface name="org.fcitx.Fcitx.Recordian1">' + ''.join(
-    f'<method name="{method}">' + ''.join(
-        f'<arg type="{kind}" direction="in"/>' for kind in signature
-    ) + '<arg type="s" direction="out"/></method>'
-    for method, signature in methods.items()
-) + '</interface></node>'
+methods = {
+    "Ping": "",
+    "BeginSession": "s",
+    "UpdatePreedit": "ss",
+    "CommitSegment": "sus",
+    "CommitSession": "ss",
+    "CancelSession": "s",
+    "CommitText": "s",
+}
+xml = (
+    '<node><interface name="org.fcitx.Fcitx.Recordian1">'
+    + "".join(
+        f'<method name="{method}">'
+        + "".join(f'<arg type="{kind}" direction="in"/>' for kind in signature)
+        + '<arg type="s" direction="out"/></method>'
+        for method, signature in methods.items()
+    )
+    + "</interface></node>"
+)
 
 
 def call(conn, sender, path, interface, method, args, invocation):
     values = args.unpack()
     with open(log_path, "a") as log:
-        log.write(json.dumps({"method": method, "args": values, "sender": sender},
-                             ensure_ascii=False) + "\n")
+        log.write(json.dumps({"method": method, "args": values, "sender": sender}, ensure_ascii=False) + "\n")
     text = values[-1] if values else ""
     if text == "__stale__" or (method == "CancelSession" and text == "stale-cancel-token"):
         invocation.return_dbus_error("org.fcitx.Fcitx.Recordian.Error.StaleSession", "focus lost")
@@ -63,9 +82,14 @@ def call(conn, sender, path, interface, method, args, invocation):
         reply.set_body(GLib.Variant("(u)", (7,)))
         conn.send_message(reply, Gio.DBusSendMessageFlags.NONE)
         return
-    reply = {"Ping": "ok", "BeginSession": "server-token preedit=1 segments=1",
-             "UpdatePreedit": "updated segments=1", "CancelSession": "cancelled",
-             "CommitSession": "committed fixture", "CommitText": "committed fixture"}.get(method)
+    reply = {
+        "Ping": "ok",
+        "BeginSession": "server-token preedit=1 segments=1",
+        "UpdatePreedit": "updated segments=1",
+        "CancelSession": "cancelled",
+        "CommitSession": "committed fixture",
+        "CommitText": "committed fixture",
+    }.get(method)
     if method == "BeginSession" and text == "__stale_cancel__":
         reply = "stale-cancel-token preedit=1 segments=1"
     if method == "CommitSegment":

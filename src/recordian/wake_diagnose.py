@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """语音唤醒诊断工具"""
+
 from __future__ import annotations
 
 import json
@@ -34,8 +35,7 @@ def check_config() -> tuple[bool, dict[str, Any]]:
 
         enable_voice_wake = config.get("enable_voice_wake", False)
         print_check("配置文件", True, f"路径: {config_path}")
-        print_check("语音唤醒开关", enable_voice_wake,
-                   f"enable_voice_wake = {enable_voice_wake}")
+        print_check("语音唤醒开关", enable_voice_wake, f"enable_voice_wake = {enable_voice_wake}")
 
         return True, config
     except Exception as e:
@@ -57,8 +57,7 @@ def check_model_files(config: dict[str, Any]) -> bool:
 
         path = Path(path_str)
         exists = path.exists()
-        print_check(f"模型文件 {key}", exists,
-                   f"{'存在' if exists else '不存在'}: {path}")
+        print_check(f"模型文件 {key}", exists, f"{'存在' if exists else '不存在'}: {path}")
         if not exists:
             all_exist = False
 
@@ -78,8 +77,7 @@ def check_keywords_file(config: dict[str, Any]) -> bool:
         with open(keywords_file) as f:
             lines = [line.strip() for line in f if line.strip()]
 
-        print_check("关键词文件", True,
-                   f"路径: {keywords_file}\n  包含 {len(lines)} 个关键词变体")
+        print_check("关键词文件", True, f"路径: {keywords_file}\n  包含 {len(lines)} 个关键词变体")
 
         # 显示前5个关键词
         if lines:
@@ -103,6 +101,7 @@ def check_dependencies() -> bool:
     # 检查 sherpa_onnx
     try:
         import sherpa_onnx
+
         version = getattr(sherpa_onnx, "__version__", "未知")
         print_check("sherpa_onnx", True, f"版本: {version}")
     except ImportError as e:
@@ -112,6 +111,7 @@ def check_dependencies() -> bool:
     # 检查 sounddevice
     try:
         import sounddevice as sd
+
         version = getattr(sd, "__version__", "未知")
         print_check("sounddevice", True, f"版本: {version}")
 
@@ -130,6 +130,7 @@ def check_dependencies() -> bool:
     # 检查 numpy
     try:
         import numpy as np
+
         print_check("numpy", True, f"版本: {np.__version__}")
     except ImportError as e:
         print_check("numpy", False, f"导入失败: {e}")
@@ -213,10 +214,12 @@ def main() -> int:
     if all_ok:
         print("✅ 所有检查通过！")
         print("\n💡 如果语音唤醒仍然不工作，可能的原因：")
-        print("   1. 声纹验证阈值太高（当前: {})".format(
-            config.get("wake_owner_threshold", 0.72)))
-        print("   2. 关键词检测阈值太高（当前: {})".format(
-            config.get("wake_keyword_threshold", DEFAULT_WAKE_KEYWORD_THRESHOLD)))
+        print("   1. 声纹验证阈值太高（当前: {})".format(config.get("wake_owner_threshold", 0.72)))
+        print(
+            "   2. 关键词检测阈值太高（当前: {})".format(
+                config.get("wake_keyword_threshold", DEFAULT_WAKE_KEYWORD_THRESHOLD)
+            )
+        )
         print("   3. 音频流没有正确传递给 sherpa_onnx")
         print("\n建议：")
         print("   - 尝试临时禁用声纹验证: wake_owner_verify = false")

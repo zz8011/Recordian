@@ -28,11 +28,11 @@ def test_asr_server_transcribe_applies_context_hotwords_and_language() -> None:
 
     client = asr_server.app.test_client()
     audio = io.BytesIO()
-    with wave.open(audio, 'wb') as wav:
+    with wave.open(audio, "wb") as wav:
         wav.setnchannels(1)
         wav.setsampwidth(2)
         wav.setframerate(16000)
-        wav.writeframes(b'\0\0' * 1600)
+        wav.writeframes(b"\0\0" * 1600)
     response = client.post(
         "/transcribe",
         json={

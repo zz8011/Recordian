@@ -49,7 +49,6 @@ def apply_settings_style(window):
     window.set_icon_from_file(str(ROOT / "ui_assets/recordian-app-64.png"))
 
 
-
 def styled(widget, *classes):
     for cls in classes:
         widget.get_style_context().add_class(cls)
@@ -206,7 +205,9 @@ class NativeSettingsWindow:
         self.cancel = Gtk.Button(label="取消修改")
         self.cancel.connect("clicked", lambda _: self.cancel_changes())
         footer.pack_start(self.cancel, False, False, 0)
-        self.save = styled(Gtk.Button(label="保存草稿" if getattr(app, "settings_preview", False) else "保存设置"), "primary")
+        self.save = styled(
+            Gtk.Button(label="保存草稿" if getattr(app, "settings_preview", False) else "保存设置"), "primary"
+        )
         self.save.connect("clicked", lambda _: self.save_changes())
         footer.pack_start(self.save, False, False, 0)
         self.window.connect("delete-event", self.close_request)
@@ -258,8 +259,15 @@ class NativeSettingsWindow:
         elif kind == "agentcombo":
             model = Gtk.ListStore(str, str, bool)
             for candidate in self.agent_candidates:
-                model.append([candidate.name + (" · 已发现" if candidate.executable else " · 手动配置") +
-                              ("" if candidate.supported else " · 暂未支持"), candidate.kind, candidate.supported])
+                model.append(
+                    [
+                        candidate.name
+                        + (" · 已发现" if candidate.executable else " · 手动配置")
+                        + ("" if candidate.supported else " · 暂未支持"),
+                        candidate.kind,
+                        candidate.supported,
+                    ]
+                )
             w = Gtk.ComboBox.new_with_model(model)
             w.set_id_column(1)
             cell = Gtk.CellRendererText()
@@ -287,8 +295,10 @@ class NativeSettingsWindow:
             w.set_top_margin(12)
             w.set_bottom_margin(12)
             w.get_buffer().set_text(value)
-            w.get_buffer().connect("changed", lambda buffer: self.changed(
-                key, buffer.get_text(buffer.get_start_iter(), buffer.get_end_iter(), True)))
+            w.get_buffer().connect(
+                "changed",
+                lambda buffer: self.changed(key, buffer.get_text(buffer.get_start_iter(), buffer.get_end_iter(), True)),
+            )
         elif kind == "model":
             w = Gtk.ComboBoxText.new_with_entry()
             entry = w.get_child()
@@ -359,8 +369,11 @@ class NativeSettingsWindow:
         s = self.section("preferences", "桌面与启动")
         self.row(s, "start_on_login", "开机自启", "登录桌面时启动 Recordian。", "switch")
         self.startup_note = label(
-            "原型中的开机自启只保存草稿，不修改桌面服务。" if getattr(self.app, "settings_preview", False)
-            else self.extension_error or "正在读取当前桌面启动状态…", "notice")
+            "原型中的开机自启只保存草稿，不修改桌面服务。"
+            if getattr(self.app, "settings_preview", False)
+            else self.extension_error or "正在读取当前桌面启动状态…",
+            "notice",
+        )
         self.startup_note.set_line_wrap(True)
         self.startup_note.set_margin_top(20)
         self.groups["preferences"].pack_start(self.startup_note, False, False, 0)
@@ -368,7 +381,9 @@ class NativeSettingsWindow:
             self.extension_controls["start_on_login"][1].set_sensitive(False)
         s = self.section("preferences", "常用设置")
         self.action_row(s, "开始与结束", "麦克风、语言和文字上屏。", "日常听写 →", lambda _: self.navigate("daily"))
-        self.action_row(s, "文字优化", "连接 API、识别模型、选择润色方式。", "文字润色 →", lambda _: self.navigate("refine"))
+        self.action_row(
+            s, "文字优化", "连接 API、识别模型、选择润色方式。", "文字润色 →", lambda _: self.navigate("refine")
+        )
         s = self.section("daily", "开始听写")
         self.row(
             s,
@@ -378,12 +393,32 @@ class NativeSettingsWindow:
             "segments",
             [("ptt", "按住说话"), ("toggle", "点按开关"), ("oneshot", "录一段")],
         )
-        self.row(s, "input_device", "麦克风", "选择当前录音后端的输入；默认项跟随系统。", "combo",
-                 [("default", "跟随系统默认麦克风"), *([(self.draft.values["input_device"], "已配置 · 本次未检测到")]
-                   if self.draft.values["input_device"] != "default" else [])])
-        self.microphone_refresh = self.action_row(s, "设备列表", "只枚举设备，不打开麦克风。", "刷新设备", lambda _: self.refresh_microphones())
-        self.row(s, "qwen_language", "识别语言", "随识别服务调整；网络服务的旧语言值保留。", "combo",
-                 language_choices(self.draft.values["asr_provider"], self.draft.values["qwen_language"]))
+        self.row(
+            s,
+            "input_device",
+            "麦克风",
+            "选择当前录音后端的输入；默认项跟随系统。",
+            "combo",
+            [
+                ("default", "跟随系统默认麦克风"),
+                *(
+                    [(self.draft.values["input_device"], "已配置 · 本次未检测到")]
+                    if self.draft.values["input_device"] != "default"
+                    else []
+                ),
+            ],
+        )
+        self.microphone_refresh = self.action_row(
+            s, "设备列表", "只枚举设备，不打开麦克风。", "刷新设备", lambda _: self.refresh_microphones()
+        )
+        self.row(
+            s,
+            "qwen_language",
+            "识别语言",
+            "随识别服务调整；网络服务的旧语言值保留。",
+            "combo",
+            language_choices(self.draft.values["asr_provider"], self.draft.values["qwen_language"]),
+        )
         s = self.section("daily", "文字上屏")
         self.row(s, "enable_streaming_commit", "边说边出字", "需要流式服务与兼容的输入后端。", "switch")
         self.row(s, "auto_hard_enter", "说完自动回车", "文字上屏后再按回车，可能直接发送。", "switch")
@@ -440,7 +475,9 @@ class NativeSettingsWindow:
         self.legacy_refine = box(spacing=8)
         styled(self.legacy_refine, "notice")
         self.legacy_refine.pack_start(label("当前沿用旧的进程内模型配置", "row-title"), False, False, 0)
-        self.legacy_refine.pack_start(label("原值保留。已有 API 服务后，可明确迁移连接方式。", "row-hint"), False, False, 0)
+        self.legacy_refine.pack_start(
+            label("原值保留。已有 API 服务后，可明确迁移连接方式。", "row-hint"), False, False, 0
+        )
         migrate = Gtk.Button(label="改为 API 连接")
         migrate.set_halign(Gtk.Align.START)
         migrate.connect("clicked", lambda _: self.changed("refine_provider", "cloud"))
@@ -489,7 +526,13 @@ class NativeSettingsWindow:
         self.row(s, "wake_auto_stop_silence_s", "静音结束 · 秒", "说话后静音多久结束录音。", "number")
         s = self.section("wake", "声纹验证")
         self.row(s, "wake_owner_verify", "启用声纹验证", "需要先完成声纹注册；沿用现有验证实现。", "switch")
-        self.action_row(s, "声纹档案", "使用独立向导录制三段样本；完成注册会独立保存档案。", "声纹注册…", lambda _: self.open_enrollment())
+        self.action_row(
+            s,
+            "声纹档案",
+            "使用独立向导录制三段样本；完成注册会独立保存档案。",
+            "声纹注册…",
+            lambda _: self.open_enrollment(),
+        )
         self.notice("wake", "此页不自动录音。未显示的唤醒模型、VAD 和声纹路径保持原值。")
         s = self.section("agent", "语音任务入口")
         self.row(s, "enable_agent", "启用 Agent", "沿用现有 Agent 功能开关，保存后生效。", "switch")
@@ -501,10 +544,19 @@ class NativeSettingsWindow:
         self.row(s, "agent_client", "Agent 程序", "已接通的适配可选择；其他发现的程序置灰。", "agentcombo")
         self.row(s, "agent_id", "实例标识", "小写英文、数字、横线或下划线。")
         self.row(s, "agent_name", "显示名称", "用于任务入口中的实例名称。")
-        self.transport_row = self.row(s, "agent_transport", "连接方式", "Hermes 可选 CLI / 本机 Gateway；Claude Code 使用非交互 CLI。", "combo", [("cli", "CLI"), ("gateway", "Hermes Gateway")])
+        self.transport_row = self.row(
+            s,
+            "agent_transport",
+            "连接方式",
+            "Hermes 可选 CLI / 本机 Gateway；Claude Code 使用非交互 CLI。",
+            "combo",
+            [("cli", "CLI"), ("gateway", "Hermes Gateway")],
+        )
         self.row(s, "agent_executable", "程序路径", "可手动覆盖自动发现的路径。")
         self.row(s, "agent_workspace", "工作目录", "使用存在的项目目录；保存配置不启动任务。")
-        self.agent_home_row = self.row(s, "agent_home", "Hermes 配置目录", "CLI 可留空；Gateway 需要已有的 profile 目录。")
+        self.agent_home_row = self.row(
+            s, "agent_home", "Hermes 配置目录", "CLI 可留空；Gateway 需要已有的 profile 目录。"
+        )
         self.gateway_row = self.row(s, "agent_api_url", "Gateway 地址", "现有协议只接受本机 HTTP 地址与端口。")
         self.row(s, "agent_timeout_s", "任务超时 · 秒", "允许 30–7200 秒，不改变现有任务。", "number")
         self.agent_capability = label("", "row-hint")
@@ -513,8 +565,17 @@ class NativeSettingsWindow:
         self.agent_capability.set_margin_end(16)
         self.agent_capability.set_margin_bottom(16)
         s.pack_start(self.agent_capability, False, False, 0)
-        self.action_row(s, "程序发现", "检查 PATH 与常见 bin 目录，不读取 Agent 的个人配置。", "重新搜索", lambda _: self.refresh_agents())
-        self.notice("agent", "原型预览只保存临时草稿。正式设置复用 agents.json，运行层在空闲任务边界载入，不中断正在执行的任务。支持 Hermes 和 Claude Code；其余 CLI 的执行适配尚未接入。")
+        self.action_row(
+            s,
+            "程序发现",
+            "检查 PATH 与常见 bin 目录，不读取 Agent 的个人配置。",
+            "重新搜索",
+            lambda _: self.refresh_agents(),
+        )
+        self.notice(
+            "agent",
+            "原型预览只保存临时草稿。正式设置复用 agents.json，运行层在空闲任务边界载入，不中断正在执行的任务。支持 Hermes 和 Claude Code；其余 CLI 的执行适配尚未接入。",
+        )
         s = self.section("recording", "录音参数")
         self.row(
             s,
@@ -533,7 +594,9 @@ class NativeSettingsWindow:
         self.row(s, "capture_refine_samples", "采集润色样本", "开启后会保存涉及听写文字的样本。", "switch")
         self.notice("recording", "采集参数需与所选录音后端和识别服务一致；修改后按现有后端策略生效。")
         s = self.section("diagnostics", "配置检查")
-        self.action_row(s, "检查当前草稿", "只校验表单，不请求模型、不读取听写记录。", "检查配置", lambda _: self.check_draft())
+        self.action_row(
+            s, "检查当前草稿", "只校验表单，不请求模型、不读取听写记录。", "检查配置", lambda _: self.check_draft()
+        )
         self.check_status = label("尚未检查", "row-hint")
         self.check_status.set_margin_start(16)
         self.check_status.set_margin_bottom(16)
@@ -576,8 +639,10 @@ class NativeSettingsWindow:
         if not hasattr(store, "refresh_autostart"):
             self.startup_note.set_text(self.extension_error or "当前桌面启动方式不可配置；原状态保留。")
             return
+
         def query():
             enabled = store.refresh_autostart()
+
             def apply():
                 if self.closed:
                     return False
@@ -588,10 +653,16 @@ class NativeSettingsWindow:
                     self.extension_controls["start_on_login"][1].set_active(enabled)
                 self.extension_controls["start_on_login"][1].set_sensitive(enabled is not None)
                 self.syncing = False
-                self.startup_note.set_text("保存只改变下次登录时的启动方式，不启动或停止当前进程。" if enabled is not None else "未发现可配置的已安装桌面服务；原状态保留。")
+                self.startup_note.set_text(
+                    "保存只改变下次登录时的启动方式，不启动或停止当前进程。"
+                    if enabled is not None
+                    else "未发现可配置的已安装桌面服务；原状态保留。"
+                )
                 self.update()
                 return False
+
             GLib.idle_add(apply)
+
         Thread(target=query, daemon=True, name="recordian-startup-status").start()
 
     def refresh_agents(self):
@@ -601,8 +672,15 @@ class NativeSettingsWindow:
         self.syncing = True
         model.clear()
         for candidate in self.agent_candidates:
-            model.append([candidate.name + (" · 已发现" if candidate.executable else " · 手动配置") +
-                          ("" if candidate.supported else " · 暂未支持"), candidate.kind, candidate.supported])
+            model.append(
+                [
+                    candidate.name
+                    + (" · 已发现" if candidate.executable else " · 手动配置")
+                    + ("" if candidate.supported else " · 暂未支持"),
+                    candidate.kind,
+                    candidate.supported,
+                ]
+            )
         widget.set_active_id(self.extension.values["agent_client"])
         self.syncing = False
         if not self.extension.values["agent_executable"]:
@@ -657,7 +735,9 @@ class NativeSettingsWindow:
                         choices.append((value, "已配置 · 本次未检测到"))
                     self.set_choices("input_device", choices, value)
                 return False
+
             GLib.idle_add(apply)
+
         try:
             Thread(target=fetch, daemon=True, name="recordian-device-inventory").start()
         except RuntimeError:
@@ -706,7 +786,11 @@ class NativeSettingsWindow:
         else:
             self.draft.set(key, value)
         if key == "asr_provider":
-            self.set_choices("qwen_language", language_choices(value, self.draft.values["qwen_language"]), self.draft.values["qwen_language"])
+            self.set_choices(
+                "qwen_language",
+                language_choices(value, self.draft.values["qwen_language"]),
+                self.draft.values["qwen_language"],
+            )
         if key == "record_backend":
             self.refresh_microphones()
         if key in ("refine_api_base", "refine_api_key", "refine_provider"):
@@ -799,9 +883,7 @@ class NativeSettingsWindow:
         dirty = self.draft.dirty or self.extension.dirty
         self.save.set_sensitive(dirty)
         self.cancel.set_sensitive(dirty)
-        self.status.set_text(
-            "有未保存的修改 · 保存后按现有策略生效" if dirty else "当前设置 · 修改后点击保存"
-        )
+        self.status.set_text("有未保存的修改 · 保存后按现有策略生效" if dirty else "当前设置 · 修改后点击保存")
         for _, w in self.controls.values():
             w.get_style_context().remove_class("error")
         provider = self.draft.values["asr_provider"]
@@ -822,10 +904,15 @@ class NativeSettingsWindow:
             row.set_visible(api)
         candidate = next((c for c in self.agent_candidates if c.kind == self.extension.values["agent_client"]), None)
         self.agent_capability.set_text(
-            ("已发现程序" if candidate and candidate.executable else "未发现程序，可手动填写路径") + " · " +
-            ("支持 Hermes CLI / 本机 Gateway" if candidate and candidate.kind == "hermes"
-             else "支持 Claude Code · 非交互 JSON；工具权限沿用 CLI 配置" if candidate and candidate.kind == "claude"
-             else "任务执行适配尚未接入")
+            ("已发现程序" if candidate and candidate.executable else "未发现程序，可手动填写路径")
+            + " · "
+            + (
+                "支持 Hermes CLI / 本机 Gateway"
+                if candidate and candidate.kind == "hermes"
+                else "支持 Claude Code · 非交互 JSON；工具权限沿用 CLI 配置"
+                if candidate and candidate.kind == "claude"
+                else "任务执行适配尚未接入"
+            )
         )
         hermes = self.extension.values["agent_client"] == "hermes"
         self.transport_row.set_visible(hermes)
@@ -841,7 +928,11 @@ class NativeSettingsWindow:
     def sync(self):
         self.syncing = True
         for k, (kind, w) in {**self.controls, **self.extension_controls}.items():
-            val = self.draft.refine_key if kind == "secret" else (self.extension.values if k in self.extension.values else self.draft.values)[k]
+            val = (
+                self.draft.refine_key
+                if kind == "secret"
+                else (self.extension.values if k in self.extension.values else self.draft.values)[k]
+            )
             if kind == "switch":
                 w.set_active(val)
             elif kind in ("combo", "agentcombo"):
@@ -856,7 +947,11 @@ class NativeSettingsWindow:
             else:
                 w.set_text(val)
         self.syncing = False
-        self.set_choices("qwen_language", language_choices(self.draft.values["asr_provider"], self.draft.values["qwen_language"]), self.draft.values["qwen_language"])
+        self.set_choices(
+            "qwen_language",
+            language_choices(self.draft.values["asr_provider"], self.draft.values["qwen_language"]),
+            self.draft.values["qwen_language"],
+        )
         if self.draft.values["record_backend"] != self.inventory_backend:
             self.refresh_microphones()
         else:
@@ -913,7 +1008,9 @@ class NativeSettingsWindow:
         except ValueError as exc:
             if extension_written:
                 try:
-                    self.extension_store.restore(receipt) if receipt is not None else self.extension_store.save(extension_before)
+                    self.extension_store.restore(receipt) if receipt is not None else self.extension_store.save(
+                        extension_before
+                    )
                 except Exception:
                     self.status.set_text("保存失败，附加设置未能回退；请核对配置与自启状态。")
                     return False
@@ -922,7 +1019,9 @@ class NativeSettingsWindow:
         except Exception:
             if extension_written:
                 try:
-                    self.extension_store.restore(receipt) if receipt is not None else self.extension_store.save(extension_before)
+                    self.extension_store.restore(receipt) if receipt is not None else self.extension_store.save(
+                        extension_before
+                    )
                 except Exception:
                     self.status.set_text("保存失败，附加设置未能回退；请核对配置与自启状态。")
                     return False
@@ -937,9 +1036,12 @@ class NativeSettingsWindow:
             self.controls["refine_api_key"][1].set_placeholder_text("留空保留已保存 Key")
         self.sync()
         self.status.set_text(
-            "已保存隔离草稿 · 未改变真实配置或服务" if getattr(self.app, "settings_preview", False)
-            else "已保存，正在请求后端重启" if restarted
-            else "已保存 Agent 配置 · 空闲任务边界载入" if receipt is not None and receipt.agent_changed
+            "已保存隔离草稿 · 未改变真实配置或服务"
+            if getattr(self.app, "settings_preview", False)
+            else "已保存，正在请求后端重启"
+            if restarted
+            else "已保存 Agent 配置 · 空闲任务边界载入"
+            if receipt is not None and receipt.agent_changed
             else effect_status_message(effect, restarted=False)
         )
         return True

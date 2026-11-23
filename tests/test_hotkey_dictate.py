@@ -205,10 +205,12 @@ def test_realtime_asr_worker_uses_streaming_committer_override(monkeypatch) -> N
         elapsed_ms = 123.0
 
         def __init__(self) -> None:
-            self.responses = iter([
-                {"text": "你"},
-                {"text": "你好"},
-            ])
+            self.responses = iter(
+                [
+                    {"text": "你"},
+                    {"text": "你好"},
+                ]
+            )
 
         def push_audio(self, raw: bytes) -> dict[str, object]:
             try:
@@ -852,11 +854,13 @@ def test_pcm16le_to_f32_mono_and_stereo() -> None:
 
 def test_default_config_path_uses_home_dir() -> None:
     from recordian.hotkey_dictate import DEFAULT_CONFIG_PATH
+
     assert DEFAULT_CONFIG_PATH.startswith("~"), f"应以 ~ 开头，实际: {DEFAULT_CONFIG_PATH}"
 
 
 def test_parse_hotkey_spec_empty_vk_prefix() -> None:
     from recordian.hotkey_dictate import parse_hotkey_spec
+
     result = parse_hotkey_spec("vk:")
     assert "vk:" not in result, f"空 vk: 不应出现在结果中，实际: {result}"
 
@@ -1247,7 +1251,9 @@ def test_ptt_handlers_survive_refiner_warmup_failure(monkeypatch) -> None:
             return "原文：{text}"
 
     monkeypatch.setattr("recordian.recording_controller.ensure_ffmpeg_available", lambda: "/usr/bin/ffmpeg")
-    monkeypatch.setattr("recordian.recording_controller.choose_record_backend", lambda requested, ffmpeg_bin: "ffmpeg-pulse")
+    monkeypatch.setattr(
+        "recordian.recording_controller.choose_record_backend", lambda requested, ffmpeg_bin: "ffmpeg-pulse"
+    )
     monkeypatch.setattr("recordian.recording_controller.resolve_committer", lambda backend: _FakeCommitter())
     monkeypatch.setattr("recordian.recording_controller.create_provider", lambda args: _FakeProvider())
     monkeypatch.setattr("recordian.providers.CloudLLMRefiner", _BrokenRefiner)
@@ -1283,10 +1289,7 @@ def test_ptt_handlers_survive_refiner_warmup_failure(monkeypatch) -> None:
     assert callable(stop_recording)
     assert callable(exit_daemon)
     assert stop_event.is_set() is False
-    assert any(
-        event.get("event") == "refiner_warmup" and event.get("status") == "failed"
-        for event in events
-    )
+    assert any(event.get("event") == "refiner_warmup" and event.get("status") == "failed" for event in events)
 
 
 def test_ptt_handlers_reject_cloud_refiner_without_model(monkeypatch) -> None:
@@ -1310,7 +1313,9 @@ def test_ptt_handlers_reject_cloud_refiner_without_model(monkeypatch) -> None:
             return "原文：{text}"
 
     monkeypatch.setattr("recordian.recording_controller.ensure_ffmpeg_available", lambda: "/usr/bin/ffmpeg")
-    monkeypatch.setattr("recordian.recording_controller.choose_record_backend", lambda requested, ffmpeg_bin: "ffmpeg-pulse")
+    monkeypatch.setattr(
+        "recordian.recording_controller.choose_record_backend", lambda requested, ffmpeg_bin: "ffmpeg-pulse"
+    )
     monkeypatch.setattr("recordian.recording_controller.resolve_committer", lambda backend: _FakeCommitter())
     monkeypatch.setattr("recordian.recording_controller.create_provider", lambda args: _FakeProvider())
     monkeypatch.setattr("recordian.preset_manager.PresetManager", _PresetManager)
@@ -1350,7 +1355,9 @@ def test_ptt_handlers_fall_back_to_raw_text_when_refiner_fails(monkeypatch) -> N
         provider_name = "http-cloud"
 
         def transcribe_file(self, audio_path: Path, hotwords: list[str]) -> SimpleNamespace:  # noqa: ANN001
-            return SimpleNamespace(text="你好，请帮我把明天下午三点和产品团队的会议提醒设置好，并且把上周的会议纪要一起发给我确认一下")
+            return SimpleNamespace(
+                text="你好，请帮我把明天下午三点和产品团队的会议提醒设置好，并且把上周的会议纪要一起发给我确认一下"
+            )
 
     class _FakeCommitter:
         backend_name = "stdout"
@@ -1389,7 +1396,9 @@ def test_ptt_handlers_fall_back_to_raw_text_when_refiner_fails(monkeypatch) -> N
         )
 
     monkeypatch.setattr("recordian.recording_controller.ensure_ffmpeg_available", lambda: "/usr/bin/ffmpeg")
-    monkeypatch.setattr("recordian.recording_controller.choose_record_backend", lambda requested, ffmpeg_bin: "ffmpeg-pulse")
+    monkeypatch.setattr(
+        "recordian.recording_controller.choose_record_backend", lambda requested, ffmpeg_bin: "ffmpeg-pulse"
+    )
     monkeypatch.setattr("recordian.recording_controller.resolve_committer", lambda backend: _FakeCommitter())
     monkeypatch.setattr("recordian.recording_controller.create_provider", lambda args: _FakeProvider())
     monkeypatch.setattr("recordian.recording_controller.get_focused_window_id", lambda: None)
@@ -1440,12 +1449,11 @@ def test_ptt_handlers_fall_back_to_raw_text_when_refiner_fails(monkeypatch) -> N
 
     result_events = [event for event in events if event.get("event") == "result"]
     assert result_events
-    assert result_events[-1]["result"]["text"] == "你好，请帮我把明天下午三点和产品团队的会议提醒设置好，并且把上周的会议纪要一起发给我确认一下"
-    assert any(
-        "text_refine_failed" in str(event.get("message", ""))
-        for event in events
-        if event.get("event") == "log"
+    assert (
+        result_events[-1]["result"]["text"]
+        == "你好，请帮我把明天下午三点和产品团队的会议提醒设置好，并且把上周的会议纪要一起发给我确认一下"
     )
+    assert any("text_refine_failed" in str(event.get("message", "")) for event in events if event.get("event") == "log")
 
 
 def _fake_ptt_args(**overrides: object) -> argparse.Namespace:
@@ -1499,7 +1507,9 @@ def test_ptt_start_recording_returns_false_when_busy(monkeypatch) -> None:
         return RecordProcessHandle(process=_FakeProcess(), monitor_stream=io.BytesIO(b""))
 
     monkeypatch.setattr("recordian.recording_controller.ensure_ffmpeg_available", lambda: "/usr/bin/ffmpeg")
-    monkeypatch.setattr("recordian.recording_controller.choose_record_backend", lambda requested, ffmpeg_bin: "ffmpeg-pulse")
+    monkeypatch.setattr(
+        "recordian.recording_controller.choose_record_backend", lambda requested, ffmpeg_bin: "ffmpeg-pulse"
+    )
     monkeypatch.setattr("recordian.recording_controller.resolve_committer", lambda backend: _FakeCommitter())
     monkeypatch.setattr("recordian.recording_controller.create_provider", lambda args: _FakeProvider())
     monkeypatch.setattr("recordian.recording_controller.get_focused_window_id", lambda: None)
@@ -1557,7 +1567,9 @@ def test_ptt_start_recording_applies_target_window_before_realtime_worker(monkey
 
     committer = _FakeCommitter()
     monkeypatch.setattr("recordian.recording_controller.ensure_ffmpeg_available", lambda: "/usr/bin/ffmpeg")
-    monkeypatch.setattr("recordian.recording_controller.choose_record_backend", lambda requested, ffmpeg_bin: "ffmpeg-pulse")
+    monkeypatch.setattr(
+        "recordian.recording_controller.choose_record_backend", lambda requested, ffmpeg_bin: "ffmpeg-pulse"
+    )
     monkeypatch.setattr("recordian.recording_controller.resolve_committer", lambda backend: committer)
     monkeypatch.setattr("recordian.recording_controller.create_provider", lambda args: _FakeProvider())
     monkeypatch.setattr("recordian.recording_controller.get_focused_window_id", lambda: 456)
@@ -1624,7 +1636,9 @@ def test_ptt_stop_recording_passes_prefetched_detected_language_to_postprocess(m
         postprocess_done.set()
 
     monkeypatch.setattr("recordian.recording_controller.ensure_ffmpeg_available", lambda: "/usr/bin/ffmpeg")
-    monkeypatch.setattr("recordian.recording_controller.choose_record_backend", lambda requested, ffmpeg_bin: "ffmpeg-pulse")
+    monkeypatch.setattr(
+        "recordian.recording_controller.choose_record_backend", lambda requested, ffmpeg_bin: "ffmpeg-pulse"
+    )
     monkeypatch.setattr("recordian.recording_controller.resolve_committer", lambda backend: _FakeCommitter())
     monkeypatch.setattr("recordian.recording_controller.create_provider", lambda args: _FakeProvider())
     monkeypatch.setattr("recordian.recording_controller.get_focused_window_id", lambda: None)
@@ -1697,7 +1711,9 @@ def test_ptt_stop_recording_discards_prefetched_text_when_realtime_worker_times_
         postprocess_done.set()
 
     monkeypatch.setattr("recordian.recording_controller.ensure_ffmpeg_available", lambda: "/usr/bin/ffmpeg")
-    monkeypatch.setattr("recordian.recording_controller.choose_record_backend", lambda requested, ffmpeg_bin: "ffmpeg-pulse")
+    monkeypatch.setattr(
+        "recordian.recording_controller.choose_record_backend", lambda requested, ffmpeg_bin: "ffmpeg-pulse"
+    )
     monkeypatch.setattr("recordian.recording_controller.resolve_committer", lambda backend: _FakeCommitter())
     monkeypatch.setattr("recordian.recording_controller.create_provider", lambda args: _FakeProvider())
     monkeypatch.setattr("recordian.recording_controller.get_focused_window_id", lambda: None)
@@ -1759,7 +1775,9 @@ def test_ptt_start_failure_releases_lock_and_recovers(monkeypatch) -> None:
         return RecordProcessHandle(process=_FakeProcess(), monitor_stream=io.BytesIO(b""))
 
     monkeypatch.setattr("recordian.recording_controller.ensure_ffmpeg_available", lambda: "/usr/bin/ffmpeg")
-    monkeypatch.setattr("recordian.recording_controller.choose_record_backend", lambda requested, ffmpeg_bin: "ffmpeg-pulse")
+    monkeypatch.setattr(
+        "recordian.recording_controller.choose_record_backend", lambda requested, ffmpeg_bin: "ffmpeg-pulse"
+    )
     monkeypatch.setattr("recordian.recording_controller.resolve_committer", lambda backend: _FakeCommitter())
     monkeypatch.setattr("recordian.recording_controller.create_provider", lambda args: _FakeProvider())
     monkeypatch.setattr("recordian.recording_controller.get_focused_window_id", lambda: None)
@@ -1813,7 +1831,9 @@ def test_ptt_stop_recording_is_idempotent_under_concurrency(monkeypatch) -> None
         return RecordProcessHandle(process=_FakeProcess(), monitor_stream=io.BytesIO(b""))
 
     monkeypatch.setattr("recordian.recording_controller.ensure_ffmpeg_available", lambda: "/usr/bin/ffmpeg")
-    monkeypatch.setattr("recordian.recording_controller.choose_record_backend", lambda requested, ffmpeg_bin: "ffmpeg-pulse")
+    monkeypatch.setattr(
+        "recordian.recording_controller.choose_record_backend", lambda requested, ffmpeg_bin: "ffmpeg-pulse"
+    )
     monkeypatch.setattr("recordian.recording_controller.resolve_committer", lambda backend: _FakeCommitter())
     monkeypatch.setattr("recordian.recording_controller.create_provider", lambda args: _FakeProvider())
     monkeypatch.setattr("recordian.recording_controller.get_focused_window_id", lambda: None)
@@ -1870,7 +1890,9 @@ def test_ptt_exit_waits_for_processing_completion(monkeypatch) -> None:
         return RecordProcessHandle(process=_FakeProcess(), monitor_stream=io.BytesIO(b""))
 
     monkeypatch.setattr("recordian.recording_controller.ensure_ffmpeg_available", lambda: "/usr/bin/ffmpeg")
-    monkeypatch.setattr("recordian.recording_controller.choose_record_backend", lambda requested, ffmpeg_bin: "ffmpeg-pulse")
+    monkeypatch.setattr(
+        "recordian.recording_controller.choose_record_backend", lambda requested, ffmpeg_bin: "ffmpeg-pulse"
+    )
     monkeypatch.setattr("recordian.recording_controller.resolve_committer", lambda backend: _FakeCommitter())
     monkeypatch.setattr("recordian.recording_controller.create_provider", lambda args: _FakeProvider())
     monkeypatch.setattr("recordian.recording_controller.get_focused_window_id", lambda: None)
@@ -1928,7 +1950,9 @@ def test_voice_wake_owner_gate_inconclusive_falls_back_to_asr(monkeypatch) -> No
         )
 
     monkeypatch.setattr("recordian.recording_controller.ensure_ffmpeg_available", lambda: "/usr/bin/ffmpeg")
-    monkeypatch.setattr("recordian.recording_controller.choose_record_backend", lambda requested, ffmpeg_bin: "ffmpeg-pulse")
+    monkeypatch.setattr(
+        "recordian.recording_controller.choose_record_backend", lambda requested, ffmpeg_bin: "ffmpeg-pulse"
+    )
     monkeypatch.setattr("recordian.recording_controller.resolve_committer", lambda backend: _FakeCommitter())
     monkeypatch.setattr("recordian.recording_controller.create_provider", lambda args: _FakeProvider())
     monkeypatch.setattr("recordian.recording_controller.get_focused_window_id", lambda: None)
@@ -1995,7 +2019,9 @@ def test_voice_wake_recording_starts_owner_gate_as_active(monkeypatch) -> None:
         return SimpleNamespace()
 
     monkeypatch.setattr("recordian.recording_controller.ensure_ffmpeg_available", lambda: "/usr/bin/ffmpeg")
-    monkeypatch.setattr("recordian.recording_controller.choose_record_backend", lambda requested, ffmpeg_bin: "ffmpeg-pulse")
+    monkeypatch.setattr(
+        "recordian.recording_controller.choose_record_backend", lambda requested, ffmpeg_bin: "ffmpeg-pulse"
+    )
     monkeypatch.setattr("recordian.recording_controller.resolve_committer", lambda backend: _FakeCommitter())
     monkeypatch.setattr("recordian.recording_controller.create_provider", lambda args: _FakeProvider())
     monkeypatch.setattr("recordian.recording_controller.get_focused_window_id", lambda: None)
@@ -2048,7 +2074,9 @@ def test_voice_wake_recording_enables_monitor_stream(monkeypatch) -> None:
         )
 
     monkeypatch.setattr("recordian.recording_controller.ensure_ffmpeg_available", lambda: "/usr/bin/ffmpeg")
-    monkeypatch.setattr("recordian.recording_controller.choose_record_backend", lambda requested, ffmpeg_bin: "ffmpeg-pulse")
+    monkeypatch.setattr(
+        "recordian.recording_controller.choose_record_backend", lambda requested, ffmpeg_bin: "ffmpeg-pulse"
+    )
     monkeypatch.setattr("recordian.recording_controller.resolve_committer", lambda backend: _FakeCommitter())
     monkeypatch.setattr("recordian.recording_controller.create_provider", lambda args: _FakeProvider())
     monkeypatch.setattr("recordian.recording_controller.get_focused_window_id", lambda: None)
@@ -2144,7 +2172,9 @@ def test_ptt_stop_recording_timeout_with_composition_started_suppresses_fallback
         postprocess_done.set()
 
     monkeypatch.setattr("recordian.recording_controller.ensure_ffmpeg_available", lambda: "/usr/bin/ffmpeg")
-    monkeypatch.setattr("recordian.recording_controller.choose_record_backend", lambda requested, ffmpeg_bin: "ffmpeg-pulse")
+    monkeypatch.setattr(
+        "recordian.recording_controller.choose_record_backend", lambda requested, ffmpeg_bin: "ffmpeg-pulse"
+    )
     monkeypatch.setattr("recordian.recording_controller.resolve_committer", lambda backend: _FakeCommitter())
     monkeypatch.setattr("recordian.recording_controller.create_provider", lambda args: _FakeProvider())
     monkeypatch.setattr("recordian.recording_controller.get_focused_window_id", lambda: None)

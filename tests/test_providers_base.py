@@ -1,4 +1,5 @@
 """测试 providers/base.py 基础类和工具函数"""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -87,16 +88,12 @@ class TestASRProvider:
         ]
 
     def test_coerce_asr_timestamps_accepts_dicts_and_pairs(self) -> None:
-        timestamps = coerce_asr_timestamps(
-            [{"start": 0, "end_ms": 800}, (900, 1200), ["1300", "1500"], "bad"]
-        )
+        timestamps = coerce_asr_timestamps([{"start": 0, "end_ms": 800}, (900, 1200), ["1300", "1500"], "bad"])
 
         assert timestamps == [(0, 800), (900, 1200), (1300, 1500)]
 
     def test_coerce_asr_segments_ignores_invalid_items(self) -> None:
-        segments = coerce_asr_segments(
-            [{"text": "one", "start_ms": 0, "end_ms": 500}, "bad", {"speaker": "spk-2"}]
-        )
+        segments = coerce_asr_segments([{"text": "one", "start_ms": 0, "end_ms": 500}, "bad", {"speaker": "spk-2"}])
 
         assert segments == [
             ASRSegment(text="one", start_ms=0, end_ms=500, speaker=None, metadata={}),

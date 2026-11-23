@@ -25,8 +25,11 @@ _MIN_MARGIN = 0.20
 
 
 def interpret_choice(
-    options: Mapping[str, str], picked: object, *,
-    min_top: float = _MIN_TOP, min_margin: float = _MIN_MARGIN,
+    options: Mapping[str, str],
+    picked: object,
+    *,
+    min_top: float = _MIN_TOP,
+    min_margin: float = _MIN_MARGIN,
 ) -> str | None:
     """Return an option key only when the distribution clears the rejection gate.
 
@@ -37,8 +40,10 @@ def interpret_choice(
     answers; they are not a calibrated probability of being correct.
     """
     if (
-        not math.isfinite(min_top) or not math.isfinite(min_margin)
-        or not _MIN_TOP <= min_top <= 1.0 or not _MIN_MARGIN <= min_margin <= 1.0
+        not math.isfinite(min_top)
+        or not math.isfinite(min_margin)
+        or not _MIN_TOP <= min_top <= 1.0
+        or not _MIN_MARGIN <= min_margin <= 1.0
     ):
         return None
     if not isinstance(picked, dict) or not options:
@@ -79,9 +84,7 @@ def require_requests() -> Any:
     try:
         import requests
     except ImportError as exc:
-        raise ImportError(
-            "启用内网决策模型需要可选依赖 requests。请安装 correction extra 后再打开端点。"
-        ) from exc
+        raise ImportError("启用内网决策模型需要可选依赖 requests。请安装 correction extra 后再打开端点。") from exc
     return requests
 
 
@@ -97,8 +100,11 @@ def request_choice(
     """POST one choice. Network and payload failures return None."""
     if session is None or not endpoint or timeout_s <= 0 or len(options) < 2:
         emit_judge_event(
-            logger, site="semif_request", outcome="skipped_guard",
-            timeout_budget_ms=timeout_s * 1000, text_len=len(state),
+            logger,
+            site="semif_request",
+            outcome="skipped_guard",
+            timeout_budget_ms=timeout_s * 1000,
+            text_len=len(state),
             correction_applied=False,
         )
         return None
@@ -117,9 +123,12 @@ def request_choice(
 
     def _fail(outcome: str) -> None:
         emit_judge_event(
-            logger, site="semif_request", outcome=outcome,
+            logger,
+            site="semif_request",
+            outcome=outcome,
             latency_ms=(time.perf_counter() - started) * 1000,
-            timeout_budget_ms=timeout_s * 1000, text_len=len(state),
+            timeout_budget_ms=timeout_s * 1000,
+            text_len=len(state),
             correction_applied=False,
         )
 
@@ -145,10 +154,12 @@ def request_choice(
         raise
     result = interpret_choice(options, picked)
     emit_judge_event(
-        logger, site="semif_request",
+        logger,
+        site="semif_request",
         outcome="answered" if result is not None else "gate_rejected",
         latency_ms=(time.perf_counter() - started) * 1000,
-        timeout_budget_ms=timeout_s * 1000, text_len=len(state),
+        timeout_budget_ms=timeout_s * 1000,
+        text_len=len(state),
         correction_applied=result is not None and result != "keep",
     )
     return result
@@ -170,9 +181,13 @@ def request_choices(
     """
     if session is None or not endpoint or timeout_s <= 0 or not questions:
         emit_judge_event(
-            logger, site="semif_request_batch", outcome="skipped_guard",
-            timeout_budget_ms=timeout_s * 1000, text_len=len(state),
-            correction_applied=False, extra=f"questions={len(questions)}",
+            logger,
+            site="semif_request_batch",
+            outcome="skipped_guard",
+            timeout_budget_ms=timeout_s * 1000,
+            text_len=len(state),
+            correction_applied=False,
+            extra=f"questions={len(questions)}",
         )
         return {}
     requests = require_requests()
@@ -181,10 +196,14 @@ def request_choices(
 
     def _fail(outcome: str) -> dict[str, str | None]:
         emit_judge_event(
-            logger, site="semif_request_batch", outcome=outcome,
+            logger,
+            site="semif_request_batch",
+            outcome=outcome,
             latency_ms=(time.perf_counter() - started) * 1000,
-            timeout_budget_ms=timeout_s * 1000, text_len=len(state),
-            correction_applied=False, extra=f"questions={len(questions)}",
+            timeout_budget_ms=timeout_s * 1000,
+            text_len=len(state),
+            correction_applied=False,
+            extra=f"questions={len(questions)}",
         )
         return {}
 
@@ -212,10 +231,12 @@ def request_choices(
             continue
         results[name] = interpret_choice(criteria, answers.get(name))
     emit_judge_event(
-        logger, site="semif_request_batch",
+        logger,
+        site="semif_request_batch",
         outcome="answered" if any(v is not None for v in results.values()) else "gate_rejected",
         latency_ms=(time.perf_counter() - started) * 1000,
-        timeout_budget_ms=timeout_s * 1000, text_len=len(state),
+        timeout_budget_ms=timeout_s * 1000,
+        text_len=len(state),
         correction_applied=any(v is not None and v != "keep" for v in results.values()),
         extra=f"questions={len(questions)}",
     )
@@ -249,8 +270,11 @@ class SemIfClient:
     ) -> str | None:
         if self._closed or not self.enabled or not self.endpoint:
             emit_judge_event(
-                logger, site="semif_client", outcome="skipped_disabled",
-                timeout_budget_ms=self.timeout_s * 1000, text_len=len(state),
+                logger,
+                site="semif_client",
+                outcome="skipped_disabled",
+                timeout_budget_ms=self.timeout_s * 1000,
+                text_len=len(state),
                 correction_applied=False,
             )
             return None

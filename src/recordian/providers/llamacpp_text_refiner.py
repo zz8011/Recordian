@@ -143,7 +143,7 @@ class LlamaCppTextRefiner(BaseTextRefiner):
         # 移除可能的前缀
         for prefix in ["输出：", "书面语：", "纪要：", "文档："]:
             if generated.startswith(prefix):
-                generated = generated[len(prefix):].strip()
+                generated = generated[len(prefix) :].strip()
                 break
 
         # 检测并移除重复句子
@@ -191,15 +191,18 @@ class LlamaCppTextRefiner(BaseTextRefiner):
 
         if messages is None:
             prompt = self._build_fewshot_prompt(text)
-            result = cast(dict, self._llm(
-                prompt,
-                max_tokens=max_tokens,
-                temperature=0.1,
-                repeat_penalty=1.2,
-                top_p=0.9,
-                stop=["输入：", "<think>", "<|"],
-                echo=False,
-            ))
+            result = cast(
+                dict,
+                self._llm(
+                    prompt,
+                    max_tokens=max_tokens,
+                    temperature=0.1,
+                    repeat_penalty=1.2,
+                    top_p=0.9,
+                    stop=["输入：", "<think>", "<|"],
+                    echo=False,
+                ),
+            )
             return self._extract_completion_text(result)
 
         return self._extract_chat_text(cast(dict, result))
@@ -243,18 +246,18 @@ class LlamaCppTextRefiner(BaseTextRefiner):
             return self._build_default_fewshot(text)
 
         # 从 prompt_template 中提取任务描述和规则
-        lines = self.prompt_template.split('\n')
+        lines = self.prompt_template.split("\n")
         task_description = ""
         rules = []
 
         for line in lines:
             line = line.strip()
-            if not line or line.startswith('#'):
+            if not line or line.startswith("#"):
                 continue
-            if line.startswith('-'):
+            if line.startswith("-"):
                 # 提取规则
                 rules.append(line[1:].strip())
-            elif '{text}' not in line and not line.startswith('原文：') and not line.startswith('输入：'):
+            elif "{text}" not in line and not line.startswith("原文：") and not line.startswith("输入："):
                 # 提取任务描述
                 if task_description:
                     task_description += " "
@@ -333,17 +336,21 @@ class LlamaCppTextRefiner(BaseTextRefiner):
 
         # 如果有数字规则，添加数字转换示例
         if has_number_rule:
-            examples.extend([
-                ("一共有三个文件", "一共有3个文件"),
-                ("第一步打开文件，第二步编辑内容", "第1步打开文件，第2步编辑内容"),
-            ])
+            examples.extend(
+                [
+                    ("一共有三个文件", "一共有3个文件"),
+                    ("第一步打开文件，第二步编辑内容", "第1步打开文件，第2步编辑内容"),
+                ]
+            )
 
         # 如果有分段规则，添加分段示例
         if has_paragraph_rule:
-            examples.append((
-                "首先我们需要准备材料，然后开始制作，最后进行测试",
-                "首先我们需要准备材料。\n然后开始制作。\n最后进行测试。"
-            ))
+            examples.append(
+                (
+                    "首先我们需要准备材料，然后开始制作，最后进行测试",
+                    "首先我们需要准备材料。\n然后开始制作。\n最后进行测试。",
+                )
+            )
 
         # 构建 Few-shot prompt
         prompt = "整理语音识别文本：\n"
@@ -367,7 +374,8 @@ class LlamaCppTextRefiner(BaseTextRefiner):
 
         # 按句号、问号、感叹号分割句子
         import re
-        sentences = re.split(r'([。？！])', text)
+
+        sentences = re.split(r"([。？！])", text)
 
         # 重新组合句子（保留标点）
         combined = []
@@ -386,4 +394,4 @@ class LlamaCppTextRefiner(BaseTextRefiner):
                 seen.add(sentence_clean)
                 result.append(sentence)
 
-        return ''.join(result).strip()
+        return "".join(result).strip()

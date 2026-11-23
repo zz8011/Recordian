@@ -113,7 +113,9 @@ def test_status_summary_label_shows_readiness_without_path() -> None:
     state = UiState(
         status="idle",
         backend_running=True,
-        last_run=RecentRunObservation(record_ms=121.0, transcribe_ms=200.0, detected_language="zh", asr_path="prefetched"),
+        last_run=RecentRunObservation(
+            record_ms=121.0, transcribe_ms=200.0, detected_language="zh", asr_path="prefetched"
+        ),
     )
 
     label = _status_summary_label(state, {"trigger_mode": "ptt", "hotkey": "<ctrl_r>"})
@@ -197,6 +199,7 @@ def test_tray_gui_no_mktemp() -> None:
     """tray_gui.py 不应使用不安全的 tempfile.mktemp()"""
 
     from recordian import tray_gui
+
     source = inspect.getsource(tray_gui)
     assert "mktemp(" not in source, "tray_gui.py 仍在使用不安全的 mktemp()"
 
@@ -205,6 +208,7 @@ def test_tray_app_no_legacy_quick_menu_debug_print() -> None:
     """TrayApp 不应残留旧 quick menu 调试语句"""
 
     from recordian.tray_gui import TrayApp
+
     source = inspect.getsource(TrayApp)
     assert "open_quick_menu called" not in source
     assert "Menu position:" not in source
@@ -273,7 +277,9 @@ def test_load_hotkey_default_config_matches_backend_defaults() -> None:
     assert defaults["remote_paste_mode"] == "direct"
     assert defaults["remote_paste_sync_wait_s"] == 0.35
     assert defaults["remote_paste_follow_deskflow_active_screen"] is False
-    assert defaults["deskflow_active_screen_path"] == str(Path("~/.local/state/deskflow/active_screen.json").expanduser())
+    assert defaults["deskflow_active_screen_path"] == str(
+        Path("~/.local/state/deskflow/active_screen.json").expanduser()
+    )
     assert defaults["deskflow_log_path"] == ""
     assert defaults["remote_paste_screen_name"] == ""
     assert defaults["wake_auto_stop_silence_s"] == 1.5
@@ -416,7 +422,6 @@ def test_toggle_lock_prevents_double_save(tmp_path: Path, monkeypatch) -> None:
 def test_toggle_noop_when_value_matches(tmp_path: Path, monkeypatch) -> None:
     """R2: 配置值已匹配时 toggle 不应触发 save"""
     from unittest.mock import MagicMock
-
 
     config_path = tmp_path / "hotkey.json"
     ConfigManager.save(config_path, {"enable_text_refine": True})

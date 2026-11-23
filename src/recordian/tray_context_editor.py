@@ -47,6 +47,7 @@ def open_context_editor(app: TrayApp) -> None:
         win.set_default_size(780, 680)
         win.set_position(Gtk.WindowPosition.CENTER)
         from recordian.native_settings import apply_settings_style, styled
+
         apply_settings_style(win)
         win.set_transient_for(getattr(app, "_gtk_settings_window", None))
         app._gtk_context_window = win

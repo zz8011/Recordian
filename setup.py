@@ -1,4 +1,5 @@
 """Optional build-time Rust core; never compiles at application startup."""
+
 import os
 import runpy
 from pathlib import Path

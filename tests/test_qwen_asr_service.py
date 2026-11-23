@@ -3,6 +3,7 @@
 The service must stay a thin host around QwenASRProvider: these tests pin
 the HTTP contract (health, transcribe, busy slot, auth) without a GPU.
 """
+
 from __future__ import annotations
 
 import base64
@@ -29,9 +30,7 @@ class _FakeProvider:
         self.calls: list[dict] = []
 
     def transcribe_file(self, wav_path: Path, *, hotwords: list[str]):
-        self.calls.append(
-            {"hotwords": list(hotwords), "context": self.context, "bytes": Path(wav_path).stat().st_size}
-        )
+        self.calls.append({"hotwords": list(hotwords), "context": self.context, "bytes": Path(wav_path).stat().st_size})
         return SimpleNamespace(text="识别文本", detected_language="Chinese", model_name="fake-qwen")
 
 

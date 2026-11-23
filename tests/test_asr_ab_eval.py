@@ -2,6 +2,7 @@
 
 No GPU needed: a fake provider stands in for the Confucius/Qwen providers.
 """
+
 import importlib.util
 import wave
 from pathlib import Path
@@ -100,11 +101,18 @@ def test_build_payload_partial_marks_and_aggregates_subset():
         {"id": "b", "wav": Path("b.wav"), "reference": "y", "gold": False},
     ]
     completed = [
-        {"id": "a", "ref_chars": 1, "errors": 0, "duration_s": 1.0,
-         "elapsed_s": 1.0, "term_misses": [], "latin_ref_tokens": 0, "latin_survived": 0},
+        {
+            "id": "a",
+            "ref_chars": 1,
+            "errors": 0,
+            "duration_s": 1.0,
+            "elapsed_s": 1.0,
+            "term_misses": [],
+            "latin_ref_tokens": 0,
+            "latin_survived": 0,
+        },
     ]
-    payload = mod.build_payload("A", Path("/d"), clips, completed,
-                                partial=True, error="RuntimeError: boom")
+    payload = mod.build_payload("A", Path("/d"), clips, completed, partial=True, error="RuntimeError: boom")
     assert payload["partial"] is True
     assert payload["error"] == "RuntimeError: boom"
     assert payload["aggregate"]["clips"] == 1

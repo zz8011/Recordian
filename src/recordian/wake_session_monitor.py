@@ -119,8 +119,8 @@ class _AdaptiveDisplayLevel:
     """
 
     MIN_RANGE_DB = 5.5
-    _LO_RISE_PER_FRAME = 0.02   # 噪声基底上升 ~0.3 dB/s
-    _HI_ATTACK = 0.4            # 语音上限快攻
+    _LO_RISE_PER_FRAME = 0.02  # 噪声基底上升 ~0.3 dB/s
+    _HI_ATTACK = 0.4  # 语音上限快攻
     _HI_DECAY_PER_FRAME = 0.03  # 语音上限衰减 ~0.5 dB/s
     _ATTACK = 0.35
     _RELEASE = 0.15
@@ -153,6 +153,7 @@ class _AdaptiveDisplayLevel:
         alpha = self._ATTACK if raw > self._level else self._RELEASE
         self._level += (raw - self._level) * alpha
         return self._level
+
 
 def _should_extend_last_speech_timestamp(
     *,
@@ -347,7 +348,9 @@ def start_wake_session_monitor(context: WakeSessionMonitorContext) -> threading.
                                     ),
                                 }
                             )
-                            owner_embeddings = list(profile.embeddings) if profile.embeddings else [list(profile.embedding)]
+                            owner_embeddings = (
+                                list(profile.embeddings) if profile.embeddings else [list(profile.embedding)]
+                            )
                             _extract_owner_embedding = _extract_speaker_embedding
                             _owner_cosine_similarity = _cosine_similarity
                             owner_audio_chunks = deque(maxlen=100)
@@ -392,7 +395,9 @@ def start_wake_session_monitor(context: WakeSessionMonitorContext) -> threading.
                             )
                 except Exception as exc:  # noqa: BLE001
                     owner_filter_enabled = False
-                    context.on_state({"event": "log", "message": f"voice_owner_filter_disabled: {type(exc).__name__}: {exc}"})
+                    context.on_state(
+                        {"event": "log", "message": f"voice_owner_filter_disabled: {type(exc).__name__}: {exc}"}
+                    )
 
             context.set_state("voice_owner_filter_enabled", owner_filter_enabled)
             # Keep initial speech responsive after wake trigger. The owner gate
@@ -471,7 +476,7 @@ def start_wake_session_monitor(context: WakeSessionMonitorContext) -> threading.
                 mono_frame = np.ascontiguousarray(np.asarray(mono_frame, dtype=np.float32).reshape(-1))
                 if mono_frame.size == 0:
                     return
-                rms = float(np.sqrt(np.mean(mono_frame ** 2)))
+                rms = float(np.sqrt(np.mean(mono_frame**2)))
 
                 if rms < noise_floor * 1.8:
                     noise_floor = noise_floor * 0.98 + rms * 0.02
@@ -641,18 +646,26 @@ def start_wake_session_monitor(context: WakeSessionMonitorContext) -> threading.
                     soft_keepalive = False
                     # Briefly bridge VAD misses, but do not let persistent low
                     # noise refresh the end-of-speech timer without limit.
-                    if (speech_started and not speech_detected_raw and not owner_gate_rejected
-                            and last_vad_speech_ts is not None and now_ts - last_vad_speech_ts <= 0.3):
+                    if (
+                        speech_started
+                        and not speech_detected_raw
+                        and not owner_gate_rejected
+                        and last_vad_speech_ts is not None
+                        and now_ts - last_vad_speech_ts <= 0.3
+                    ):
                         soft_keepalive = _is_soft_keepalive_speech_frame(
                             level=level,
                             rms=rms,
                             noise_floor=noise_floor,
                         )
-                    if _should_extend_last_speech_timestamp(
-                        speech_detected_raw=speech_detected_raw,
-                        speech_detected=speech_detected,
-                        speech_started=speech_started,
-                    ) or soft_keepalive:
+                    if (
+                        _should_extend_last_speech_timestamp(
+                            speech_detected_raw=speech_detected_raw,
+                            speech_detected=speech_detected,
+                            speech_started=speech_started,
+                        )
+                        or soft_keepalive
+                    ):
                         context.set_state("voice_last_speech_ts", now_ts)
                     if speech_detected:
                         context.set_state("voice_speech_detected", True)
@@ -704,7 +717,9 @@ def start_wake_session_monitor(context: WakeSessionMonitorContext) -> threading.
                             break
         except ImportError:
             if context.args.debug_diagnostics:
-                context.on_state({"event": "log", "message": "diag audio_level_monitoring_disabled: sounddevice not installed"})
+                context.on_state(
+                    {"event": "log", "message": "diag audio_level_monitoring_disabled: sounddevice not installed"}
+                )
         except Exception as exc:  # noqa: BLE001
             if context.args.debug_diagnostics:
                 context.on_state({"event": "log", "message": f"diag audio_level_monitoring_failed: {exc}"})

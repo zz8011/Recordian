@@ -59,9 +59,7 @@ class Pass2Policy:
         # 使用缓存的标准化 hotwords
         hotwords_tuple = tuple(hotwords)
         if hotwords_tuple not in self._normalized_hotwords_cache:
-            self._normalized_hotwords_cache[hotwords_tuple] = [
-                hw.strip().lower() for hw in hotwords if hw.strip()
-            ]
+            self._normalized_hotwords_cache[hotwords_tuple] = [hw.strip().lower() for hw in hotwords if hw.strip()]
 
         normalized_hotwords = self._normalized_hotwords_cache[hotwords_tuple]
         if not normalized_hotwords:

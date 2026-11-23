@@ -98,17 +98,11 @@ RECORD_FORMAT_CHOICES: tuple[tuple[str, str], ...] = (
     ("ogg", "Ogg"),
 )
 
-RECOMMENDED_PROFILE_NOTICE = (
-    "已填入推荐配置，还没保存。需要流式识别服务已在运行；口令和常用词保持不变。"
-)
+RECOMMENDED_PROFILE_NOTICE = "已填入推荐配置，还没保存。需要流式识别服务已在运行；口令和常用词保持不变。"
 
-CONFUCIUS_STOCK_MIGRATION_NOTICE = (
-    "旧的默认识别地址已换成流式 Confucius 的本机地址。点「保存并生效」后才会写入。"
-)
+CONFUCIUS_STOCK_MIGRATION_NOTICE = "旧的默认识别地址已换成流式 Confucius 的本机地址。点「保存并生效」后才会写入。"
 
-SAVE_EFFECT_INTRO = (
-    "点「保存并生效」写入并让设置生效。点「取消」放弃还没保存的修改。"
-)
+SAVE_EFFECT_INTRO = "点「保存并生效」写入并让设置生效。点「取消」放弃还没保存的修改。"
 
 BUSY_SAVE_MESSAGE = "请先结束当前听写，再保存设置"
 
@@ -283,10 +277,7 @@ def confucius_endpoint_problem(endpoint: str) -> str | None:
         return "这个地址的主机名无法识别。请检查 IPv6 是否放在方括号里。"
     scheme = parsed.scheme.lower()
     if scheme not in {"ws", "wss"}:
-        return (
-            f"流式 Confucius 只接受 ws:// 或 wss://，当前是 {scheme or '未知'}://。"
-            "这个自定义地址不会被自动改掉。"
-        )
+        return f"流式 Confucius 只接受 ws:// 或 wss://，当前是 {scheme or '未知'}://。这个自定义地址不会被自动改掉。"
     return _host_port_problem(parsed)
 
 

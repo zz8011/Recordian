@@ -6,10 +6,20 @@ on:
   pull_request:
     branches: [ master, main, develop ]
 
+permissions:
+  contents: read
+
+# PR 新推送取消旧运行；push（含 main）按 sha 独占分组，永不被取消或被后一次 push 顶掉。
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     strategy:
+      fail-fast: false
       matrix:
         python-version: ['3.10', '3.11', '3.12']
 
@@ -20,33 +30,32 @@ jobs:
       uses: actions/setup-python@v5
       with:
         python-version: ${{ matrix.python-version }}
+        cache: pip
+        cache-dependency-path: pyproject.toml
 
     - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install -e ".[dev]"
+      run: python -m pip install -e ".[dev]"
 
-    - name: Install audio decoding test dependency
+    # 静态 ffmpeg（PyPI 随包分发）代替 apt 的 ~100 个依赖包：apt 镜像下载会卡住，且 dpkg 解包要 30s+
+    - name: Put ffmpeg on PATH
       run: |
-        sudo apt-get update
-        sudo apt-get install -y ffmpeg
+        mkdir -p "$RUNNER_TEMP/bin"
+        ln -s "$(python -c 'import imageio_ffmpeg; print(imageio_ffmpeg.get_ffmpeg_exe())')" "$RUNNER_TEMP/bin/ffmpeg"
+        echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
 
     - name: Run tests with pytest
       run: |
-        pytest --cov=src/recordian --cov-report=xml --cov-report=term
+        pytest -n auto --cov=src/recordian --cov-report=xml --cov-report=term
 
-    - name: Upload coverage to Codecov
-      uses: codecov/codecov-action@v4
+    - name: Upload coverage report
+      uses: actions/upload-artifact@v4
       with:
-        file: ./coverage.xml
-        flags: unittests
-        name: codecov-umbrella
-        fail_ci_if_error: false
-      env:
-        CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+        name: coverage-${{ matrix.python-version }}
+        path: coverage.xml
 
   lint:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
 
     steps:
     - uses: actions/checkout@v4
@@ -55,11 +64,12 @@ jobs:
       uses: actions/setup-python@v5
       with:
         python-version: '3.10'
+        cache: pip
+        cache-dependency-path: pyproject.toml
 
     - name: Install dependencies
       run: |
-        python -m pip install --upgrade pip
-        pip install -e ".[dev]"
+        python -m pip install -e ".[dev]"
 
     - name: Check code style with ruff
       run: |
@@ -68,4 +78,3 @@ jobs:
     - name: Type check with mypy
       run: |
         mypy src/recordian --ignore-missing-imports --no-strict-optional
-      continue-on-error: true

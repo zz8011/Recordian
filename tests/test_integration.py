@@ -2,6 +2,7 @@
 
 测试完整的录音->ASR->精炼->提交流程
 """
+
 from __future__ import annotations
 
 import time
@@ -26,7 +27,7 @@ class TestEndToEndFlow:
             "policy": {
                 "confidence_threshold": 0.88,
                 "english_ratio_threshold": 0.15,
-            }
+            },
         }
         ConfigManager.save(config_path, config)
 
@@ -83,10 +84,7 @@ class TestEndToEndFlow:
         config_path = tmp_path / "config.json"
 
         # 创建初始配置
-        config1 = {
-            "version": "1.0",
-            "policy": {"confidence_threshold": 0.88}
-        }
+        config1 = {"version": "1.0", "policy": {"confidence_threshold": 0.88}}
         ConfigManager.save(config_path, config1)
 
         # 加载配置
@@ -94,10 +92,7 @@ class TestEndToEndFlow:
         assert loaded1["policy"]["confidence_threshold"] == 0.88
 
         # 更新配置
-        config2 = {
-            "version": "1.0",
-            "policy": {"confidence_threshold": 0.90}
-        }
+        config2 = {"version": "1.0", "policy": {"confidence_threshold": 0.90}}
         ConfigManager.save(config_path, config2)
 
         # 重新加载配置
@@ -138,10 +133,7 @@ class TestConcurrentScenarios:
         config_path = tmp_path / "config.json"
 
         # 创建配置
-        config = {
-            "version": "1.0",
-            "policy": {"confidence_threshold": 0.88}
-        }
+        config = {"version": "1.0", "policy": {"confidence_threshold": 0.88}}
         ConfigManager.save(config_path, config)
 
         # 并发读取配置
@@ -187,6 +179,7 @@ class TestErrorRecovery:
 
         # 加载应该抛出异常
         from recordian.exceptions import ConfigError
+
         with pytest.raises(ConfigError):
             ConfigManager.load(config_path)
 
@@ -210,10 +203,7 @@ class TestConfigHotReload:
         config_path = tmp_path / "config.json"
 
         # 创建初始配置
-        config1 = {
-            "version": "1.0",
-            "policy": {"confidence_threshold": 0.88}
-        }
+        config1 = {"version": "1.0", "policy": {"confidence_threshold": 0.88}}
         ConfigManager.save(config_path, config1)
 
         # 加载配置
@@ -221,10 +211,7 @@ class TestConfigHotReload:
         assert loaded1["policy"]["confidence_threshold"] == 0.88
 
         # 更新配置
-        config2 = {
-            "version": "1.0",
-            "policy": {"confidence_threshold": 0.92}
-        }
+        config2 = {"version": "1.0", "policy": {"confidence_threshold": 0.92}}
         ConfigManager.save(config_path, config2)
 
         # 重新加载配置（模拟热重载）
@@ -259,20 +246,14 @@ class TestConfigHotReload:
         config_path = tmp_path / "config.json"
 
         # 创建初始配置
-        config1 = {
-            "version": "1.0",
-            "policy": {"confidence_threshold": 0.88}
-        }
+        config1 = {"version": "1.0", "policy": {"confidence_threshold": 0.88}}
         ConfigManager.save(config_path, config1)
 
         # 等待一小段时间确保时间戳不同
         time.sleep(0.1)
 
         # 更新配置（应该创建备份）
-        config2 = {
-            "version": "1.0",
-            "policy": {"confidence_threshold": 0.92}
-        }
+        config2 = {"version": "1.0", "policy": {"confidence_threshold": 0.92}}
         ConfigManager.save(config_path, config2)
 
         # 检查备份文件

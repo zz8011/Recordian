@@ -15,6 +15,7 @@ Modes:
 
 Exits when stdin is closed (so the driver can stop it) or on SIGTERM.
 """
+
 from __future__ import annotations
 
 import json

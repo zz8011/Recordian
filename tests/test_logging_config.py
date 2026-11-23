@@ -1,4 +1,5 @@
 """测试 Recordian 日志配置"""
+
 from __future__ import annotations
 
 import logging
@@ -196,9 +197,8 @@ class TestConfigureFromEnv:
         stream_handlers = [h for h in logger.handlers if isinstance(h, logging.StreamHandler)]
         # RotatingFileHandler 也是 StreamHandler 的子类，所以只检查非文件的
         from logging.handlers import RotatingFileHandler
-        non_file_stream_handlers = [
-            h for h in stream_handlers if not isinstance(h, RotatingFileHandler)
-        ]
+
+        non_file_stream_handlers = [h for h in stream_handlers if not isinstance(h, RotatingFileHandler)]
         assert len(non_file_stream_handlers) == 0
 
 
@@ -215,6 +215,7 @@ class TestLogFormat:
         content = log_file.read_text()
         # 验证包含时间戳格式 YYYY-MM-DD HH:MM:SS
         import re
+
         assert re.search(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}", content)
 
     def test_log_format_includes_level(self, tmp_path: Path) -> None:

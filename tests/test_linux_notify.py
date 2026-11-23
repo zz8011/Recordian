@@ -2,7 +2,9 @@ from recordian.linux_notify import Notification, StdoutNotifier, resolve_notifie
 
 
 def test_resolve_notifier_auto_prefers_notify_send(monkeypatch) -> None:
-    monkeypatch.setattr("recordian.linux_notify.which", lambda cmd: "/usr/bin/notify-send" if cmd == "notify-send" else None)
+    monkeypatch.setattr(
+        "recordian.linux_notify.which", lambda cmd: "/usr/bin/notify-send" if cmd == "notify-send" else None
+    )
     notifier = resolve_notifier("auto")
     assert notifier.backend_name == "notify-send"
 
@@ -14,7 +16,9 @@ def test_resolve_notifier_auto_fallback_stdout(monkeypatch) -> None:
 
 
 def test_notify_send_invokes_subprocess(monkeypatch) -> None:
-    monkeypatch.setattr("recordian.linux_notify.which", lambda cmd: "/usr/bin/notify-send" if cmd == "notify-send" else None)
+    monkeypatch.setattr(
+        "recordian.linux_notify.which", lambda cmd: "/usr/bin/notify-send" if cmd == "notify-send" else None
+    )
     calls: list[list[str]] = []
 
     def _fake_run(cmd, check):  # noqa: ANN001

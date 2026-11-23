@@ -56,19 +56,24 @@ def test_send_remote_paste_from_args_skips_when_disabled() -> None:
 def test_send_remote_paste_from_args_shared_clipboard_mode(monkeypatch) -> None:
     calls: list[object] = []
 
-    monkeypatch.setattr("recordian.remote_paste.client._set_clipboard_text", lambda text: calls.append(("clipboard", text)))
+    monkeypatch.setattr(
+        "recordian.remote_paste.client._set_clipboard_text", lambda text: calls.append(("clipboard", text))
+    )
     monkeypatch.setattr(
         "recordian.remote_paste.client._send_remote_command",
-        lambda host, payload, *, port, timeout_s: calls.append(("payload", payload)) or type(
-            "Result",
-            (),
-            {
-                "ok": True,
-                "status": "ok",
-                "detail": "paste_only:ctrl+v",
-                "response": {"status": "ok", "detail": "paste_only:ctrl+v", "payload": payload},
-            },
-        )(),
+        lambda host, payload, *, port, timeout_s: (
+            calls.append(("payload", payload))
+            or type(
+                "Result",
+                (),
+                {
+                    "ok": True,
+                    "status": "ok",
+                    "detail": "paste_only:ctrl+v",
+                    "response": {"status": "ok", "detail": "paste_only:ctrl+v", "payload": payload},
+                },
+            )()
+        ),
     )
 
     args = argparse.Namespace(
@@ -118,9 +123,9 @@ def test_resolve_remote_paste_routing_falls_back_to_deskflow_log(tmp_path: Path)
     log_path.write_text(
         "\n".join(
             [
-                "2026-03-15T03:00:00 INFO switch from \"server-screen\" to \"remote-screen\" at 10,20",
-                "2026-03-15T03:00:02 INFO switch from \"remote-screen\" to \"server-screen\" at 10,20",
-                "2026-03-15T03:00:05 INFO switch from \"server-screen\" to \"remote-screen\" at 10,20",
+                '2026-03-15T03:00:00 INFO switch from "server-screen" to "remote-screen" at 10,20',
+                '2026-03-15T03:00:02 INFO switch from "remote-screen" to "server-screen" at 10,20',
+                '2026-03-15T03:00:05 INFO switch from "server-screen" to "remote-screen" at 10,20',
             ]
         ),
         encoding="utf-8",
@@ -142,7 +147,9 @@ def test_resolve_remote_paste_routing_falls_back_to_deskflow_log(tmp_path: Path)
     assert routing.deskflow_source == "log-file"
 
 
-def test_send_remote_paste_from_args_skips_remote_when_deskflow_active_screen_is_local(tmp_path: Path, monkeypatch) -> None:
+def test_send_remote_paste_from_args_skips_remote_when_deskflow_active_screen_is_local(
+    tmp_path: Path, monkeypatch
+) -> None:
     state_path = tmp_path / "active_screen.json"
     state_path.write_text(
         json.dumps({"screen": "server-screen", "server_name": "server-screen", "updated_at": "2026-03-15T00:00:00Z"}),
@@ -211,9 +218,9 @@ def test_agent_resolves_committer_from_current_focused_window(monkeypatch) -> No
     monkeypatch.setattr("recordian.remote_paste.agent.get_focused_window_id", lambda: 4242)
     monkeypatch.setattr(
         "recordian.remote_paste.agent.resolve_committer",
-        lambda backend, *, target_window_id=None: calls.update(
-            {"backend": backend, "target_window_id": target_window_id}
-        ) or _Committer(),
+        lambda backend, *, target_window_id=None: (
+            calls.update({"backend": backend, "target_window_id": target_window_id}) or _Committer()
+        ),
     )
 
     agent = RemotePasteAgent(
@@ -240,11 +247,14 @@ def test_agent_handles_paste_only(monkeypatch) -> None:
     monkeypatch.setattr("recordian.remote_paste.agent._get_clipboard_text", lambda: "测试")
     monkeypatch.setattr(
         "recordian.remote_paste.agent.send_paste_shortcut",
-        lambda *, target_window_id=None: calls.update({"target_window_id": target_window_id}) or type(
-            "CommitResult",
-            (),
-            {"committed": True, "detail": "paste_only:ctrl+v"},
-        )(),
+        lambda *, target_window_id=None: (
+            calls.update({"target_window_id": target_window_id})
+            or type(
+                "CommitResult",
+                (),
+                {"committed": True, "detail": "paste_only:ctrl+v"},
+            )()
+        ),
     )
 
     agent = RemotePasteAgent(
@@ -256,7 +266,9 @@ def test_agent_handles_paste_only(monkeypatch) -> None:
             commit_backend="auto",
         )
     )
-    response = agent.handle_payload({"action": "paste_only", "preview": "测试", "expected_text": "测试", "clipboard_wait_s": 0.1})
+    response = agent.handle_payload(
+        {"action": "paste_only", "preview": "测试", "expected_text": "测试", "clipboard_wait_s": 0.1}
+    )
 
     assert response["status"] == "ok"
     assert calls["target_window_id"] == 4343
@@ -275,7 +287,9 @@ def test_agent_rejects_paste_only_when_clipboard_not_synced(monkeypatch) -> None
             commit_backend="auto",
         )
     )
-    response = agent.handle_payload({"action": "paste_only", "preview": "新内容", "expected_text": "新内容", "clipboard_wait_s": 0.1})
+    response = agent.handle_payload(
+        {"action": "paste_only", "preview": "新内容", "expected_text": "新内容", "clipboard_wait_s": 0.1}
+    )
 
     assert response["status"] == "error"
     assert response["detail"] == "clipboard_not_synced"

@@ -22,7 +22,7 @@ def derive_openai_models_endpoint(endpoint: str) -> str | None:
     path = parsed.path or ""
     suffix = "/audio/transcriptions"
     if path.lower().endswith(suffix):
-        models_path = path[:-len(suffix)] + "/models"
+        models_path = path[: -len(suffix)] + "/models"
         return urlunparse(parsed._replace(path=models_path, params="", query="", fragment=""))
     return None
 

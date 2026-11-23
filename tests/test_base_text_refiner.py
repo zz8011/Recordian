@@ -1,4 +1,5 @@
 """测试 BaseTextRefiner 基类功能"""
+
 from __future__ import annotations
 
 from recordian.providers.base_text_refiner import BaseTextRefiner

@@ -17,6 +17,7 @@ composition) is preserved, no crash. Raw busctl outputs are logged as
 validation evidence. Never touches the user's real session: everything
 lives on the private bus/display.
 """
+
 from __future__ import annotations
 
 import json
@@ -65,8 +66,18 @@ def gdbus_raw(method: str, args: list[str]):
     prints the full GDBus.Error:<name>: <message>, which is the authoritative
     check that the addon failed with the right error, not just any error.
     """
-    cmd = ["gdbus", "call", "--session", "--dest", SERVICE, "--object-path", PATH,
-           "--method", f"{IFACE}.{method}", *args]
+    cmd = [
+        "gdbus",
+        "call",
+        "--session",
+        "--dest",
+        SERVICE,
+        "--object-path",
+        PATH,
+        "--method",
+        f"{IFACE}.{method}",
+        *args,
+    ]
     proc = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
     log(f"gdbus {method} {args!r} -> rc={proc.returncode} out={proc.stdout.strip()!r} err={proc.stderr.strip()!r}")
     return proc
@@ -82,9 +93,11 @@ def monitor_ic_calls(action, label: str) -> list[str]:
     mon_path = os.path.join(TMP, f"dbus-monitor-{label}.log")
     with open(mon_path, "w", encoding="utf-8") as mon_file:
         mon = subprocess.Popen(
-            ["dbus-monitor", "--session",
-             "type='method_call',interface='org.fcitx.Fcitx.InputContext1'"],
-            stdout=mon_file, stderr=subprocess.STDOUT, text=True)
+            ["dbus-monitor", "--session", "type='method_call',interface='org.fcitx.Fcitx.InputContext1'"],
+            stdout=mon_file,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
         time.sleep(0.3)
         action()
         time.sleep(0.5)
@@ -366,14 +379,18 @@ def begin_with_focus_retry(committer, wid: int, timeout: float = 12.0):
 def read_clipboard() -> str:
     return subprocess.run(
         ["xclip", "-selection", "clipboard", "-o"],
-        capture_output=True, text=True, timeout=5,
+        capture_output=True,
+        text=True,
+        timeout=5,
     ).stdout
 
 
 def window_geometry(wid: int) -> tuple[int, int, int, int]:
     geo = subprocess.run(
         ["xdotool", "getwindowgeometry", str(wid)],
-        capture_output=True, text=True, timeout=5,
+        capture_output=True,
+        text=True,
+        timeout=5,
     ).stdout
     gx = gy = 0
     gw = gh = 800
@@ -409,7 +426,10 @@ _BROWSER_SKIP = "SKIP己跳号"
 
 def exercise_browser_segments(
     bwid: int,
-    gx: int, gy: int, gw: int, gh: int,
+    gx: int,
+    gy: int,
+    gw: int,
+    gh: int,
     frac_y: float,
     prefix: str,
     scenario: str,
@@ -439,6 +459,7 @@ def exercise_browser_segments(
         def _segment(index: int, text: str) -> None:
             def _act() -> None:
                 acks.append(session.commit_segment(text))
+
             ic_calls.append(monitor_ic_calls(_act, f"{scenario}-seg{index}"))
 
         _segment(1, _BROWSER_PARTS[0])
@@ -514,13 +535,24 @@ def open_private_chrome() -> tuple[subprocess.Popen | None, int | None]:
     benv = child_env()
     benv["HOME"] = os.path.join(browser_tmp, "home")
     chrome = subprocess.Popen(
-        [chrome_bin, f"--user-data-dir={browser_tmp}/profile",
-         "--no-first-run", "--no-default-browser-check", "--password-store=basic",
-         "--disable-session-crashed-bubble", "--disable-extensions",
-         "--disable-dev-shm-usage", "--disable-gpu", "--new-window",
-         f"file://{page}"],
-        env=benv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        start_new_session=True)
+        [
+            chrome_bin,
+            f"--user-data-dir={browser_tmp}/profile",
+            "--no-first-run",
+            "--no-default-browser-check",
+            "--password-store=basic",
+            "--disable-session-crashed-bubble",
+            "--disable-extensions",
+            "--disable-dev-shm-usage",
+            "--disable-gpu",
+            "--new-window",
+            f"file://{page}",
+        ],
+        env=benv,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
     bwid = None
     deadline = time.monotonic() + 40
     while time.monotonic() < deadline:
@@ -528,7 +560,10 @@ def open_private_chrome() -> tuple[subprocess.Popen | None, int | None]:
             break
         found = subprocess.run(
             ["xdotool", "search", "--onlyvisible", "--name", "Recordian Native Browser Test"],
-            capture_output=True, text=True, timeout=5)
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
         if found.returncode == 0 and found.stdout.strip():
             bwid = int(found.stdout.strip().splitlines()[-1])
             break
@@ -576,11 +611,23 @@ def run_browser_segment_cases(chrome: subprocess.Popen | None = None, bwid: int 
             time.sleep(1.5)
         gx, gy, gw, gh = window_geometry(bwid)
         exercise_browser_segments(
-            bwid, gx, gy, gw, gh, 0.25, "",
+            bwid,
+            gx,
+            gy,
+            gw,
+            gh,
+            0.25,
+            "",
             "s10b_browser_textarea_segments_once",
         )
         exercise_browser_segments(
-            bwid, gx, gy, gw, gh, 0.80, "editable:",
+            bwid,
+            gx,
+            gy,
+            gw,
+            gh,
+            0.80,
+            "editable:",
             "s14b_browser_contenteditable_segments_once",
         )
     finally:
@@ -636,10 +683,12 @@ def wait_addon(timeout: float = 25.0) -> bool:
 
 
 def _fresh_gtk_entry(label: str) -> App:
-    fresh = App([
-        os.path.join(os.path.dirname(os.path.abspath(__file__)), "gtk_entry_app.py"),
-        label,
-    ])
+    fresh = App(
+        [
+            os.path.join(os.path.dirname(os.path.abspath(__file__)), "gtk_entry_app.py"),
+            label,
+        ]
+    )
     if fresh.wait_line("READY") is None or fresh.wid is None:
         raise RuntimeError(f"{label} GTK entry did not become ready")
     return fresh
@@ -743,10 +792,7 @@ def run_empty_surround_regressions(return_wid: int) -> None:
             buf = latest_text(key_app)
             record(
                 "s32_foreign_key_before_empty_surround_commit_stale",
-                (not typed.committed)
-                and typed.outcome == "stale"
-                and not session.active
-                and "按键不应段" not in buf,
+                (not typed.committed) and typed.outcome == "stale" and not session.active and "按键不应段" not in buf,
                 f"detail={typed.detail[:80]} outcome={typed.outcome} buf={buf!r}",
             )
     except Exception as exc:  # noqa: BLE001
@@ -772,9 +818,7 @@ def main() -> int:
     env = child_env()
     log_path = os.path.join(TMP, "fcitx5.log")
     fcitx_log = open(log_path, "w", encoding="utf-8")
-    fcitx = subprocess.Popen(
-        ["fcitx5", "--replace"], env=env, stdout=fcitx_log, stderr=subprocess.STDOUT
-    )
+    fcitx = subprocess.Popen(["fcitx5", "--replace"], env=env, stdout=fcitx_log, stderr=subprocess.STDOUT)
     if not wait_addon():
         log(f"addon did not come up; fcitx5 log tail:\n{open(log_path, encoding='utf-8').read()[-2000:]}")
         return 2
@@ -783,8 +827,14 @@ def main() -> int:
     if browser_segments_only():
         # GTK, ASR, and the Cursor editor are not started. CommitSession-only
         # browser rows stay SKIP; the segment rows below are the assertion.
-        skip("s10_browser_textarea_commit_once", "RECORDIAN_NATIVE_FOCUS=browser-segments skips CommitSession-only browser case")
-        skip("s14_browser_contenteditable_commit_once", "RECORDIAN_NATIVE_FOCUS=browser-segments skips CommitSession-only browser case")
+        skip(
+            "s10_browser_textarea_commit_once",
+            "RECORDIAN_NATIVE_FOCUS=browser-segments skips CommitSession-only browser case",
+        )
+        skip(
+            "s14_browser_contenteditable_commit_once",
+            "RECORDIAN_NATIVE_FOCUS=browser-segments skips CommitSession-only browser case",
+        )
         skip("s16_editor_commit_once", "RECORDIAN_NATIVE_FOCUS=browser-segments skips editor")
         skip("s17_real_asr_worker_commit_once", "RECORDIAN_NATIVE_FOCUS=browser-segments skips ASR")
         run_browser_segment_cases()
@@ -809,11 +859,17 @@ def main() -> int:
         committer = FcitxCommitter()
         session = begin_with_focus_retry(committer, app.wid)
         token_ok = bool(re.fullmatch(r"[0-9a-f]{20,}", session.token))
-        record("s1_token_parsed_from_busctl_reply", token_ok, f"token={session.token[:8]}… preedit_capable={session.preedit_capable} info={session.info}")
+        record(
+            "s1_token_parsed_from_busctl_reply",
+            token_ok,
+            f"token={session.token[:8]}… preedit_capable={session.preedit_capable} info={session.info}",
+        )
         up = session.update_preedit("预编辑 你好 🎙️ ünïcödé 中文English123")
-        record("s1_update_unicode",
-               up.committed and up.detail in {"updated", "updated segments=0", "updated segments=1"},
-               f"detail={up.detail}")
+        record(
+            "s1_update_unicode",
+            up.committed and up.detail in {"updated", "updated segments=0", "updated segments=1"},
+            f"detail={up.detail}",
+        )
         preedit_seen = False
         deadline = time.monotonic() + 3.0
         while time.monotonic() < deadline:
@@ -838,7 +894,11 @@ def main() -> int:
                 got_text = final
                 break
             time.sleep(0.05)
-        record("s1_commit_unicode_once", committed_once and got_text == final, f"commit_detail={res.detail} app_got={got_text!r}")
+        record(
+            "s1_commit_unicode_once",
+            committed_once and got_text == final,
+            f"commit_detail={res.detail} app_got={got_text!r}",
+        )
         dup = gdbus_raw("CommitSession", [session.token, "重复提交"])
         record(
             "s1_duplicate_commit_rejected",
@@ -864,7 +924,11 @@ def main() -> int:
         tail = s2b.commit("二段提交")
         time.sleep(0.3)
         appended = f"{before}二段提交" in app.texts()
-        record("s2_next_begin_not_blocked_no_residue", tail.committed and appended, f"tail={tail.detail} texts={app.texts()[-2:]}")
+        record(
+            "s2_next_begin_not_blocked_no_residue",
+            tail.committed and appended,
+            f"tail={tail.detail} texts={app.texts()[-2:]}",
+        )
     except Exception as exc:  # noqa: BLE001
         record("s2_cancel_clears", False, f"{type(exc).__name__}: {exc}")
 
@@ -890,11 +954,13 @@ def main() -> int:
         # CommitSession defines final text; record the observation, never
         # gate the verdict on it.
         toolkit_autocommit = any("失焦期间的预编辑" in t for t in app.texts())
-        results.append((
-            "s3b_toolkit_autocommits_preedit_on_focusout",
-            "INFO",
-            f"GTK auto-committed our preview text on focus-out: {toolkit_autocommit}",
-        ))
+        results.append(
+            (
+                "s3b_toolkit_autocommits_preedit_on_focusout",
+                "INFO",
+                f"GTK auto-committed our preview text on focus-out: {toolkit_autocommit}",
+            )
+        )
         log(f"SCENARIO s3b_toolkit_autocommits_preedit_on_focusout: INFO auto_committed={toolkit_autocommit}")
         focus_window(app.wid)
         time.sleep(0.4)
@@ -918,8 +984,10 @@ def main() -> int:
         probe = gdbus_raw("UpdatePreedit", [s4.token, "迟到探测"])
         record(
             "s4_user_typing_invalidates",
-            probe.returncode != 0 and "StaleSession" in (probe.stderr + probe.stdout)
-            and dead.stdout.strip() == 's "already_gone"' and typed,
+            probe.returncode != 0
+            and "StaleSession" in (probe.stderr + probe.stdout)
+            and dead.stdout.strip() == 's "already_gone"'
+            and typed,
             f"gdbus={probe.stderr.strip()[:90]} cancel={dead.stdout.strip()!r} typed_z={typed}",
         )
         # Client-observable mapping: linux_commit.update_preedit should also
@@ -968,7 +1036,10 @@ def main() -> int:
             if live is not None:
                 live.cancel()
             if typing_as_ascii:
-                skip("s5_user_preedit_preserved", "pinyin IM not active in isolated fcitx (typed ascii reached the entry); user-preedit guard unproven here")
+                skip(
+                    "s5_user_preedit_preserved",
+                    "pinyin IM not active in isolated fcitx (typed ascii reached the entry); user-preedit guard unproven here",
+                )
             else:
                 record("s5_user_preedit_preserved", False, f"BeginSession unexpectedly succeeded: {begin_err}")
         xdotool("key", "Escape")
@@ -1014,8 +1085,10 @@ def main() -> int:
         except CommitError as exc:
             log(f"s7 follow-up BeginSession failed: {exc}")
         invalidated = (
-            probe.returncode != 0 and "StaleSession" in (probe.stderr + probe.stdout)
-            and not res7.committed and not leaked7
+            probe.returncode != 0
+            and "StaleSession" in (probe.stderr + probe.stdout)
+            and not res7.committed
+            and not leaked7
         )
         limitation(
             "s7_toolkit_reset_invalidates",
@@ -1027,11 +1100,13 @@ def main() -> int:
         # Toolkit caveat again: the reset may have committed our displayed
         # preedit into the entry before the addon could clear it.
         autocommit7 = any("Reset前的预编辑" in t for t in app.texts())
-        results.append((
-            "s7b_toolkit_autocommits_preedit_on_reset",
-            "INFO",
-            f"GTK auto-committed our preview text on toolkit set_text: {autocommit7}",
-        ))
+        results.append(
+            (
+                "s7b_toolkit_autocommits_preedit_on_reset",
+                "INFO",
+                f"GTK auto-committed our preview text on toolkit set_text: {autocommit7}",
+            )
+        )
         log(f"SCENARIO s7b_toolkit_autocommits_preedit_on_reset: INFO auto_committed={autocommit7}")
     except Exception as exc:  # noqa: BLE001
         limitation("s7_toolkit_reset_invalidates", f"harness error (not evidence): {type(exc).__name__}: {exc}")
@@ -1044,8 +1119,9 @@ def main() -> int:
         s8 = FcitxCommitter().begin_composition("")
         s8.update_preedit("光标移动前的预编辑")
         time.sleep(0.2)
-        geo = subprocess.run(["xdotool", "getwindowgeometry", str(app.wid)],
-                             capture_output=True, text=True, timeout=5).stdout
+        geo = subprocess.run(
+            ["xdotool", "getwindowgeometry", str(app.wid)], capture_output=True, text=True, timeout=5
+        ).stdout
         mx = my = None
         gx = gy = 0
         for line in geo.splitlines():
@@ -1055,7 +1131,7 @@ def main() -> int:
             if "Geometry:" in line:
                 nums = re.findall(r"\d+", line)
                 my = int(nums[1])
-        mx = gx + 12            # far left of the entry: caret jumps to start
+        mx = gx + 12  # far left of the entry: caret jumps to start
         my = gy + min(my // 2, 60)
 
         def _click8() -> None:
@@ -1069,16 +1145,20 @@ def main() -> int:
         leaked8 = any("光标移动后不应提交" in t for t in app.texts())
         record(
             "s8_caret_move_same_ic_invalidates",
-            probe.returncode != 0 and "StaleSession" in (probe.stderr + probe.stdout)
-            and not res8.committed and not leaked8,
+            probe.returncode != 0
+            and "StaleSession" in (probe.stderr + probe.stdout)
+            and not res8.committed
+            and not leaked8,
             f"ic_calls={members8} probe={probe.stderr.strip()[:60]} commit={res8.detail[:50]} leaked={leaked8}",
         )
         autocommit8 = any("光标移动前的预编辑" in t for t in app.texts())
-        results.append((
-            "s8b_toolkit_autocommits_preedit_on_click",
-            "INFO",
-            f"GTK auto-committed our preview text on mouse click: {autocommit8}",
-        ))
+        results.append(
+            (
+                "s8b_toolkit_autocommits_preedit_on_click",
+                "INFO",
+                f"GTK auto-committed our preview text on mouse click: {autocommit8}",
+            )
+        )
         log(f"SCENARIO s8b_toolkit_autocommits_preedit_on_click: INFO auto_committed={autocommit8}")
     except Exception as exc:  # noqa: BLE001
         record("s8_caret_move_same_ic_invalidates", False, f"{type(exc).__name__}: {exc}")
@@ -1096,8 +1176,10 @@ def main() -> int:
         leaked9 = any("切输入法后不应提交" in t for t in app.texts())
         record(
             "s9_im_switch_invalidates",
-            probe.returncode != 0 and "StaleSession" in (probe.stderr + probe.stdout)
-            and not res9.committed and not leaked9,
+            probe.returncode != 0
+            and "StaleSession" in (probe.stderr + probe.stdout)
+            and not res9.committed
+            and not leaked9,
             f"ic_calls={members9} probe={probe.stderr.strip()[:60]} commit={res9.detail[:50]} leaked={leaked9}",
         )
         xdotool("key", "Escape")
@@ -1151,12 +1233,14 @@ def main() -> int:
         invalidated13b = probe.returncode != 0 and "StaleSession" in (probe.stderr + probe.stdout)
         if not invalidated13b:
             s13b.cancel()
-        results.append((
-            "s13b_toggle_key_during_preedit_compat",
-            "INFO",
-            f"Control_R tap during preedit: session_invalidated={invalidated13b} "
-            f"ic_calls={members13} probe_err={probe.stderr.strip()[:60]!r}",
-        ))
+        results.append(
+            (
+                "s13b_toggle_key_during_preedit_compat",
+                "INFO",
+                f"Control_R tap during preedit: session_invalidated={invalidated13b} "
+                f"ic_calls={members13} probe_err={probe.stderr.strip()[:60]!r}",
+            )
+        )
         log(f"SCENARIO s13b_toggle_key_during_preedit_compat: INFO invalidated={invalidated13b}")
     except Exception as exc:  # noqa: BLE001
         results.append(("s13b_toggle_key_during_preedit_compat", "INFO", f"harness error: {exc}"))
@@ -1235,8 +1319,10 @@ def main() -> int:
         dummy = subprocess.Popen(["sleep", "30"])
         procs.append(dummy)
         handle = RecordProcessHandle(
-            process=dummy, monitor_stream=silence,
-            monitor_sample_rate=16000, monitor_channels=1,
+            process=dummy,
+            monitor_stream=silence,
+            monitor_sample_rate=16000,
+            monitor_channels=1,
         )
 
         class _FakeASRSession:
@@ -1261,17 +1347,28 @@ def main() -> int:
                 return _FakeASRSession()
 
         args = SimpleNamespace(
-            enable_streaming_commit=True, sample_rate=16000, channels=1,
-            debug_diagnostics=False, semif_endpoint="", semif_timeout_s=0.12,
-            enable_semif_correction=False, hotword=[], asr_context="",
+            enable_streaming_commit=True,
+            sample_rate=16000,
+            channels=1,
+            debug_diagnostics=False,
+            semif_endpoint="",
+            semif_timeout_s=0.12,
+            enable_semif_correction=False,
+            hotword=[],
+            asr_context="",
             hotword_replacement=[],
         )
         states: list[dict] = []
         worker = _start_realtime_asr_worker(
-            args=args, provider=_FakeProvider(), record_handle=handle,
-            committer=FcitxCommitter(), enable_local_commit=True,
-            auto_hard_enter=False, resolve_hotwords=list,
-            normalize_final_text=lambda t: t, on_state=states.append,
+            args=args,
+            provider=_FakeProvider(),
+            record_handle=handle,
+            committer=FcitxCommitter(),
+            enable_local_commit=True,
+            auto_hard_enter=False,
+            resolve_hotwords=list,
+            normalize_final_text=lambda t: t,
+            on_state=states.append,
             refine_enabled=False,
         )
         if worker is None:
@@ -1280,15 +1377,17 @@ def main() -> int:
             worker.thread.join(timeout=20)
             still_running = worker.thread.is_alive()
             time.sleep(0.3)
-            new_texts = app.texts()[len(texts_before):]
+            new_texts = app.texts()[len(texts_before) :]
             probe = gdbus_raw("BeginSession", [""])
             preedit_intact = probe.returncode != 0 and "ExistingPreedit" in (probe.stderr + probe.stdout)
             record(
                 "s11_worker_refused_begin_zero_commit",
-                not still_running and worker.composition_refused
+                not still_running
+                and worker.composition_refused
                 and worker.outcome == "suppressed"
                 and not bool((worker.commit_info or {}).get("committed"))
-                and not new_texts and preedit_intact,
+                and not new_texts
+                and preedit_intact,
                 f"refused={worker.composition_refused} outcome={worker.outcome!r} "
                 f"commit_info={worker.commit_info} new_texts={new_texts} "
                 f"user_preedit_intact={preedit_intact}",
@@ -1354,8 +1453,10 @@ def main() -> int:
     asr_wav = os.environ.get("RECORDIAN_NATIVE_ASR_WAV", "").strip()
     asr_token_file = os.environ.get("RECORDIAN_NATIVE_ASR_TOKEN_FILE", "").strip()
     if not (asr_endpoint and asr_wav):
-        skip("s17_real_asr_worker_commit_once",
-             "RECORDIAN_NATIVE_ASR_ENDPOINT/RECORDIAN_NATIVE_ASR_WAV unset — optional real-model case not run")
+        skip(
+            "s17_real_asr_worker_commit_once",
+            "RECORDIAN_NATIVE_ASR_ENDPOINT/RECORDIAN_NATIVE_ASR_WAV unset — optional real-model case not run",
+        )
     else:
         dummy17 = None
         try:
@@ -1371,7 +1472,8 @@ def main() -> int:
                 if (wf.getframerate(), wf.getnchannels(), wf.getsampwidth()) != (16000, 1, 2):
                     raise ValueError(
                         f"WAV must be 16kHz mono PCM16, got rate={wf.getframerate()} "
-                        f"ch={wf.getnchannels()} width={wf.getsampwidth()}")
+                        f"ch={wf.getnchannels()} width={wf.getsampwidth()}"
+                    )
                 pcm = wf.readframes(wf.getnframes())
             samples = array("h")
             samples.frombytes(pcm)
@@ -1390,7 +1492,7 @@ def main() -> int:
                 def read(self, n: int) -> bytes:
                     if self._pos >= len(self._data):
                         return b""
-                    chunk = self._data[self._pos:self._pos + n]
+                    chunk = self._data[self._pos : self._pos + n]
                     self._pos += len(chunk)
                     time.sleep(len(chunk) / self._bps)
                     return chunk
@@ -1416,12 +1518,19 @@ def main() -> int:
             handle = RecordProcessHandle(
                 process=dummy17,
                 monitor_stream=_PacedStream(f32, 16000 * 4),
-                monitor_sample_rate=16000, monitor_channels=1,
+                monitor_sample_rate=16000,
+                monitor_channels=1,
             )
             args17 = SimpleNamespace(
-                enable_streaming_commit=True, sample_rate=16000, channels=1,
-                debug_diagnostics=False, semif_endpoint="", semif_timeout_s=0.12,
-                enable_semif_correction=False, hotword=[], asr_context="",
+                enable_streaming_commit=True,
+                sample_rate=16000,
+                channels=1,
+                debug_diagnostics=False,
+                semif_endpoint="",
+                semif_timeout_s=0.12,
+                enable_semif_correction=False,
+                hotword=[],
+                asr_context="",
                 hotword_replacement=[],
             )
             partials17: list[str] = []
@@ -1432,10 +1541,15 @@ def main() -> int:
 
             replay_start = time.monotonic()
             worker = _start_realtime_asr_worker(
-                args=args17, provider=provider, record_handle=handle,
-                committer=FcitxCommitter(), enable_local_commit=True,
-                auto_hard_enter=False, resolve_hotwords=list,
-                normalize_final_text=lambda t: t, on_state=_on_state17,
+                args=args17,
+                provider=provider,
+                record_handle=handle,
+                committer=FcitxCommitter(),
+                enable_local_commit=True,
+                auto_hard_enter=False,
+                resolve_hotwords=list,
+                normalize_final_text=lambda t: t,
+                on_state=_on_state17,
                 refine_enabled=False,
             )
             if worker is None:
@@ -1457,14 +1571,13 @@ def main() -> int:
                     time.sleep(0.05)
                 new_preedits = app.preedits(since=preedit_mark17)
                 distinct_app_preedits = {t for _, t in new_preedits if t}
-                first_preedit_ms = next(
-                    (int((ts - replay_start) * 1000) for ts, t in new_preedits if t), None
-                )
+                first_preedit_ms = next((int((ts - replay_start) * 1000) for ts, t in new_preedits if t), None)
                 # Python-side partial callback list: additional evidence only.
                 distinct_py_partials = len({t for t in partials17 if t})
                 record(
                     "s17_real_asr_worker_commit_once",
-                    not worker.thread.is_alive() and worker.outcome == "committed"
+                    not worker.thread.is_alive()
+                    and worker.outcome == "committed"
                     and bool((worker.commit_info or {}).get("committed"))
                     and len(distinct_app_preedits) >= 2
                     and bool(final_text)
@@ -1521,13 +1634,24 @@ def main() -> int:
                 benv = child_env()
                 benv["HOME"] = os.path.join(browser_tmp, "home")
                 chrome = subprocess.Popen(
-                    [chrome_bin, f"--user-data-dir={browser_tmp}/profile",
-                     "--no-first-run", "--no-default-browser-check", "--password-store=basic",
-                     "--disable-session-crashed-bubble", "--disable-extensions",
-                     "--disable-dev-shm-usage", "--disable-gpu", "--new-window",
-                     f"file://{page}"],
-                    env=benv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                    start_new_session=True)  # own process group: cleanup = killpg
+                    [
+                        chrome_bin,
+                        f"--user-data-dir={browser_tmp}/profile",
+                        "--no-first-run",
+                        "--no-default-browser-check",
+                        "--password-store=basic",
+                        "--disable-session-crashed-bubble",
+                        "--disable-extensions",
+                        "--disable-dev-shm-usage",
+                        "--disable-gpu",
+                        "--new-window",
+                        f"file://{page}",
+                    ],
+                    env=benv,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    start_new_session=True,
+                )  # own process group: cleanup = killpg
                 bwid = None
                 deadline = time.monotonic() + 40
                 while time.monotonic() < deadline:
@@ -1535,24 +1659,34 @@ def main() -> int:
                         break
                     p = subprocess.run(
                         ["xdotool", "search", "--onlyvisible", "--name", "Recordian Native Browser Test"],
-                        capture_output=True, text=True, timeout=5)
+                        capture_output=True,
+                        text=True,
+                        timeout=5,
+                    )
                     if p.returncode == 0 and p.stdout.strip():
                         bwid = int(p.stdout.strip().splitlines()[-1])
                         break
                     time.sleep(0.5)
                 if bwid is None:
-                    skip("s10_browser_textarea_commit_once",
-                         f"chrome window never appeared (poll={chrome.poll()}); browser path unproven")
-                    skip("s10b_browser_textarea_segments_once",
-                         f"chrome window never appeared (poll={chrome.poll()}); browser path unproven")
-                    skip("s14b_browser_contenteditable_segments_once",
-                         "chrome window never appeared; contenteditable segment path unproven")
+                    skip(
+                        "s10_browser_textarea_commit_once",
+                        f"chrome window never appeared (poll={chrome.poll()}); browser path unproven",
+                    )
+                    skip(
+                        "s10b_browser_textarea_segments_once",
+                        f"chrome window never appeared (poll={chrome.poll()}); browser path unproven",
+                    )
+                    skip(
+                        "s14b_browser_contenteditable_segments_once",
+                        "chrome window never appeared; contenteditable segment path unproven",
+                    )
                 else:
                     log(f"chrome wid={bwid}")
                     focus_window(bwid)
                     time.sleep(0.5)
-                    geo = subprocess.run(["xdotool", "getwindowgeometry", str(bwid)],
-                                         capture_output=True, text=True, timeout=5).stdout
+                    geo = subprocess.run(
+                        ["xdotool", "getwindowgeometry", str(bwid)], capture_output=True, text=True, timeout=5
+                    ).stdout
                     gx = gy = 0
                     gw = gh = 800
                     for line in geo.splitlines():
@@ -1571,8 +1705,9 @@ def main() -> int:
                         time.sleep(0.2)
                         xdotool("key", "ctrl+c")
                         time.sleep(0.5)
-                        return subprocess.run(["xclip", "-selection", "clipboard", "-o"],
-                                              capture_output=True, text=True, timeout=5).stdout
+                        return subprocess.run(
+                            ["xclip", "-selection", "clipboard", "-o"], capture_output=True, text=True, timeout=5
+                        ).stdout
 
                     # textarea occupies the top ~52% of the page
                     xdotool("mousemove", str(gx + gw // 2), str(gy + int(gh * 0.25)))
@@ -1589,8 +1724,9 @@ def main() -> int:
                     time.sleep(0.2)
                     xdotool("key", "ctrl+c")
                     time.sleep(0.5)
-                    clip = subprocess.run(["xclip", "-selection", "clipboard", "-o"],
-                                          capture_output=True, text=True, timeout=5).stdout
+                    clip = subprocess.run(
+                        ["xclip", "-selection", "clipboard", "-o"], capture_output=True, text=True, timeout=5
+                    ).stdout
                     record(
                         "s10_browser_textarea_commit_once",
                         rb.committed and clip == final_b,
@@ -1676,13 +1812,24 @@ def main() -> int:
                 eenv = child_env()
                 eenv["HOME"] = os.path.join(ed_tmp, "home")
                 editor = subprocess.Popen(
-                    [editor_bin, f"--user-data-dir={ed_tmp}/user-data",
-                     f"--extensions-dir={ed_tmp}/ext", "--disable-extensions",
-                     "--new-window", "--skip-welcome", "--skip-release-notes",
-                     "--disable-workspace-trust", "--disable-crash-reporter",
-                     "--disable-gpu", seed],
-                    env=eenv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                    start_new_session=True)  # own process group: cleanup = killpg
+                    [
+                        editor_bin,
+                        f"--user-data-dir={ed_tmp}/user-data",
+                        f"--extensions-dir={ed_tmp}/ext",
+                        "--disable-extensions",
+                        "--new-window",
+                        "--skip-welcome",
+                        "--skip-release-notes",
+                        "--disable-workspace-trust",
+                        "--disable-crash-reporter",
+                        "--disable-gpu",
+                        seed,
+                    ],
+                    env=eenv,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    start_new_session=True,
+                )  # own process group: cleanup = killpg
                 ewid = None
                 deadline = time.monotonic() + 90
                 while time.monotonic() < deadline:
@@ -1690,22 +1837,29 @@ def main() -> int:
                         break
                     p = subprocess.run(
                         ["xdotool", "search", "--onlyvisible", "--class", "cursor"],
-                        capture_output=True, text=True, timeout=5)
+                        capture_output=True,
+                        text=True,
+                        timeout=5,
+                    )
                     if p.returncode == 0 and p.stdout.strip():
                         ewid = int(p.stdout.strip().splitlines()[-1])
                         # Editor loads the seed file asynchronously; wait until
                         # the window title names it (proof the file is open).
-                        wname = subprocess.run(["xdotool", "getwindowname", str(ewid)],
-                                               capture_output=True, text=True, timeout=5).stdout
+                        wname = subprocess.run(
+                            ["xdotool", "getwindowname", str(ewid)], capture_output=True, text=True, timeout=5
+                        ).stdout
                         if "seed.txt" in wname:
                             break
                     time.sleep(1.0)
                 if ewid is None:
-                    skip("s16_editor_commit_once",
-                         f"cursor window never appeared in 90s (poll={editor.poll()}); editor path unproven")
+                    skip(
+                        "s16_editor_commit_once",
+                        f"cursor window never appeared in 90s (poll={editor.poll()}); editor path unproven",
+                    )
                 else:
-                    wname = subprocess.run(["xdotool", "getwindowname", str(ewid)],
-                                           capture_output=True, text=True, timeout=5).stdout.strip()
+                    wname = subprocess.run(
+                        ["xdotool", "getwindowname", str(ewid)], capture_output=True, text=True, timeout=5
+                    ).stdout.strip()
                     log(f"cursor wid={ewid} title={wname!r}")
 
                     def _read_editor_buffer() -> str:
@@ -1713,13 +1867,15 @@ def main() -> int:
                         time.sleep(0.3)
                         xdotool("key", "ctrl+c")
                         time.sleep(0.5)
-                        return subprocess.run(["xclip", "-selection", "clipboard", "-o"],
-                                              capture_output=True, text=True, timeout=5).stdout
+                        return subprocess.run(
+                            ["xclip", "-selection", "clipboard", "-o"], capture_output=True, text=True, timeout=5
+                        ).stdout
 
                     focus_window(ewid)
                     time.sleep(1.0)
-                    geo = subprocess.run(["xdotool", "getwindowgeometry", str(ewid)],
-                                         capture_output=True, text=True, timeout=5).stdout
+                    geo = subprocess.run(
+                        ["xdotool", "getwindowgeometry", str(ewid)], capture_output=True, text=True, timeout=5
+                    ).stdout
                     gx = gy = 0
                     gw = gh = 800
                     for line in geo.splitlines():
@@ -1738,11 +1894,10 @@ def main() -> int:
                     if not seed_ok:
                         environment(
                             "s16_editor_commit_once",
-                            "editor focus/seed unproven before any commit; "
-                            f"title={wname!r} buffer={before[:80]!r}",
+                            f"editor focus/seed unproven before any commit; title={wname!r} buffer={before[:80]!r}",
                         )
                     else:
-                        xdotool("key", "ctrl+a")   # collapse selection…
+                        xdotool("key", "ctrl+a")  # collapse selection…
                         xdotool("key", "ctrl+End")  # …caret to document end
                         time.sleep(0.4)
                         se = begin_with_focus_retry(FcitxCommitter(), ewid, timeout=15.0)
@@ -1935,7 +2090,9 @@ def main() -> int:
         time.sleep(0.2)
         geo = subprocess.run(
             ["xdotool", "getwindowgeometry", str(app.wid)],
-            capture_output=True, text=True, timeout=5,
+            capture_output=True,
+            text=True,
+            timeout=5,
         ).stdout
         gx = gy = 0
         gh = 40
@@ -1972,10 +2129,7 @@ def main() -> int:
         xdotool("type", "--delay", "45", "ma")
         time.sleep(0.5)
         probe_begin = gdbus_raw("BeginSession", [""])
-        foreign_visible = (
-            probe_begin.returncode != 0
-            and "ExistingPreedit" in (probe_begin.stderr + probe_begin.stdout)
-        )
+        foreign_visible = probe_begin.returncode != 0 and "ExistingPreedit" in (probe_begin.stderr + probe_begin.stdout)
         if not foreign_visible:
             xdotool("key", "Escape")
             xdotool("key", "ctrl+space")
@@ -1995,14 +2149,10 @@ def main() -> int:
             time.sleep(0.2)
             xdotool("type", "--delay", "45", "ma")
             time.sleep(0.5)
-            probe = busctl_raw(
-                "CommitSegment", "sus", [s23.token, "1", "FOREIGN癸外来段"]
-            )
+            probe = busctl_raw("CommitSegment", "sus", [s23.token, "1", "FOREIGN癸外来段"])
             time.sleep(0.2)
             buf = latest_text(app)
-            rejected = probe.returncode != 0 and (
-                "StaleSession" in (probe.stderr + probe.stdout)
-            )
+            rejected = probe.returncode != 0 and ("StaleSession" in (probe.stderr + probe.stdout))
             record(
                 "s23_foreign_preedit_rejects_segment",
                 rejected and "FOREIGN癸外来段" not in buf,
@@ -2059,7 +2209,9 @@ def main() -> int:
         time.sleep(0.15)
         geo = subprocess.run(
             ["xdotool", "getwindowgeometry", str(app.wid)],
-            capture_output=True, text=True, timeout=5,
+            capture_output=True,
+            text=True,
+            timeout=5,
         ).stdout
         gx = gy = 0
         gh = 40
@@ -2111,9 +2263,7 @@ def main() -> int:
         time.sleep(0.2)
         buf = latest_text(app)
         rejected = (
-            probe.returncode != 0
-            and "StaleSession" in (probe.stderr + probe.stdout)
-            and "AFTERSET乙不应" not in buf
+            probe.returncode != 0 and "StaleSession" in (probe.stderr + probe.stdout) and "AFTERSET乙不应" not in buf
         )
         if rejected and kept.committed and seen:
             record(

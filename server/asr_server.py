@@ -41,8 +41,8 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
-app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024
-auth_token = ''
+app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024
+auth_token = ""
 _model_lock = threading.Lock()
 _request_slot = threading.BoundedSemaphore(1)
 
@@ -50,13 +50,19 @@ _request_slot = threading.BoundedSemaphore(1)
 @app.before_request
 def authenticate():
     from urllib.parse import urlsplit
-    if not http_request_allowed(host=urlsplit(request.host_url).hostname or '', origin=request.headers.get('Origin'),
-                                base_url=request.host_url, authenticated=bool(auth_token)):
-        return jsonify({'error': 'forbidden origin or host'}), 403
+
+    if not http_request_allowed(
+        host=urlsplit(request.host_url).hostname or "",
+        origin=request.headers.get("Origin"),
+        base_url=request.host_url,
+        authenticated=bool(auth_token),
+    ):
+        return jsonify({"error": "forbidden origin or host"}), 403
     if auth_token and not hmac.compare_digest(
-            request.headers.get('Authorization', '').encode('utf-8'),
-            ('Bearer ' + auth_token).encode('utf-8')):
-        return jsonify({'error': 'unauthorized'}), 401
+        request.headers.get("Authorization", "").encode("utf-8"), ("Bearer " + auth_token).encode("utf-8")
+    ):
+        return jsonify({"error": "unauthorized"}), 401
+
 
 # 全局变量：ASR 模型
 asr_model = None
@@ -100,9 +106,7 @@ def load_asr_model(model_path: str, device: str = "cuda:0", *, max_new_tokens: i
         import torch
         from qwen_asr import Qwen3ASRModel
     except ModuleNotFoundError as exc:
-        raise RuntimeError(
-            "qwen-asr not installed. Run: pip install qwen-asr"
-        ) from exc
+        raise RuntimeError("qwen-asr not installed. Run: pip install qwen-asr") from exc
 
     asr_model = Qwen3ASRModel.from_pretrained(
         model_path,
@@ -120,17 +124,19 @@ def health_check():
     if asr_model is None:
         return jsonify({"status": "error", "message": "Model not loaded"}), 503
 
-    return jsonify({
-        "status": "ok",
-        "model": model_name,
-        "device": str(asr_model.device) if hasattr(asr_model, "device") else "unknown",
-    })
+    return jsonify(
+        {
+            "status": "ok",
+            "model": model_name,
+            "device": str(asr_model.device) if hasattr(asr_model, "device") else "unknown",
+        }
+    )
 
 
 @app.route("/transcribe", methods=["POST"])
 def transcribe():
     if not _request_slot.acquire(blocking=False):
-        return jsonify({'error': 'model is busy'}), 429
+        return jsonify({"error": "model is busy"}), 429
     try:
         return _transcribe_request()
     finally:
@@ -168,7 +174,7 @@ def _transcribe_request():
         hotwords = _normalize_hotwords(data.get("hotwords", []))
         context = _compose_context(context=data.get("context", ""), hotwords=hotwords)
         if len(context) > 4000:
-            return jsonify({'error': 'context exceeds 4000 characters'}), 400
+            return jsonify({"error": "context exceeds 4000 characters"}), 400
         raw_language = data.get("language")
         language = str(raw_language).strip() or None if raw_language is not None else None
 
@@ -178,15 +184,15 @@ def _transcribe_request():
             try:
                 requested_max_new_tokens = int(requested_max_new_tokens)
                 if not 1 <= requested_max_new_tokens <= 8192:
-                    return jsonify({'error': 'max_new_tokens exceeds the server budget'}), 400
+                    return jsonify({"error": "max_new_tokens exceeds the server budget"}), 400
             except (TypeError, ValueError, OverflowError):
-                return jsonify({'error': 'invalid max_new_tokens'}), 400
+                return jsonify({"error": "invalid max_new_tokens"}), 400
 
         # 解码音频
         try:
             audio_data = base64.b64decode(audio_base64, validate=True)
             if not audio_data:
-                return jsonify({'error': 'empty audio'}), 400
+                return jsonify({"error": "empty audio"}), 400
             validate_wav(audio_data)
         except Exception as e:
             return jsonify({"error": f"Invalid base64: {e}"}), 400
@@ -200,16 +206,19 @@ def _transcribe_request():
         try:
             # Serialize the model and its per-request generation setting.
             with _model_lock:
-                original_max_new_tokens = getattr(asr_model, 'max_new_tokens', None)
-                if requested_max_new_tokens is not None and requested_max_new_tokens > int(original_max_new_tokens or 8192):
-                    return jsonify({'error': 'max_new_tokens exceeds the server budget'}), 400
+                original_max_new_tokens = getattr(asr_model, "max_new_tokens", None)
+                if requested_max_new_tokens is not None and requested_max_new_tokens > int(
+                    original_max_new_tokens or 8192
+                ):
+                    return jsonify({"error": "max_new_tokens exceeds the server budget"}), 400
                 try:
                     if requested_max_new_tokens is not None and original_max_new_tokens is not None:
                         asr_model.max_new_tokens = requested_max_new_tokens
-                    logger.info('Transcribing %s audio bytes, context_chars=%s', len(audio_data), len(context))
-                    results = asr_model.transcribe(audio=temp_path, context=context, language=language,
-                                                   return_time_stamps=False)
-                    used_max_new_tokens = getattr(asr_model, 'max_new_tokens', None)
+                    logger.info("Transcribing %s audio bytes, context_chars=%s", len(audio_data), len(context))
+                    results = asr_model.transcribe(
+                        audio=temp_path, context=context, language=language, return_time_stamps=False
+                    )
+                    used_max_new_tokens = getattr(asr_model, "max_new_tokens", None)
                 finally:
                     if original_max_new_tokens is not None:
                         asr_model.max_new_tokens = original_max_new_tokens
@@ -217,17 +226,19 @@ def _transcribe_request():
             result = results[0]
             text = (result.text or "").strip()
 
-            logger.info('Transcription completed, text_chars=%s', len(text))
+            logger.info("Transcription completed, text_chars=%s", len(text))
 
-            return jsonify({
-                "text": text,
-                "confidence": 0.95,  # Qwen3-ASR 不提供置信度
-                "model": model_name,
-                "applied_hotwords": hotwords,
-                "applied_context": context,
-                "requested_language": language,
-                "max_new_tokens": used_max_new_tokens,
-            })
+            return jsonify(
+                {
+                    "text": text,
+                    "confidence": 0.95,  # Qwen3-ASR 不提供置信度
+                    "model": model_name,
+                    "applied_hotwords": hotwords,
+                    "applied_context": context,
+                    "requested_language": language,
+                    "max_new_tokens": used_max_new_tokens,
+                }
+            )
         finally:
             # 清理临时文件
             try:
@@ -273,11 +284,11 @@ def main():
         help="Maximum ASR generation tokens per request (default: 8192)",
     )
 
-    parser.add_argument('--token-file', default='', help='Owner-only Bearer token file (0600)')
-    parser.add_argument('--tls-cert-file', default='')
-    parser.add_argument('--tls-key-file', default='')
+    parser.add_argument("--token-file", default="", help="Owner-only Bearer token file (0600)")
+    parser.add_argument("--tls-cert-file", default="")
+    parser.add_argument("--tls-key-file", default="")
     args = parser.parse_args()
-    auth_token = load_private_token(args.token_file) if args.token_file else ''
+    auth_token = load_private_token(args.token_file) if args.token_file else ""
     tls = server_tls_context(args.tls_cert_file, args.tls_key_file)
     require_private_bind(args.host, auth_token, encrypted=tls is not None)
 

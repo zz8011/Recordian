@@ -4,6 +4,7 @@
 overlay，不落 stderr/journald/日志文件，事后完全无从定位。这里把新加的可观测性与
 自愈行为固定下来。
 """
+
 from __future__ import annotations
 
 import queue
@@ -30,6 +31,7 @@ pytest.importorskip("requests")
 # ---------------------------------------------------------------------------
 # BackendManager：区分「主动停止」与「非预期退出」
 # ---------------------------------------------------------------------------
+
 
 def _make_manager() -> tuple[BackendManager, queue.Queue[dict[str, object]]]:
     events: queue.Queue[dict[str, object]] = queue.Queue()
@@ -104,6 +106,7 @@ def test_restart_marks_old_process_exit_as_intentional() -> None:
 # ---------------------------------------------------------------------------
 # 托盘：错误可见 + 非预期退出自动重启
 # ---------------------------------------------------------------------------
+
 
 class _HeadlessRoot:
     def __init__(self) -> None:
@@ -287,6 +290,7 @@ def test_single_instance_lock_degrades_when_unwritable(tmp_path: Path, monkeypat
 # ASR：瞬时失败重试一次 + 可读错误
 # ---------------------------------------------------------------------------
 
+
 class _FakeResponse:
     def __init__(self, status_code: int, payload: dict[str, object] | None = None, text: str = "") -> None:
         self.status_code = status_code
@@ -382,6 +386,7 @@ def test_asr_client_error_is_not_retried(tmp_path: Path, monkeypatch) -> None:
 # 文字精炼：模型实例没在跑时要报得能看懂
 # ---------------------------------------------------------------------------
 
+
 def test_refine_model_not_running_message_is_actionable() -> None:
     from recordian.providers.cloud_llm_refiner import CloudLLMRefiner
 
@@ -429,6 +434,7 @@ def test_refine_connection_error_message(monkeypatch) -> None:
 # ---------------------------------------------------------------------------
 # 本地 llama.cpp 精炼器：preset 必须原样喂给模型
 # ---------------------------------------------------------------------------
+
 
 def test_llamacpp_refiner_renders_preset_prompt() -> None:
     from recordian.providers.llamacpp_text_refiner import LlamaCppTextRefiner
@@ -499,12 +505,13 @@ def test_llamacpp_fewshot_fallback_matches_builtin_preset(preset: str, expected_
 def test_llamacpp_refiner_extracts_chat_and_completion_text() -> None:
     from recordian.providers.llamacpp_text_refiner import LlamaCppTextRefiner
 
-    assert LlamaCppTextRefiner._extract_chat_text(
-        {"choices": [{"message": {"content": " 好 "}, "finish_reason": "stop"}]}
-    ) == "好"
-    assert LlamaCppTextRefiner._extract_completion_text(
-        {"choices": [{"text": " 好 ", "finish_reason": "stop"}]}
-    ) == "好"
+    assert (
+        LlamaCppTextRefiner._extract_chat_text({"choices": [{"message": {"content": " 好 "}, "finish_reason": "stop"}]})
+        == "好"
+    )
+    assert (
+        LlamaCppTextRefiner._extract_completion_text({"choices": [{"text": " 好 ", "finish_reason": "stop"}]}) == "好"
+    )
     with pytest.raises(RuntimeError):
         LlamaCppTextRefiner._extract_chat_text({})
     with pytest.raises(RuntimeError):
@@ -514,6 +521,7 @@ def test_llamacpp_refiner_extracts_chat_and_completion_text() -> None:
 # ---------------------------------------------------------------------------
 # 录音 ffmpeg 的 stderr 不再被丢弃
 # ---------------------------------------------------------------------------
+
 
 def test_record_process_stderr_goes_to_log_file(tmp_path: Path, monkeypatch) -> None:
     from recordian import linux_dictate

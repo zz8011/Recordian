@@ -53,16 +53,12 @@ def test_no_changes_when_text_already_canonical() -> None:
 def test_exact_lexicon_match_takes_precedence_over_fuzzy_match() -> None:
     # "target" matches "Target" exactly (case variant); "TargetX" is 1 edit
     # distance away. Exact match must win regardless of hotword list ordering.
-    corrected_variant, changes_variant = correct_hotwords(
-        "run target now", ["TargetX", "Target"]
-    )
+    corrected_variant, changes_variant = correct_hotwords("run target now", ["TargetX", "Target"])
     assert corrected_variant == "run Target now"
     assert changes_variant == [("target", "Target")]
 
     # Already canonical "Target" must never be rewritten by a fuzzy match.
-    corrected_canonical, changes_canonical = correct_hotwords(
-        "run Target now", ["TargetX", "Target"]
-    )
+    corrected_canonical, changes_canonical = correct_hotwords("run Target now", ["TargetX", "Target"])
     assert corrected_canonical == "run Target now"
     assert changes_canonical == []
 

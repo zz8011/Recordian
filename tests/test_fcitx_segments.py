@@ -4,6 +4,7 @@ The addon owns the write. These tests stub busctl and check that the
 Python session never repeats a sequence, never skips ahead after a
 failure, and never falls back to CommitSession or CommitText.
 """
+
 from __future__ import annotations
 
 from types import SimpleNamespace
@@ -189,10 +190,7 @@ def test_bad_sequence_closes_without_retry(monkeypatch) -> None:
         if method == "BeginSession":
             return _ok('s "tokenseg preedit=1 frontend=gtk3 program=p segments=1"')
         if method == "CommitSegment":
-            return _fail(
-                "Call failed: duplicate or out-of-order segment "
-                "(org.fcitx.Fcitx.Recordian.Error.BadSequence)"
-            )
+            return _fail("Call failed: duplicate or out-of-order segment (org.fcitx.Fcitx.Recordian.Error.BadSequence)")
         if method == "CancelSession":
             return _ok('s "cancelled"')
         raise AssertionError(method)
@@ -229,8 +227,7 @@ def test_stale_segment_closes_without_cancel_or_fallback(monkeypatch) -> None:
             return _ok('s "tokenseg preedit=1 frontend=gtk3 program=p segments=1"')
         if method == "CommitSegment":
             return _fail(
-                "Call failed: bound input context lost focus or is gone "
-                "(org.fcitx.Fcitx.Recordian.Error.StaleSession)"
+                "Call failed: bound input context lost focus or is gone (org.fcitx.Fcitx.Recordian.Error.StaleSession)"
             )
         raise AssertionError(method)
 

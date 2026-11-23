@@ -9,8 +9,14 @@ from recordian.desktop_control import ControlServer, send_action
 def test_socket_dispatches_press_release_once_and_cleans_up(tmp_path):
     path = tmp_path / "private" / "control.sock"
     edges = []
-    with ControlServer(lambda k: edges.append(("down", k)), lambda k: edges.append(("up", k)),
-                       {"ctrl_r"}, {"alt_r"}, lambda: edges.append(("exit", "")), path=path) as server:
+    with ControlServer(
+        lambda k: edges.append(("down", k)),
+        lambda k: edges.append(("up", k)),
+        {"ctrl_r"},
+        {"alt_r"},
+        lambda: edges.append(("exit", "")),
+        path=path,
+    ) as server:
         for action in ["ping", "ptt-press", "ptt-release", "toggle-press", "toggle-release"]:
             worker = threading.Thread(target=server.poll)
             worker.start()
@@ -54,9 +60,15 @@ def test_fragmented_command_waits_for_newline(tmp_path):
 
 def test_atomic_toggle_releases_and_status_is_read_only(tmp_path):
     edges = []
-    server = ControlServer(lambda k: edges.append(("down", k)), lambda k: edges.append(("up", k)),
-                           {"ctrl_r"}, {"alt_r"}, None, path=tmp_path / "sock",
-                           get_status=lambda: "recording")
+    server = ControlServer(
+        lambda k: edges.append(("down", k)),
+        lambda k: edges.append(("up", k)),
+        {"ctrl_r"},
+        {"alt_r"},
+        None,
+        path=tmp_path / "sock",
+        get_status=lambda: "recording",
+    )
     assert server.dispatch("status") == "recording"
     assert edges == []
     assert server.dispatch("toggle") == "ok"
@@ -66,8 +78,7 @@ def test_atomic_toggle_releases_and_status_is_read_only(tmp_path):
 
 def test_status_socket_reply(tmp_path):
     path = tmp_path / "private" / "control.sock"
-    with ControlServer(None, None, set(), set(), None, path=path,
-                       get_status=lambda: "transcribing") as server:
+    with ControlServer(None, None, set(), set(), None, path=path, get_status=lambda: "transcribing") as server:
         worker = threading.Thread(target=server.poll)
         worker.start()
         assert send_action("status", path=path) == "transcribing"
@@ -77,11 +88,16 @@ def test_status_socket_reply(tmp_path):
 def test_agent_press_release_uses_dedicated_callbacks(tmp_path):
     path = tmp_path / "private" / "control.sock"
     events = []
-    with ControlServer(lambda key: events.append(("dictation", key)),
-                       lambda key: events.append(("dictation-release", key)),
-                       {"ctrl_r"}, set(), None, path=path,
-                       on_agent_press=lambda: events.append(("agent", "press")) or True,
-                       on_agent_release=lambda: events.append(("agent", "release"))) as server:
+    with ControlServer(
+        lambda key: events.append(("dictation", key)),
+        lambda key: events.append(("dictation-release", key)),
+        {"ctrl_r"},
+        set(),
+        None,
+        path=path,
+        on_agent_press=lambda: events.append(("agent", "press")) or True,
+        on_agent_release=lambda: events.append(("agent", "release")),
+    ) as server:
         for action in ("agent-press", "agent-release"):
             worker = threading.Thread(target=server.poll)
             worker.start()
@@ -94,7 +110,15 @@ def test_agent_action_does_not_fall_back_when_unavailable(tmp_path):
     server = ControlServer(None, None, {"ctrl_r"}, set(), None, path=tmp_path / "sock")
     assert server.dispatch("agent-press") == "error: agent hotkey not configured"
     assert server.dispatch("agent-release") == "error: agent hotkey not configured"
-    busy = ControlServer(None, None, {"ctrl_r"}, set(), None, path=tmp_path / "busy.sock",
-                         on_agent_press=lambda: False, on_agent_release=lambda: None)
+    busy = ControlServer(
+        None,
+        None,
+        {"ctrl_r"},
+        set(),
+        None,
+        path=tmp_path / "busy.sock",
+        on_agent_press=lambda: False,
+        on_agent_release=lambda: None,
+    )
     assert busy.dispatch("agent-press") == "error: agent capture not started"
     assert busy.dispatch("agent-release") == "ok"

@@ -3,6 +3,7 @@
 The transport is a fake requests.Session: each test queues the responses
 the service would give and inspects the requests the provider made.
 """
+
 from __future__ import annotations
 
 import base64

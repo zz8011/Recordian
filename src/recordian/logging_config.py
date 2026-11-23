@@ -6,6 +6,7 @@
 - 可配置的日志级别
 - 统一的日志格式
 """
+
 from __future__ import annotations
 
 import logging
@@ -21,7 +22,7 @@ class _PrivateRotatingFileHandler(RotatingFileHandler):
         try:
             info = os.fstat(fd)
             if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_nlink != 1:
-                raise OSError('log must be a private regular file owned by the current user')
+                raise OSError("log must be a private regular file owned by the current user")
             os.fchmod(fd, 0o600)
             stream = os.fdopen(fd, self.mode, encoding=self.encoding, errors=self.errors)
         except BaseException:

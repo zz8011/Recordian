@@ -1,4 +1,5 @@
 """Synthetic executables only: never invoke installed Claude/Codex or a model."""
+
 import json
 import sys
 import threading
@@ -10,131 +11,183 @@ import pytest
 from recordian.agent_entry import ADAPTERS, AgentHub, AgentInstance
 from recordian.claude_code_adapter import ClaudeCodeAdapter
 
-SID = '550e8400-e29b-41d4-a716-446655440000'
+SID = "550e8400-e29b-41d4-a716-446655440000"
 
 
 @pytest.fixture
 def instance(tmp_path):
-    exe = tmp_path / 'synthetic cli with spaces'
-    exe.write_text('#!' + sys.executable + '\n')
+    exe = tmp_path / "synthetic cli with spaces"
+    exe.write_text("#!" + sys.executable + "\n")
     exe.chmod(0o700)
-    return AgentInstance.parse({'id': 'claude-fixture', 'kind': 'claude', 'executable': str(exe), 'workspace': str(tmp_path)})
+    return AgentInstance.parse(
+        {"id": "claude-fixture", "kind": "claude", "executable": str(exe), "workspace": str(tmp_path)}
+    )
 
 
 def script(instance, code):
     from pathlib import Path
-    Path(instance.executable).write_text('#!' + sys.executable + '\n' + code)
+
+    Path(instance.executable).write_text("#!" + sys.executable + "\n" + code)
 
 
 def success_code():
-    return ('import sys,json\nfrom pathlib import Path\n'
-            'prompt=sys.stdin.read()\n'
-            'Path("received.json").write_text(json.dumps({"argv":sys.argv,"text":prompt}))\n'
-            'print(json.dumps({"type":"result","subtype":"success","is_error":False,"result":prompt,"session_id":' + repr(SID) + '}))\n')
+    return (
+        "import sys,json\nfrom pathlib import Path\n"
+        "prompt=sys.stdin.read()\n"
+        'Path("received.json").write_text(json.dumps({"argv":sys.argv,"text":prompt}))\n'
+        'print(json.dumps({"type":"result","subtype":"success","is_error":False,"result":prompt,"session_id":'
+        + repr(SID)
+        + "}))\n"
+    )
 
 
 def test_claude_protocol_and_injection_safe_stdin_with_exact_resume(instance):
     from pathlib import Path
+
     script(instance, success_code())
     prompt = '中文\n"; $(touch injected) --continue --resume unrelated'
     events = []
     result = ClaudeCodeAdapter().run(instance, prompt, SID, threading.Event(), events.append)
-    received = json.loads((Path(instance.workspace) / 'received.json').read_text())
-    assert received['argv'] == [instance.executable, '--print', '--output-format', 'json', '--resume', SID]
-    assert received['text'] == prompt and result['text'] == prompt
-    assert result['session_id'] == SID and events == [result]
-    assert not (Path(instance.workspace) / 'injected').exists()
-    assert '--dangerously-skip-permissions' not in received['argv']
-    assert ADAPTERS['claude'] is ClaudeCodeAdapter
+    received = json.loads((Path(instance.workspace) / "received.json").read_text())
+    assert received["argv"] == [instance.executable, "--print", "--output-format", "json", "--resume", SID]
+    assert received["text"] == prompt and result["text"] == prompt
+    assert result["session_id"] == SID and events == [result]
+    assert not (Path(instance.workspace) / "injected").exists()
+    assert "--dangerously-skip-permissions" not in received["argv"]
+    assert ADAPTERS["claude"] is ClaudeCodeAdapter
 
 
-@pytest.mark.parametrize('sid', ['--continue', '../../personal.jsonl', 'partial-name', SID.replace('-', '')])
+@pytest.mark.parametrize("sid", ["--continue", "../../personal.jsonl", "partial-name", SID.replace("-", "")])
 def test_invalid_resume_never_launches(instance, sid, monkeypatch):
     import recordian.claude_code_adapter as module
+
     def forbidden(*_args, **_kwargs):
-        raise AssertionError('must not launch a CLI for invalid session')
-    monkeypatch.setattr(module.subprocess, 'Popen', forbidden)
-    with pytest.raises(ValueError, match='会话编号'):
-        ClaudeCodeAdapter().run(instance, 'synthetic', sid, threading.Event(), lambda _: None)
+        raise AssertionError("must not launch a CLI for invalid session")
+
+    monkeypatch.setattr(module.subprocess, "Popen", forbidden)
+    with pytest.raises(ValueError, match="会话编号"):
+        ClaudeCodeAdapter().run(instance, "synthetic", sid, threading.Event(), lambda _: None)
 
 
-@pytest.mark.parametrize('value,code', [
-    ({'type': 'result', 'subtype': 'error_during_execution', 'is_error': True, 'errors': ['fixture authentication failure']}, 1),
-    ({'type': 'result', 'subtype': 'success', 'is_error': False, 'result': 'partial', 'session_id': SID, 'permission_denials': [{'tool_name': 'Edit'}]}, 0),
-    ({'type': 'result', 'subtype': 'success', 'is_error': True, 'result': 'not success', 'session_id': SID}, 0),
-    ({'type': 'result', 'subtype': 'success', 'result': ['invalid text'], 'session_id': SID}, 0),
-    ({'type': 'result', 'subtype': 'success', 'result': 'wrong receipt', 'session_id': '../session.jsonl'}, 0),
-    ({'type': 'system', 'session_id': SID}, 0),
-    ([], 0),
-])
+@pytest.mark.parametrize(
+    "value,code",
+    [
+        (
+            {
+                "type": "result",
+                "subtype": "error_during_execution",
+                "is_error": True,
+                "errors": ["fixture authentication failure"],
+            },
+            1,
+        ),
+        (
+            {
+                "type": "result",
+                "subtype": "success",
+                "is_error": False,
+                "result": "partial",
+                "session_id": SID,
+                "permission_denials": [{"tool_name": "Edit"}],
+            },
+            0,
+        ),
+        ({"type": "result", "subtype": "success", "is_error": True, "result": "not success", "session_id": SID}, 0),
+        ({"type": "result", "subtype": "success", "result": ["invalid text"], "session_id": SID}, 0),
+        ({"type": "result", "subtype": "success", "result": "wrong receipt", "session_id": "../session.jsonl"}, 0),
+        ({"type": "system", "session_id": SID}, 0),
+        ([], 0),
+    ],
+)
 def test_errors_denials_malformed_results_are_never_completed(instance, value, code):
-    script(instance, 'import sys\nsys.stdin.read()\nprint(' + repr(json.dumps(value)) + ')\nsys.exit(' + repr(code) + ')\n')
+    script(
+        instance, "import sys\nsys.stdin.read()\nprint(" + repr(json.dumps(value)) + ")\nsys.exit(" + repr(code) + ")\n"
+    )
     events = []
     with pytest.raises((ValueError, RuntimeError)):
-        ClaudeCodeAdapter().run(instance, 'synthetic', '', threading.Event(), events.append)
+        ClaudeCodeAdapter().run(instance, "synthetic", "", threading.Event(), events.append)
     assert not events
 
 
 def test_invalid_json_and_output_limit_fail_closed(instance):
     script(instance, 'import sys\nsys.stdin.read()\nprint("fixture diagnostics only")\n')
-    with pytest.raises(RuntimeError, match='有效 JSON'):
-        ClaudeCodeAdapter().run(instance, 'synthetic', '', threading.Event(), lambda _: None)
-    script(instance, 'import sys,time\nsys.stdin.read()\nsys.stdout.write("x"*(1024*1024+4096));sys.stdout.flush()\ntime.sleep(30)\n')
+    with pytest.raises(RuntimeError, match="有效 JSON"):
+        ClaudeCodeAdapter().run(instance, "synthetic", "", threading.Event(), lambda _: None)
+    script(
+        instance,
+        'import sys,time\nsys.stdin.read()\nsys.stdout.write("x"*(1024*1024+4096));sys.stdout.flush()\ntime.sleep(30)\n',
+    )
     before = time.monotonic()
-    with pytest.raises(RuntimeError, match='1 MiB'):
-        ClaudeCodeAdapter().run(instance, 'synthetic', '', threading.Event(), lambda _: None)
+    with pytest.raises(RuntimeError, match="1 MiB"):
+        ClaudeCodeAdapter().run(instance, "synthetic", "", threading.Event(), lambda _: None)
     assert time.monotonic() - before < 4
 
 
-@pytest.mark.parametrize('action', ['cancel', 'timeout'])
+@pytest.mark.parametrize("action", ["cancel", "timeout"])
 def test_blocked_stdin_and_inherited_child_pipes_terminate_without_hang(instance, action):
-    script(instance, 'import os,time\nif os.fork()==0:\n time.sleep(30)\nelse:\n time.sleep(30)\n')
+    script(instance, "import os,time\nif os.fork()==0:\n time.sleep(30)\nelse:\n time.sleep(30)\n")
     cancel = threading.Event()
-    timer = threading.Timer(.15, cancel.set)
-    if action == 'cancel':
+    timer = threading.Timer(0.15, cancel.set)
+    if action == "cancel":
         timer.start()
     before = time.monotonic()
     try:
-        with pytest.raises(InterruptedError if action == 'cancel' else TimeoutError):
-            ClaudeCodeAdapter().run(replace(instance, timeout_s=.4), '字' * 60000, '', cancel, lambda _: None)
+        with pytest.raises(InterruptedError if action == "cancel" else TimeoutError):
+            ClaudeCodeAdapter().run(replace(instance, timeout_s=0.4), "字" * 60000, "", cancel, lambda _: None)
     finally:
         timer.cancel()
     assert time.monotonic() - before < 4
 
 
 def test_claude_gateway_or_hermes_home_rejected(instance):
-    data = {'id': 'fixture', 'kind': 'claude', 'executable': instance.executable, 'workspace': instance.workspace}
-    with pytest.raises(ValueError, match='Gateway'):
-        AgentInstance.parse({**data, 'transport': 'gateway'})
-    with pytest.raises(ValueError, match='自身 CLI'):
-        AgentInstance.parse({**data, 'home': instance.workspace})
+    data = {"id": "fixture", "kind": "claude", "executable": instance.executable, "workspace": instance.workspace}
+    with pytest.raises(ValueError, match="Gateway"):
+        AgentInstance.parse({**data, "transport": "gateway"})
+    with pytest.raises(ValueError, match="自身 CLI"):
+        AgentInstance.parse({**data, "home": instance.workspace})
 
 
 def test_hub_routes_claude_and_keeps_hermes_sessions_separate(instance, tmp_path):
     script(instance, success_code())
-    config = tmp_path / 'agents.json'
-    config.write_text(json.dumps({'default_agent': instance.id, 'instances': [
-        {'id': instance.id, 'kind': 'claude', 'executable': instance.executable, 'workspace': instance.workspace},
-        {'id': 'hermes-fixture', 'kind': 'hermes', 'executable': sys.executable, 'workspace': str(tmp_path)},
-    ]}))
+    config = tmp_path / "agents.json"
+    config.write_text(
+        json.dumps(
+            {
+                "default_agent": instance.id,
+                "instances": [
+                    {
+                        "id": instance.id,
+                        "kind": "claude",
+                        "executable": instance.executable,
+                        "workspace": instance.workspace,
+                    },
+                    {
+                        "id": "hermes-fixture",
+                        "kind": "hermes",
+                        "executable": sys.executable,
+                        "workspace": str(tmp_path),
+                    },
+                ],
+            }
+        )
+    )
     events = []
-    hub = AgentHub(config, tmp_path / 'synthetic-tasks.json', on_task_event=lambda task, _name: events.append(task))
+    hub = AgentHub(config, tmp_path / "synthetic-tasks.json", on_task_event=lambda task, _name: events.append(task))
     try:
-        hub.sessions['hermes-fixture'] = 'fixture-hermes-session'
-        task = {'id': 'fixture', 'agent_id': instance.id, 'prompt': 'synthetic task', 'session_id': '', 'reply': ''}
+        hub.sessions["hermes-fixture"] = "fixture-hermes-session"
+        task = {"id": "fixture", "agent_id": instance.id, "prompt": "synthetic task", "session_id": "", "reply": ""}
         hub._run(task, threading.Event())
-        assert task['status'] == 'completed' and task['reply'] == 'synthetic task'
-        assert hub.sessions[instance.id] == SID and hub.sessions['hermes-fixture'] == 'fixture-hermes-session'
-        assert events[-1]['event_type'] == 'finished' and events[-1]['status'] == 'completed'
+        assert task["status"] == "completed" and task["reply"] == "synthetic task"
+        assert hub.sessions[instance.id] == SID and hub.sessions["hermes-fixture"] == "fixture-hermes-session"
+        assert events[-1]["event_type"] == "finished" and events[-1]["status"] == "completed"
         # A failure produces a failed receipt rather than replaying the prompt.
         script(instance, 'import sys\nsys.stdin.read()\nprint("fixture invalid result")\n')
-        second = {'id': 'failure', 'agent_id': instance.id, 'prompt': 'synthetic', 'session_id': '', 'reply': ''}
+        second = {"id": "failure", "agent_id": instance.id, "prompt": "synthetic", "session_id": "", "reply": ""}
         hub._run(second, threading.Event())
-        assert second['status'] == 'failed' and events[-1]['status'] == 'failed'
-        assert '有效 JSON' in second['error']
+        assert second["status"] == "failed" and events[-1]["status"] == "failed"
+        assert "有效 JSON" in second["error"]
     finally:
         hub.close()
-
 
 
 def test_task_panel_preserves_claude_kind_when_editing_and_saving(tmp_path):
@@ -144,6 +197,7 @@ def test_task_panel_preserves_claude_kind_when_editing_and_saving(tmp_path):
     from pathlib import Path
 
     import recordian.agent_entry as module
+
     node = shutil.which("node")
     if not node:
         pytest.skip("optional JS runtime unavailable")

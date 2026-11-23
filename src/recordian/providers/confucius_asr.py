@@ -342,8 +342,7 @@ class ConfuciusRealtimeSession:
                 import websocket as ws_module  # type: ignore[no-redef]
             except ImportError as exc:
                 raise ImportError(
-                    "websocket-client is required for confucius-asr. "
-                    "Install with: pip install -e '.[confucius-asr]'"
+                    "websocket-client is required for confucius-asr. Install with: pip install -e '.[confucius-asr]'"
                 ) from exc
         self._ws_module = ws_module
         self._ws_url = ws_url
@@ -461,12 +460,8 @@ class ConfuciusRealtimeSession:
                 f"expected status 'connected', got {_truncate(str(status), 40)!r}"
             )
 
-        self._receiver_thread = threading.Thread(
-            target=self._receiver_loop, name="confucius-asr-recv", daemon=True
-        )
-        self._sender_thread = threading.Thread(
-            target=self._sender_loop, name="confucius-asr-send", daemon=True
-        )
+        self._receiver_thread = threading.Thread(target=self._receiver_loop, name="confucius-asr-recv", daemon=True)
+        self._sender_thread = threading.Thread(target=self._sender_loop, name="confucius-asr-send", daemon=True)
         self._receiver_thread.start()
         self._sender_thread.start()
 
@@ -480,8 +475,7 @@ class ConfuciusRealtimeSession:
             opcode, frame = ws.recv_data_frame(control_frame=True)
         except Exception as exc:  # noqa: BLE001
             raise ConfuciusProtocolError(
-                f"confucius-asr handshake failed: server closed before 'connected' "
-                f"({type(exc).__name__})"
+                f"confucius-asr handshake failed: server closed before 'connected' ({type(exc).__name__})"
             ) from exc
         if opcode == _OPCODE_CLOSE:
             code = _parse_close_code(getattr(frame, "data", b""))
@@ -492,25 +486,20 @@ class ConfuciusRealtimeSession:
                 )
             hint = " (unauthorized: secret_key rejected)" if code == _CLOSE_UNAUTHORIZED else ""
             raise ConfuciusProtocolError(
-                f"confucius-asr handshake rejected by {self._safe_url()}: "
-                f"server closed with code {code}{hint}"
+                f"confucius-asr handshake rejected by {self._safe_url()}: server closed with code {code}{hint}"
             )
         raw = getattr(frame, "data", b"")
         if isinstance(raw, (bytes, bytearray)):
             try:
                 raw = bytes(raw).decode("utf-8")
             except UnicodeDecodeError as exc:
-                raise ConfuciusProtocolError(
-                    "confucius-asr handshake failed: greeting is not valid UTF-8"
-                ) from exc
+                raise ConfuciusProtocolError("confucius-asr handshake failed: greeting is not valid UTF-8") from exc
         if not isinstance(raw, str) or not raw.strip():
             raise ConfuciusProtocolError("confucius-asr handshake failed: empty greeting frame")
         try:
             greeting = json.loads(raw)
         except json.JSONDecodeError as exc:
-            raise ConfuciusProtocolError(
-                "confucius-asr handshake failed: greeting is not JSON"
-            ) from exc
+            raise ConfuciusProtocolError("confucius-asr handshake failed: greeting is not JSON") from exc
         if not isinstance(greeting, dict):
             raise ConfuciusProtocolError("confucius-asr handshake failed: greeting is not a JSON object")
         return greeting
@@ -541,9 +530,7 @@ class ConfuciusRealtimeSession:
             if block:
                 # Caller's budget exhausted: backpressure signal, not a
                 # session-fatal overflow — the caller decides to retry/abort.
-                raise TimeoutError(
-                    "confucius-asr send queue did not drain before the deadline"
-                ) from exc
+                raise TimeoutError("confucius-asr send queue did not drain before the deadline") from exc
             # Realtime path: frames would be silently dropped — the session
             # is broken and must fail explicitly on the next call/finish.
             self._set_error("send queue overflow: server is not consuming audio fast enough")
@@ -584,8 +571,7 @@ class ConfuciusRealtimeSession:
                         if self._close_code is None:
                             self._close_code = _CLOSE_ABNORMAL
                     self._set_error(
-                        f"connection dropped without a CLOSE frame "
-                        f"(treated as {_CLOSE_ABNORMAL}): {type(exc).__name__}"
+                        f"connection dropped without a CLOSE frame (treated as {_CLOSE_ABNORMAL}): {type(exc).__name__}"
                     )
                     return
                 data = getattr(frame, "data", b"")
@@ -645,9 +631,7 @@ class ConfuciusRealtimeSession:
             # category (and a length for support correlation).
             detail = payload.get("msg")
             length = len(str(detail)) if detail is not None else 0
-            self._set_error(
-                f"server reported error status (detail {length} chars, content not echoed)"
-            )
+            self._set_error(f"server reported error status (detail {length} chars, content not echoed)")
             return
         if status != "success":
             self._set_error(f"unexpected server status: {_truncate(str(status), 40)!r}")
@@ -804,14 +788,10 @@ class ConfuciusRealtimeSession:
             except Exception as exc:  # noqa: BLE001
                 # A send error always fails the session, on every path.
                 self._set_error(f"failed to send EOS: {type(exc).__name__}")
-                raise ConfuciusProtocolError(
-                    f"confucius-asr failed to send EOS: {type(exc).__name__}"
-                ) from exc
+                raise ConfuciusProtocolError(f"confucius-asr failed to send EOS: {type(exc).__name__}") from exc
             remaining = _remaining()
             if remaining <= 0 or not self._done.wait(timeout=remaining):
-                raise TimeoutError(
-                    f"confucius-asr server did not finish within {self._timeout_s:.0f}s after EOS"
-                )
+                raise TimeoutError(f"confucius-asr server did not finish within {self._timeout_s:.0f}s after EOS")
             self._check_error()
             with self._lock:
                 final_received = self._final_received
@@ -825,8 +805,7 @@ class ConfuciusRealtimeSession:
                 )
             if close_code != _CLOSE_NORMAL:
                 raise ConfuciusProtocolError(
-                    f"confucius-asr server closed with code {close_code}, "
-                    f"expected {_CLOSE_NORMAL} (normal close)"
+                    f"confucius-asr server closed with code {close_code}, expected {_CLOSE_NORMAL} (normal close)"
                 )
             # Final guard: a late sender error must never become a success.
             self._check_error()

@@ -84,6 +84,7 @@ __all__ = [
 # main() — CLI entry point
 # ===================================================================
 
+
 def main() -> None:
     import logging
     import sys
@@ -240,8 +241,12 @@ def _main_impl() -> None:
         if agent_hub is not None:
             agent_hub.observe(payload)
         event_status = {
-            "recording_started": "recording", "processing_started": "transcribing",
-            "ready": "idle", "result": "idle", "error": "idle", "stopped": "stopped",
+            "recording_started": "recording",
+            "processing_started": "transcribing",
+            "ready": "idle",
+            "result": "idle",
+            "error": "idle",
+            "stopped": "stopped",
         }.get(str(payload.get("event", "")))
         if event_status is not None:
             desktop_status["value"] = event_status
@@ -260,14 +265,17 @@ def _main_impl() -> None:
             from .agent_panel import AgentPanel, open_panel
 
             def _agent_task_feedback(task: dict, name: str) -> None:
-                visible = {key: task.get(key, '') for key in
-                           ('id', 'status', 'reply', 'error', 'activity', 'event_type')}
-                _print_json({'event': 'agent_task', 'task': visible, 'agent_name': name})
-                if notifier.backend_name != 'none' and task['event_type'] in {'started', 'finished'}:
+                visible = {
+                    key: task.get(key, "") for key in ("id", "status", "reply", "error", "activity", "event_type")
+                }
+                _print_json({"event": "agent_task", "task": visible, "agent_name": name})
+                if notifier.backend_name != "none" and task["event_type"] in {"started", "finished"}:
                     notify_agent_task(task, name, open_panel)
 
             agent_hub = AgentHub(
-                agents_path, agents_path.parent / "agent-tasks.json", settings_path=args.config_path,
+                agents_path,
+                agents_path.parent / "agent-tasks.json",
+                settings_path=args.config_path,
                 on_task_event=_agent_task_feedback,
             )
             agent_panel = AgentPanel(agent_hub)
@@ -337,6 +345,7 @@ def _main_impl() -> None:
             threading.Thread(target=stop_recording, daemon=True, name="recordian-stop-recording").start()
 
         if agent_panel is not None:
+
             def _panel_record():
                 if desktop_status["value"] == "recording":
                     _request_stop_recording()
@@ -345,6 +354,7 @@ def _main_impl() -> None:
                         raise RuntimeError("请稍后再开始录音")
                 else:
                     raise RuntimeError("请等待当前录音处理完成")
+
             agent_panel.record = _panel_record
 
         def _start_if_ready() -> bool:
@@ -385,10 +395,12 @@ def _main_impl() -> None:
 
         _signal.signal(_signal.SIGUSR1, _on_overlay_stop_signal)
         if agent_hub is not None:
+
             def _on_agent_shutdown(signum, frame):
                 # Let the controller drain its own recording before closing
                 # the hub, which cancels only subprocesses it launched.
                 threading.Thread(target=exit_daemon, daemon=True).start()
+
             _signal.signal(_signal.SIGTERM, _on_agent_shutdown)
 
         if bool(getattr(args, "enable_voice_wake", False)):
@@ -431,7 +443,12 @@ def _main_impl() -> None:
                     return False
 
                 # Toggle stop key — only intercept when toggle is active
-                if stop_keys and stop_keys.issubset(pressed) and not stop_pressed["active"] and toggle_recording["active"]:
+                if (
+                    stop_keys
+                    and stop_keys.issubset(pressed)
+                    and not stop_pressed["active"]
+                    and toggle_recording["active"]
+                ):
                     stop_pressed["active"] = True
                     toggle_recording["active"] = False
                     _request_stop_recording()
@@ -582,10 +599,16 @@ def _main_impl() -> None:
     if external_hotkeys:
         from recordian.desktop_control import ControlServer
 
-        with ControlServer(_on_press, _on_release, trigger_keys, toggle_keys, exit_daemon,
-                           get_status=lambda: desktop_status["value"],
-                           on_agent_press=_agent_press if args.trigger_mode in {"ptt", "toggle"} else None,
-                           on_agent_release=_agent_release if args.trigger_mode in {"ptt", "toggle"} else None) as control:
+        with ControlServer(
+            _on_press,
+            _on_release,
+            trigger_keys,
+            toggle_keys,
+            exit_daemon,
+            get_status=lambda: desktop_status["value"],
+            on_agent_press=_agent_press if args.trigger_mode in {"ptt", "toggle"} else None,
+            on_agent_release=_agent_release if args.trigger_mode in {"ptt", "toggle"} else None,
+        ) as control:
             while not stop_event.is_set():
                 control.poll()
     else:

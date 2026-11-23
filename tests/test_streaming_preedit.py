@@ -5,6 +5,7 @@ fcitx session state machine (Python side), realtime worker streaming,
 cancel/finish distinctions, stale-session suppression, unicode preedit,
 and the provider → worker → postprocess → committer chain.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -30,6 +31,7 @@ from recordian.realtime_asr import _start_realtime_asr_worker
 # ---------------------------------------------------------------------------
 # Fake fcitx session bus
 # ---------------------------------------------------------------------------
+
 
 class FakeFcitxBus:
     """In-process stand-in for the Recordian fcitx addon DBus API.
@@ -74,9 +76,7 @@ class FakeFcitxBus:
         if self.strip_error_names:
             # What busctl actually prints: the error NAME is gone.
             return CommitError(f"{method}: Call failed: {message}")
-        return CommitError(
-            f"{method}: Call failed: {message} (org.fcitx.Fcitx.Recordian.Error.{name})"
-        )
+        return CommitError(f"{method}: Call failed: {message} (org.fcitx.Fcitx.Recordian.Error.{name})")
 
     # -- busctl replacement --------------------------------------------------
 
@@ -99,10 +99,7 @@ class FakeFcitxBus:
                 )
             token = f"tok{len(self.sessions) + 1}"
             self.sessions[token] = {"alive": True, "preedit": args[0]}
-            return (
-                f"{token} preedit={1 if self.preedit_capable else 0} "
-                "frontend=wayland program=Fake App"
-            )
+            return f"{token} preedit={1 if self.preedit_capable else 0} frontend=wayland program=Fake App"
         if method in ("UpdatePreedit", "CommitSession", "CancelSession"):
             token = args[0]
             entry = self.sessions.get(token)
@@ -213,6 +210,7 @@ class _RealtimeProvider:
 # FcitxCommitter composition session (Python side)
 # ---------------------------------------------------------------------------
 
+
 def test_fcitx_begin_composition_parses_descriptor(monkeypatch) -> None:
     bus = FakeFcitxBus()
     _install_fake_bus(monkeypatch, bus)
@@ -286,14 +284,14 @@ def test_fcitx_session_stale_error_name_is_parsed_when_present(monkeypatch) -> N
     structured, not text-guessed (also works for gdbus-style names)."""
     from recordian.linux_commit import _parse_dbus_error_name
 
-    assert _parse_dbus_error_name(
-        "UpdatePreedit: Call failed: unknown session "
-        "(org.fcitx.Fcitx.Recordian.Error.StaleSession)"
-    ) == "StaleSession"
     assert (
         _parse_dbus_error_name(
-            "GDBus.Error:org.fcitx.Fcitx.Recordian.Error.NoInputContext: no focus"
+            "UpdatePreedit: Call failed: unknown session (org.fcitx.Fcitx.Recordian.Error.StaleSession)"
         )
+        == "StaleSession"
+    )
+    assert (
+        _parse_dbus_error_name("GDBus.Error:org.fcitx.Fcitx.Recordian.Error.NoInputContext: no focus")
         == "NoInputContext"
     )
     assert _parse_dbus_error_name("CommitSession: timed out after 2.0s") == ""
@@ -335,6 +333,7 @@ def test_open_composition_session_returns_none_for_legacy_backend() -> None:
 # Realtime worker with composition
 # ---------------------------------------------------------------------------
 
+
 def _run_worker(monkeypatch, bus, provider, *, refine_enabled: bool = False, **worker_kwargs):
     events: list[dict[str, object]] = []
     _install_fake_bus(monkeypatch, bus)
@@ -360,9 +359,7 @@ def _run_worker(monkeypatch, bus, provider, *, refine_enabled: bool = False, **w
 
 def test_worker_streams_preedit_and_commits_once(monkeypatch) -> None:
     bus = FakeFcitxBus()
-    provider = _RealtimeProvider(
-        _ScriptedSession(["你好", "你好世界"], finish_text="你好世界。")
-    )
+    provider = _RealtimeProvider(_ScriptedSession(["你好", "你好世界"], finish_text="你好世界。"))
     worker, events = _run_worker(monkeypatch, bus, provider)
 
     assert worker.final_text == "你好世界。"
@@ -385,9 +382,7 @@ def test_worker_streams_preedit_and_commits_once(monkeypatch) -> None:
 def test_worker_revision_of_first_chars_needs_no_backspace(monkeypatch) -> None:
     """Partial revises its first characters → preedit replaced, single commit."""
     bus = FakeFcitxBus()
-    provider = _RealtimeProvider(
-        _ScriptedSession(["你好世界", "你们好世界"], finish_text="你们好世界！")
-    )
+    provider = _RealtimeProvider(_ScriptedSession(["你好世界", "你们好世界"], finish_text="你们好世界！"))
     worker, _events = _run_worker(monkeypatch, bus, provider)
 
     assert worker.commit_info is not None and worker.commit_info["committed"]
@@ -531,9 +526,7 @@ def test_worker_release_preedit_when_refine_enabled(monkeypatch) -> None:
 
 def test_worker_unicode_emoji_preedit_roundtrip(monkeypatch) -> None:
     bus = FakeFcitxBus()
-    provider = _RealtimeProvider(
-        _ScriptedSession(["📝草稿👶", "📝草稿👶🌈"], finish_text="📝定稿👶🌈")
-    )
+    provider = _RealtimeProvider(_ScriptedSession(["📝草稿👶", "📝草稿👶🌈"], finish_text="📝定稿👶🌈"))
     worker, _events = _run_worker(monkeypatch, bus, provider)
 
     updates = [args[1] for method, args in bus.calls if method == "UpdatePreedit"]
@@ -545,6 +538,7 @@ def test_worker_unicode_emoji_preedit_roundtrip(monkeypatch) -> None:
 # ---------------------------------------------------------------------------
 # Postprocess pipeline integration
 # ---------------------------------------------------------------------------
+
 
 def _pipeline_context(
     *,
@@ -626,9 +620,7 @@ def _patch_pipeline_env(monkeypatch) -> None:
 def test_chain_provider_worker_postprocess_committer_single_commit(monkeypatch) -> None:
     """Full chain: streaming worker commits once; pipeline never re-commits."""
     bus = FakeFcitxBus()
-    provider = _RealtimeProvider(
-        _ScriptedSession(["克劳德", "克劳德很强"], finish_text="克劳德很强")
-    )
+    provider = _RealtimeProvider(_ScriptedSession(["克劳德", "克劳德很强"], finish_text="克劳德很强"))
     worker, _events = _run_worker(
         monkeypatch,
         bus,
@@ -965,9 +957,7 @@ def test_worker_uses_streaming_corrector_for_preedit_and_final(monkeypatch) -> N
 
     monkeypatch.setattr(sc, "StreamingHotwordCorrector", _SpyCorrector)
     bus = FakeFcitxBus()
-    provider = _RealtimeProvider(
-        _ScriptedSession(["你好", "你好世界"], finish_text="你好世界。")
-    )
+    provider = _RealtimeProvider(_ScriptedSession(["你好", "你好世界"], finish_text="你好世界。"))
     worker, events = _run_worker(
         monkeypatch,
         bus,
@@ -995,6 +985,7 @@ def test_worker_uses_streaming_corrector_for_preedit_and_final(monkeypatch) -> N
 # r4 counter-examples: refused begin, lost commit reply, refine session
 # ---------------------------------------------------------------------------
 
+
 def test_worker_begin_refused_asr_succeeds_zero_writes(monkeypatch) -> None:
     """Real-chain counter-example: Begin refused, ASR succeeds → zero writes.
 
@@ -1006,9 +997,7 @@ def test_worker_begin_refused_asr_succeeds_zero_writes(monkeypatch) -> None:
     bus = FakeFcitxBus()
     bus.begin_fails = True
     bus.strip_error_names = True  # plain busctl stderr, no error name
-    provider = _RealtimeProvider(
-        _ScriptedSession(["你好", "你好世界"], finish_text="你好世界。")
-    )
+    provider = _RealtimeProvider(_ScriptedSession(["你好", "你好世界"], finish_text="你好世界。"))
     worker, events = _run_worker(monkeypatch, bus, provider)
 
     # ASR ran to completion and produced a transcript...
@@ -1025,9 +1014,7 @@ def test_worker_begin_refused_asr_succeeds_zero_writes(monkeypatch) -> None:
     # CommitText, nothing that could touch the user's preedit or a new focus.
     methods = [method for method, _ in bus.calls]
     assert methods == ["BeginSession"]
-    assert any(
-        "realtime_composition_refused" in str(e.get("message", "")) for e in events
-    )
+    assert any("realtime_composition_refused" in str(e.get("message", "")) for e in events)
 
 
 def test_pipeline_begin_refused_worker_suppresses_all_fallback(monkeypatch) -> None:
@@ -1070,9 +1057,7 @@ def test_pipeline_begin_refused_worker_suppresses_all_fallback(monkeypatch) -> N
     assert result["asr_path"] == "realtime_stale_suppressed"
     # The transcript is preserved for manual copy.
     assert result["text"] == "完整文本"
-    assert any(
-        "realtime_commit_suppressed" in str(e.get("message", "")) for e in state_events
-    )
+    assert any("realtime_commit_suppressed" in str(e.get("message", "")) for e in state_events)
 
 
 def test_pipeline_file_stream_begin_refused_zero_commits(monkeypatch) -> None:
@@ -1114,9 +1099,7 @@ def test_pipeline_file_stream_begin_refused_zero_commits(monkeypatch) -> None:
     assert result["commit"]["committed"] is False
     assert result["commit"]["outcome"] == "suppressed"
     assert result["asr_path"] == "stream_composition_refused_suppressed"
-    assert any(
-        "stream_composition_refused" in str(e.get("message", "")) for e in state_events
-    )
+    assert any("stream_composition_refused" in str(e.get("message", "")) for e in state_events)
 
 
 def test_chain_commit_written_then_reply_lost_never_recommits(monkeypatch) -> None:
@@ -1129,9 +1112,7 @@ def test_chain_commit_written_then_reply_lost_never_recommits(monkeypatch) -> No
     """
     bus = FakeFcitxBus()
     bus.commit_reply_lost = True
-    provider = _RealtimeProvider(
-        _ScriptedSession(["你好"], finish_text="你好世界。")
-    )
+    provider = _RealtimeProvider(_ScriptedSession(["你好"], finish_text="你好世界。"))
     worker, _events = _run_worker(monkeypatch, bus, provider)
 
     assert worker.final_text == "你好世界。"
@@ -1338,9 +1319,7 @@ def test_refine_session_stale_and_rebind_refused_recovers_text(monkeypatch) -> N
     assert commit["incomplete"] is True
     assert commit["recovery_text"] == "整理后的最终草稿"
     assert result["text"] == "整理后的最终草稿"
-    assert any(
-        "refine_session_commit_failed" in str(e.get("message", "")) for e in state_events
-    )
+    assert any("refine_session_commit_failed" in str(e.get("message", "")) for e in state_events)
 
 
 def test_refine_session_rebind_budget_is_bounded(monkeypatch) -> None:
@@ -1450,9 +1429,7 @@ def test_pipeline_refine_stream_begin_refused_zero_commits(monkeypatch) -> None:
     result = result_events[0]["result"]
     assert result["commit"]["committed"] is False
     assert result["commit"]["outcome"] == "suppressed"
-    assert any(
-        "stream_composition_refused" in str(e.get("message", "")) for e in state_events
-    )
+    assert any("stream_composition_refused" in str(e.get("message", "")) for e in state_events)
 
 
 def test_pipeline_nonstreaming_final_applies_single_semif_judgment(monkeypatch) -> None:
@@ -1466,9 +1443,7 @@ def test_pipeline_nonstreaming_final_applies_single_semif_judgment(monkeypatch) 
 
     class _SpyCorrector:
         def __init__(self, hotwords, *, endpoint="", timeout_s=0.12, enabled=False, **_):
-            constructed.append(
-                {"endpoint": endpoint, "timeout_s": timeout_s, "enabled": enabled}
-            )
+            constructed.append({"endpoint": endpoint, "timeout_s": timeout_s, "enabled": enabled})
 
         def finish(self, text):
             finished.append(text)
@@ -1519,6 +1494,7 @@ def test_pipeline_nonstreaming_final_applies_single_semif_judgment(monkeypatch) 
 # r5 fixes: empty-stream one-shot recovery on the SAME bound session,
 # pre-Begin cancellation gate
 # ---------------------------------------------------------------------------
+
 
 class _EmptyStreamProvider(_RealtimeProvider):
     """File-streaming provider whose stream yields nothing (provider glitch)."""
@@ -1572,9 +1548,7 @@ def test_pipeline_empty_stream_recovers_oneshot_through_same_session(monkeypatch
     assert result["text"] == "完整转写结果"
     assert result["commit"]["committed"] is True
     assert result["asr_path"] == "streaming_commit"
-    assert any(
-        "empty_stream_retry_same_session" in str(e.get("message", "")) for e in state_events
-    )
+    assert any("empty_stream_retry_same_session" in str(e.get("message", "")) for e in state_events)
 
 
 def test_pipeline_empty_stream_retry_focus_lost_refuses_commit(monkeypatch) -> None:
@@ -1713,10 +1687,7 @@ def test_worker_cancelled_before_begin_never_binds_session(monkeypatch) -> None:
     assert worker.outcome == "cancelled"
     assert worker.commit_info is not None
     assert worker.commit_info["outcome"] == "cancelled"
-    assert any(
-        "realtime_composition_cancelled_before_begin" in str(e.get("message", ""))
-        for e in events
-    )
+    assert any("realtime_composition_cancelled_before_begin" in str(e.get("message", "")) for e in events)
 
 
 def test_controller_cancel_closes_particle_corrector_during_final(monkeypatch):
@@ -1725,23 +1696,32 @@ def test_controller_cancel_closes_particle_corrector_during_final(monkeypatch):
 
     entered, release = threading.Event(), threading.Event()
     calls = []
+
     def finish(self, text):
         entered.set()
         assert release.wait(2)
         return text
+
     monkeypatch.setattr(sc.StreamingHotwordCorrector, "finish", finish)
+
     def ask(*args, **kwargs):
         calls.append(True)
         return {}
+
     monkeypatch.setattr(pc, "request_jev_choices", ask)
     bus = FakeFcitxBus()
     _install_fake_bus(monkeypatch, bus)
     provider = _RealtimeProvider(_ScriptedSession(["认真仔细的检查。"], finish_text="认真仔细的检查。"))
     worker = _start_realtime_asr_worker(
         args=_worker_args(enable_particle_correction=True, correction_provider="jev"),
-        provider=provider, record_handle=_record_handle(), committer=FcitxCommitter(),
-        enable_local_commit=True, auto_hard_enter=False, resolve_hotwords=lambda: [],
-        normalize_final_text=str, on_state=lambda _: None,
+        provider=provider,
+        record_handle=_record_handle(),
+        committer=FcitxCommitter(),
+        enable_local_commit=True,
+        auto_hard_enter=False,
+        resolve_hotwords=lambda: [],
+        normalize_final_text=str,
+        on_state=lambda _: None,
     )
     assert entered.wait(2)
     worker.cancel_session()

@@ -4,6 +4,7 @@ The existing hotkey state machine receives the same press/release edges as
 pynput. The compositor owns the actual bindings; no global key snooping is
 needed. Requests are acknowledged once and never retried automatically.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -12,6 +13,7 @@ import os
 import socket
 import stat
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 
@@ -21,13 +23,24 @@ def socket_path() -> Path:
 
 
 class ControlServer:
-    def __init__(self, on_press, on_release, trigger_keys, toggle_keys, on_exit, *,
-                 path=None, get_status=None, on_agent_press=None, on_agent_release=None):
+    def __init__(
+        self,
+        on_press,
+        on_release,
+        trigger_keys,
+        toggle_keys,
+        on_exit,
+        *,
+        path=None,
+        get_status=None,
+        on_agent_press=None,
+        on_agent_release=None,
+    ):
         self.path = Path(path) if path else socket_path()
         self.on_press, self.on_release = on_press, on_release
         self.trigger_keys, self.toggle_keys = sorted(trigger_keys), sorted(toggle_keys)
         self.on_exit = on_exit
-        self.get_status = get_status or (lambda: "idle")
+        self.get_status: Callable[[], str] = get_status or (lambda: "idle")
         self.on_agent_press = on_agent_press
         self.on_agent_release = on_agent_release
         self.server = None
@@ -130,7 +143,22 @@ def send_action(action: str, *, path=None) -> str:
 
 def main():
     parser = argparse.ArgumentParser(description="Control the running Recordian desktop daemon")
-    parser.add_argument("action", choices=["ping", "status", "watch-status", "toggle", "ptt-press", "ptt-release", "agent-press", "agent-release", "toggle-press", "toggle-release", "exit"])
+    parser.add_argument(
+        "action",
+        choices=[
+            "ping",
+            "status",
+            "watch-status",
+            "toggle",
+            "ptt-press",
+            "ptt-release",
+            "agent-press",
+            "agent-release",
+            "toggle-press",
+            "toggle-release",
+            "exit",
+        ],
+    )
     args = parser.parse_args()
     if args.action == "watch-status":
         previous = None

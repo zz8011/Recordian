@@ -75,8 +75,15 @@ def test_normalize_final_text_followup_cases() -> None:
 
 def test_final_text_keeps_lexicalized_numerals() -> None:
     for text in (
-        "三三两两", "三五成群", "二八年华", "五四运动", "七七事变",
-        "九九重阳", "九三学社", "三九严寒", "三番五次",
+        "三三两两",
+        "三五成群",
+        "二八年华",
+        "五四运动",
+        "七七事变",
+        "九九重阳",
+        "九三学社",
+        "三九严寒",
+        "三番五次",
     ):
         assert _normalize_final_text(text) == text
 

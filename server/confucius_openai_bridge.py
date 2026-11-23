@@ -8,6 +8,7 @@ WebSocket stream. This bridge translates: multipart wav -> PCM16 16k mono frames
 Auth: Bearer header is ignored (local service); Confucius ws auth uses the token
 file. Keep on loopback; single-user service anyway (CLOSE 4429 when busy).
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -26,34 +27,59 @@ from recordian.http_service import run_http_service
 from recordian.local_auth import http_request_allowed, load_private_token
 
 WS_URL = "ws://127.0.0.1:8321/asr_stream_api_v1"
-TOKEN_FILE = str(Path(os.environ.get('XDG_CONFIG_HOME', str(Path.home() / '.config')))
-                 / 'recordian' / 'confucius_server_token.txt')
+TOKEN_FILE = str(
+    Path(os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config"))) / "recordian" / "confucius_server_token.txt"
+)
 SAMPLE_RATE = 16000
 EOS = "YOUDAO_ONETIME_ASR_STREAM_EOS"
 FRAME_BYTES = SAMPLE_RATE * 160 // 1000 * 2  # 160ms PCM16 mono
 
 app = Flask(__name__)
-app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024
+app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024
 
 
 @app.before_request
 def check_origin():
     from urllib.parse import urlsplit
-    if not http_request_allowed(host=urlsplit(request.host_url).hostname or '', origin=request.headers.get('Origin'),
-                                base_url=request.host_url, authenticated=False):
-        return jsonify({'error': 'forbidden origin or host'}), 403
+
+    if not http_request_allowed(
+        host=urlsplit(request.host_url).hostname or "",
+        origin=request.headers.get("Origin"),
+        base_url=request.host_url,
+        authenticated=False,
+    ):
+        return jsonify({"error": "forbidden origin or host"}), 403
 
 
 def _pcm16_mono(wav_bytes: bytes) -> bytes:
     """ffmpeg: any container -> raw PCM16 mono 16k. Fail loudly on empty."""
     proc = subprocess.run(
-        ["ffmpeg", "-v", "error", "-protocol_whitelist", "pipe", "-i", "pipe:0",
-         "-t", "31", "-f", "s16le", "-ar", str(SAMPLE_RATE), "-ac", "1", "pipe:1"],
-        input=wav_bytes, capture_output=True, timeout=60)
+        [
+            "ffmpeg",
+            "-v",
+            "error",
+            "-protocol_whitelist",
+            "pipe",
+            "-i",
+            "pipe:0",
+            "-t",
+            "31",
+            "-f",
+            "s16le",
+            "-ar",
+            str(SAMPLE_RATE),
+            "-ac",
+            "1",
+            "pipe:1",
+        ],
+        input=wav_bytes,
+        capture_output=True,
+        timeout=60,
+    )
     if proc.returncode != 0 or not proc.stdout:
         raise ValueError(f"ffmpeg decode failed: {proc.stderr.decode()[:200]}")
     if len(proc.stdout) > SAMPLE_RATE * 2 * 30:
-        raise ValueError('audio exceeds the Confucius 30-second session budget')
+        raise ValueError("audio exceeds the Confucius 30-second session budget")
     return proc.stdout
 
 
@@ -89,7 +115,7 @@ async def _transcribe(pcm: bytes, language: str) -> str:
         reader_task = asyncio.create_task(reader())
         try:
             for i in range(0, len(pcm), FRAME_BYTES):
-                await ws.send(pcm[i:i + FRAME_BYTES])
+                await ws.send(pcm[i : i + FRAME_BYTES])
             await ws.send(EOS)
             await reader_task
         finally:
@@ -101,8 +127,7 @@ async def _transcribe(pcm: bytes, language: str) -> str:
 
 @app.get("/v1/models")
 def models():
-    return jsonify({"object": "list",
-                    "data": [{"id": "confucius4-r2t2", "object": "model"}]})
+    return jsonify({"object": "list", "data": [{"id": "confucius4-r2t2", "object": "model"}]})
 
 
 @app.post("/v1/audio/transcriptions")
@@ -116,14 +141,16 @@ def transcriptions():
         lang_map = {"zh": "Chinese", "zh-cn": "Chinese", "en": "English"}
         language = lang_map.get(language.lower(), language)
         pcm = _pcm16_mono(file.read())
+
         async def bounded_transcribe():
             return await asyncio.wait_for(_transcribe(pcm, language), timeout=60)
+
         text = asyncio.run(bounded_transcribe())
         return jsonify({"text": text})
     except HTTPException:
         raise
     except ValueError as exc:
-        return jsonify({'error': {'message': str(exc), 'type': 'invalid_request'}}), 400
+        return jsonify({"error": {"message": str(exc), "type": "invalid_request"}}), 400
     except Exception as exc:  # surface as OpenAI-style error for the SDK
         app.logger.exception("transcription failed")
         return jsonify({"error": {"message": str(exc), "type": type(exc).__name__}}), 500

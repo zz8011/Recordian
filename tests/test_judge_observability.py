@@ -77,8 +77,12 @@ def _ok_session(choice: str, keep: float, c0: float) -> _Session:
 def test_semif_answered_with_correction_event(caplog: pytest.LogCaptureFixture) -> None:
     with caplog.at_level(logging.INFO, logger="recordian.semif_judge"):
         result = request_choice(
-            _ok_session("c0", 0.05, 0.95), "http://x/v1/systemone", 0.35,
-            "今天十七度", _OPTIONS, instructions="选",
+            _ok_session("c0", 0.05, 0.95),
+            "http://x/v1/systemone",
+            0.35,
+            "今天十七度",
+            _OPTIONS,
+            instructions="选",
         )
     assert result == "c0"
     events = _events(caplog, "semif_request")
@@ -92,8 +96,12 @@ def test_semif_answered_with_correction_event(caplog: pytest.LogCaptureFixture) 
 def test_semif_answered_keep_is_not_a_correction(caplog: pytest.LogCaptureFixture) -> None:
     with caplog.at_level(logging.INFO, logger="recordian.semif_judge"):
         result = request_choice(
-            _ok_session("keep", 0.95, 0.05), "http://x/v1/systemone", 0.35,
-            "今天十七度", _OPTIONS, instructions="选",
+            _ok_session("keep", 0.95, 0.05),
+            "http://x/v1/systemone",
+            0.35,
+            "今天十七度",
+            _OPTIONS,
+            instructions="选",
         )
     assert result == "keep"
     events = _events(caplog, "semif_request")
@@ -104,8 +112,12 @@ def test_semif_answered_keep_is_not_a_correction(caplog: pytest.LogCaptureFixtur
 def test_semif_gate_rejected_event(caplog: pytest.LogCaptureFixture) -> None:
     with caplog.at_level(logging.INFO, logger="recordian.semif_judge"):
         result = request_choice(
-            _ok_session("c0", 0.5, 0.5), "http://x/v1/systemone", 0.35,
-            "今天十七度", _OPTIONS, instructions="选",
+            _ok_session("c0", 0.5, 0.5),
+            "http://x/v1/systemone",
+            0.35,
+            "今天十七度",
+            _OPTIONS,
+            instructions="选",
         )
     assert result is None
     events = _events(caplog, "semif_request")
@@ -115,8 +127,12 @@ def test_semif_gate_rejected_event(caplog: pytest.LogCaptureFixture) -> None:
 def test_semif_timeout_event(caplog: pytest.LogCaptureFixture) -> None:
     with caplog.at_level(logging.INFO, logger="recordian.semif_judge"):
         result = request_choice(
-            _Session(exc=requests.Timeout()), "http://x/v1/systemone", 0.35,
-            "今天十七度", _OPTIONS, instructions="选",
+            _Session(exc=requests.Timeout()),
+            "http://x/v1/systemone",
+            0.35,
+            "今天十七度",
+            _OPTIONS,
+            instructions="选",
         )
     assert result is None
     events = _events(caplog, "semif_request")
@@ -126,8 +142,12 @@ def test_semif_timeout_event(caplog: pytest.LogCaptureFixture) -> None:
 def test_semif_transport_error_event(caplog: pytest.LogCaptureFixture) -> None:
     with caplog.at_level(logging.INFO, logger="recordian.semif_judge"):
         result = request_choice(
-            _Session(exc=requests.ConnectionError("down")), "http://x/v1/systemone", 0.35,
-            "今天十七度", _OPTIONS, instructions="选",
+            _Session(exc=requests.ConnectionError("down")),
+            "http://x/v1/systemone",
+            0.35,
+            "今天十七度",
+            _OPTIONS,
+            instructions="选",
         )
     assert result is None
     events = _events(caplog, "semif_request")
@@ -147,8 +167,12 @@ def test_semif_unexpected_exception_reraises_and_logs(caplog: pytest.LogCaptureF
     with caplog.at_level(logging.INFO, logger="recordian.semif_judge"):
         with pytest.raises(RuntimeError):
             request_choice(
-                _Session(exc=RuntimeError("boom")), "http://x/v1/systemone", 0.35,
-                "今天十七度", _OPTIONS, instructions="选",
+                _Session(exc=RuntimeError("boom")),
+                "http://x/v1/systemone",
+                0.35,
+                "今天十七度",
+                _OPTIONS,
+                instructions="选",
             )
     events = _events(caplog, "semif_request")
     assert len(events) == 1 and "outcome=exception" in events[0]
@@ -175,7 +199,9 @@ def test_semif_client_disabled_skip_event(caplog: pytest.LogCaptureFixture) -> N
 def test_semif_batch_answered_and_timeout_events(caplog: pytest.LogCaptureFixture) -> None:
     with caplog.at_level(logging.INFO, logger="recordian.semif_judge"):
         ok = request_choices(_ok_session("c0", 0.05, 0.95), "http://x/v1/systemone", 0.35, "今天十七度", _QUESTIONS)
-        down = request_choices(_Session(exc=requests.Timeout()), "http://x/v1/systemone", 0.35, "今天十七度", _QUESTIONS)
+        down = request_choices(
+            _Session(exc=requests.Timeout()), "http://x/v1/systemone", 0.35, "今天十七度", _QUESTIONS
+        )
     assert ok == {"pick": "c0"}
     assert down == {}
     events = _events(caplog, "semif_request_batch")
@@ -224,10 +250,13 @@ def test_jev_gate_rejected_event(tmp_path: Path, caplog: pytest.LogCaptureFixtur
 
 
 def test_jev_timeout_event(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
-    argv = _jev_script(tmp_path, """
+    argv = _jev_script(
+        tmp_path,
+        """
     import time
     time.sleep(5)
-    """)
+    """,
+    )
     with caplog.at_level(logging.INFO, logger="recordian.jev_judge"):
         result = jev_judge.request_jev_choices(0.3, "状态文本", _JEV_QUESTIONS, argv=argv)
     assert result == {}
@@ -236,10 +265,13 @@ def test_jev_timeout_event(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> 
 
 
 def test_jev_process_error_event(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
-    argv = _jev_script(tmp_path, """
+    argv = _jev_script(
+        tmp_path,
+        """
     import sys
     sys.exit(3)
-    """)
+    """,
+    )
     with caplog.at_level(logging.INFO, logger="recordian.jev_judge"):
         result = jev_judge.request_jev_choices(0.8, "状态文本", _JEV_QUESTIONS, argv=argv)
     assert result == {}
@@ -248,10 +280,13 @@ def test_jev_process_error_event(tmp_path: Path, caplog: pytest.LogCaptureFixtur
 
 
 def test_jev_payload_error_event(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
-    argv = _jev_script(tmp_path, """
+    argv = _jev_script(
+        tmp_path,
+        """
     import sys
     sys.stdout.write("not json at all")
-    """)
+    """,
+    )
     with caplog.at_level(logging.INFO, logger="recordian.jev_judge"):
         result = jev_judge.request_jev_choices(0.8, "状态文本", _JEV_QUESTIONS, argv=argv)
     assert result == {}
@@ -294,16 +329,23 @@ sys.stdout.write(json.dumps({"answers": {"role": answer}}))
 
 def _corrector(tmp_path: Path, body: str) -> StreamingHotwordCorrector:
     return StreamingHotwordCorrector(
-        [], endpoint="", timeout_s=0.8, enabled=True, provider="jev",
-        contextual_aliases=_ALIAS, jev_argv=_jev_script(tmp_path, body),
+        [],
+        endpoint="",
+        timeout_s=0.8,
+        enabled=True,
+        provider="jev",
+        contextual_aliases=_ALIAS,
+        jev_argv=_jev_script(tmp_path, body),
     )
 
 
 def test_corrector_corrected_event(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     corrector = _corrector(tmp_path, _ROLE_SCRIPT)
     try:
-        with caplog.at_level(logging.INFO, logger="recordian.streaming_correction"), \
-                caplog.at_level(logging.INFO, logger="recordian.jev_judge"):
+        with (
+            caplog.at_level(logging.INFO, logger="recordian.streaming_correction"),
+            caplog.at_level(logging.INFO, logger="recordian.jev_judge"),
+        ):
             text = "打开jeff工具检查这个项目"
             assert corrector.submit(text) == text
             assert corrector.finish(text) == "打开jev工具检查这个项目"
@@ -329,7 +371,9 @@ def test_corrector_no_change_event(tmp_path: Path, caplog: pytest.LogCaptureFixt
     assert "correction_applied=false" in events[0]
 
 
-def test_particle_corrected_and_skipped_events(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
+def test_particle_corrected_and_skipped_events(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
     def ask(timeout: float, state: str, questions: dict, **options: object) -> dict:
         del timeout, state, options
         return dict.fromkeys(questions, "地")
@@ -366,15 +410,23 @@ class _BrokenLogger:
 
 def test_emit_swallows_broken_logger() -> None:
     emit_judge_event(
-        _BrokenLogger(), site="x", outcome="y", latency_ms=1.0, text_len=5,  # type: ignore[arg-type]
+        _BrokenLogger(),
+        site="x",
+        outcome="y",
+        latency_ms=1.0,
+        text_len=5,  # type: ignore[arg-type]
     )
 
 
 def test_broken_logger_keeps_semif_result(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(semif_judge, "logger", _BrokenLogger())
     result = request_choice(
-        _ok_session("c0", 0.05, 0.95), "http://x/v1/systemone", 0.35,
-        "今天十七度", _OPTIONS, instructions="选",
+        _ok_session("c0", 0.05, 0.95),
+        "http://x/v1/systemone",
+        0.35,
+        "今天十七度",
+        _OPTIONS,
+        instructions="选",
     )
     assert result == "c0"
 

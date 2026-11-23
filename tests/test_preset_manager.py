@@ -1,4 +1,5 @@
 """测试 PresetManager 预设管理功能"""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -32,6 +33,7 @@ class TestPresetManagerInit:
     def test_default_presets_location_in_package(self) -> None:
         """测试默认预设目录位于包内且包含内置预设"""
         import recordian
+
         pkg_presets_dir = Path(recordian.__file__).parent / "presets"
         manager = PresetManager()
         assert manager.presets_dir == pkg_presets_dir

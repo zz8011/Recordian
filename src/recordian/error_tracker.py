@@ -43,9 +43,10 @@ class ErrorTracker:
                 environment=self.environment,
                 release=self.release,
                 traces_sample_rate=0.1,  # 降低采样率以减少开销
-                profiles_sample_rate=0.1,
+                profile_session_sample_rate=0.1,
+                profile_lifecycle="trace",  # sentry 3 默认 manual，需显式随 trace 自动采样
                 integrations=[
-                    ThreadingIntegration(propagate_hub=True),
+                    ThreadingIntegration(propagate_scope=True),
                 ],
                 before_send=self._before_send,  # type: ignore[arg-type]
             )
@@ -96,7 +97,7 @@ class ErrorTracker:
 
         try:
             if kwargs:
-                with self._sentry_sdk.push_scope() as scope:
+                with self._sentry_sdk.new_scope() as scope:
                     for key, value in kwargs.items():
                         scope.set_context(key, value)
                     self._sentry_sdk.capture_exception(exc)
@@ -119,7 +120,7 @@ class ErrorTracker:
 
         try:
             if kwargs:
-                with self._sentry_sdk.push_scope() as scope:
+                with self._sentry_sdk.new_scope() as scope:
                     for key, value in kwargs.items():
                         scope.set_context(key, value)
                     self._sentry_sdk.capture_message(message, level=level)

@@ -19,6 +19,7 @@ Layout (all paths self-owned; nothing touches the user's session):
 Driver stdout/stderr is teed to <coordination-root>/kimi-native.validation.log
 as raw evidence.
 """
+
 from __future__ import annotations
 
 import os
@@ -51,9 +52,9 @@ def _start_xvfb() -> tuple[subprocess.Popen, str]:
     # Xvfb -displayfd can select :0 even while Hyprland owns its socket
     # (the lock contains the compositor PID). Never probe desktop displays.
     number = next(
-        n for n in range(100 + os.getpid() % 5000, 10000)
-        if not os.path.lexists(f"/tmp/.X11-unix/X{n}")
-        and not os.path.lexists(f"/tmp/.X{n}-lock")
+        n
+        for n in range(100 + os.getpid() % 5000, 10000)
+        if not os.path.lexists(f"/tmp/.X11-unix/X{n}") and not os.path.lexists(f"/tmp/.X{n}-lock")
     )
     display = f":{number}"
     proc = subprocess.Popen(
@@ -67,9 +68,7 @@ def _start_xvfb() -> tuple[subprocess.Popen, str]:
     while time.monotonic() < deadline:
         if proc.poll() is not None:
             raise RuntimeError(f"Xvfb died rc={proc.returncode}")
-        if subprocess.run(
-            ["xdotool", "getdisplaygeometry"], env=env, capture_output=True
-        ).returncode == 0:
+        if subprocess.run(["xdotool", "getdisplaygeometry"], env=env, capture_output=True).returncode == 0:
             return proc, display
         time.sleep(0.1)
     proc.kill()
@@ -96,7 +95,9 @@ def _ensure_addon_build() -> Path:
     if not (build / "CMakeCache.txt").exists():
         subprocess.run(
             ["cmake", "-S", str(src), "-B", str(build), "-DCMAKE_BUILD_TYPE=RelWithDebInfo"],
-            check=True, capture_output=True, text=True,
+            check=True,
+            capture_output=True,
+            text=True,
         )
     # Always rebuild (incremental): never validate new source with a stale
     # binary. make only re-links when recordian-commit.cpp actually changed.
@@ -108,20 +109,20 @@ def _ensure_addon_build() -> Path:
 
 
 def test_native_fcitx_session_contract():
-    missing = [tool for tool in ("Xvfb", "dbus-run-session", "xdotool", "busctl", "fcitx5", "cmake") if not shutil.which(tool)]
+    missing = [
+        tool for tool in ("Xvfb", "dbus-run-session", "xdotool", "busctl", "fcitx5", "cmake") if not shutil.which(tool)
+    ]
     if missing:
         pytest.fail(f"RECORDIAN_NATIVE_GUI=1 but required tools are missing: {missing}")
 
     build = _ensure_addon_build()
     import hashlib
 
-    src_sha = hashlib.sha256(
-        (REPO / "fcitx" / "recordian-commit" / "recordian-commit.cpp").read_bytes()
-    ).hexdigest()[:12]
+    src_sha = hashlib.sha256((REPO / "fcitx" / "recordian-commit" / "recordian-commit.cpp").read_bytes()).hexdigest()[
+        :12
+    ]
     so_sha = hashlib.sha256((build / "librecordian-commit.so").read_bytes()).hexdigest()[:12]
-    validation_log = Path(
-        os.environ.get("RECORDIAN_NATIVE_VALIDATION_LOG", build / "native-validation.log")
-    )
+    validation_log = Path(os.environ.get("RECORDIAN_NATIVE_VALIDATION_LOG", build / "native-validation.log"))
     gtk_py = _find_gtk_python()
     tmp = tempfile.mkdtemp(prefix="recordian-native-")
     for sub in ("config", "data", "cache", "home"):
@@ -157,8 +158,7 @@ def test_native_fcitx_session_contract():
             "XMODIFIERS": "@im=fcitx",
         }
         # Private bus inside this Xvfb. Do not keep the host session bus or Wayland.
-        for key in ("WAYLAND_DISPLAY", "WAYLAND_SOCKET", "HYPRLAND_INSTANCE_SIGNATURE",
-                    "SWAYSOCK", "SESSION_MANAGER"):
+        for key in ("WAYLAND_DISPLAY", "WAYLAND_SOCKET", "HYPRLAND_INSTANCE_SIGNATURE", "SWAYSOCK", "SESSION_MANAGER"):
             env.pop(key, None)
         env.pop("DBUS_SESSION_BUS_ADDRESS", None)
         focus = os.environ.get("RECORDIAN_NATIVE_FOCUS", "")
@@ -182,8 +182,7 @@ def test_native_fcitx_session_contract():
         # LIMITATION results are explicit expected-platform-gaps and do not
         # fail the suite; FAIL results do. The driver exits nonzero on FAIL.
         assert run.returncode == 0, (
-            f"native session driver failed rc={run.returncode}; "
-            f"full log: {validation_log}\n{summary}"
+            f"native session driver failed rc={run.returncode}; full log: {validation_log}\n{summary}"
         )
         if focus == "browser-segments":
             assert "SCENARIO s10b_browser_textarea_segments_once: PASS" in run.stdout, summary

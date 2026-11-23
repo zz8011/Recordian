@@ -72,7 +72,22 @@ def test_float32_to_pcm16le_is_byte_identical_on_native_and_python_paths(native,
     from recordian.providers.confucius_asr import f32le_to_pcm16le
 
     # 舍入边界（±0.5 LSB）、削波、非有限值与随机样本一起比较，三条路径必须逐字节一致。
-    edges = [0.0, 0.5 / 32767, -0.5 / 32767, 1.5 / 32767, -1.5 / 32767, 0.5, -0.5, 1.0, -1.0, 1.2, -1.2, math.nan, math.inf, -math.inf]
+    edges = [
+        0.0,
+        0.5 / 32767,
+        -0.5 / 32767,
+        1.5 / 32767,
+        -1.5 / 32767,
+        0.5,
+        -0.5,
+        1.0,
+        -1.0,
+        1.2,
+        -1.2,
+        math.nan,
+        math.inf,
+        -math.inf,
+    ]
     samples = np.concatenate(
         [np.array(edges, dtype="<f4"), np.random.default_rng(11).uniform(-1.1, 1.1, 10001).astype("<f4")]
     )

@@ -62,7 +62,8 @@ def main():
     before = threading.active_count()
     process = psutil.Process()
     result = {
-        "mode": args.mode, "python": sys.version.split()[0],
+        "mode": args.mode,
+        "python": sys.version.split()[0],
         "source_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
         "gtk": f"{Gtk.MAJOR_VERSION}.{Gtk.MINOR_VERSION}.{Gtk.MICRO_VERSION}",
         "scope": "GTK/device enumeration only; no recording, model or API requests",
@@ -85,8 +86,9 @@ def main():
                 start_rss = process.memory_info().rss
                 start_cpu = time.process_time()
 
-                def query(backend, current_device, lock=lock, counts=counts, gate=gate,
-                          durations=durations, children=children):
+                def query(
+                    backend, current_device, lock=lock, counts=counts, gate=gate, durations=durations, children=children
+                ):
                     start = time.perf_counter()
                     with lock:
                         counts["calls"] += 1
@@ -96,8 +98,11 @@ def main():
                         if args.mode == "stress":
                             if not gate.wait(5):
                                 raise TimeoutError("benchmark gate timed out")
-                            with subprocess.Popen([sys.executable, "-c", "import time; time.sleep(0.15)"],
-                                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) as child:
+                            with subprocess.Popen(
+                                [sys.executable, "-c", "import time; time.sleep(0.15)"],
+                                stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL,
+                            ) as child:
                                 children.append(psutil.Process(child.pid))
                                 child.wait(timeout=5)
                             return [("default", "跟随系统默认麦克风"), ("synthetic", "Synthetic microphone")]
@@ -110,8 +115,9 @@ def main():
 
                 def tick(ticks=ticks, peaks=peaks, children=children):
                     ticks.append(time.perf_counter())
-                    peaks["workers"] = max(peaks["workers"], sum(
-                        t.name == "recordian-device-inventory" for t in threading.enumerate()))
+                    peaks["workers"] = max(
+                        peaks["workers"], sum(t.name == "recordian-device-inventory" for t in threading.enumerate())
+                    )
                     rss = process.memory_info().rss
                     alive = 0
                     for child in children:
@@ -135,14 +141,20 @@ def main():
                 gate.set()
                 # Drain callbacks as well as workers; a callback may start the
                 # one coalesced follow-up in the candidate.
-                pump_until(lambda counts=counts: counts["completed"] > 0 and not any(
-                    t.name == "recordian-device-inventory" for t in threading.enumerate())
-                    and not getattr(ui, "inventory_running", False))
+                pump_until(
+                    lambda counts=counts: (
+                        counts["completed"] > 0
+                        and not any(t.name == "recordian-device-inventory" for t in threading.enumerate())
+                        and not getattr(ui, "inventory_running", False)
+                    )
+                )
                 GLib.source_remove(timer)
                 while GLib.MainContext.default().pending():
                     GLib.MainContext.default().iteration(False)
                 sample = {
-                    "requests": requests, **counts, "peak_workers": peaks["workers"],
+                    "requests": requests,
+                    **counts,
+                    "peak_workers": peaks["workers"],
                     "peak_children": peaks["children"] if args.mode == "stress" else None,
                     "peak_sampled_rss_delta_bytes": max(0, peaks["rss_bytes"] - start_rss),
                     "rss_scope": "parent plus synthetic children" if args.mode == "stress" else "parent only",
@@ -150,7 +162,8 @@ def main():
                     "completion_ms": (time.perf_counter() - wall_start) * 1000,
                     "parent_cpu_ms": (time.process_time() - start_cpu) * 1000,
                     "query_median_ms": statistics.median(durations),
-                    "heartbeat_max_gap_ms": max((b-a for a, b in zip(ticks, ticks[1:], strict=False)), default=0) * 1000,
+                    "heartbeat_max_gap_ms": max((b - a for a, b in zip(ticks, ticks[1:], strict=False)), default=0)
+                    * 1000,
                     "device_option_count": len(ui.controls["input_device"][1].get_model()),
                     "selection_preserved": ui.controls["input_device"][1].get_active_id() == "default",
                 }
@@ -162,7 +175,8 @@ def main():
                 window = ui.window.get_window()
                 width, height = ui.window.get_size()
                 Gdk.pixbuf_get_from_window(window, 0, 0, width, height).savev(
-                    str(args.output / "daily-synthetic.png"), "png", [], [])
+                    str(args.output / "daily-synthetic.png"), "png", [], []
+                )
         finally:
             ui.window.destroy()
     result["remaining_threads_delta"] = threading.active_count() - before

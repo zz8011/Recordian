@@ -161,7 +161,11 @@ def test_discovered_model_saved_and_consumed_by_real_runtime_refiner(ui, monkeyp
     from recordian.providers.cloud_llm_refiner import CloudLLMRefiner
 
     calls = []
-    monkeypatch.setattr(native_settings, "fetch_model_list", lambda endpoint, key, **_: calls.append((endpoint, key)) or ["fixture-instruct"])
+    monkeypatch.setattr(
+        native_settings,
+        "fetch_model_list",
+        lambda endpoint, key, **_: calls.append((endpoint, key)) or ["fixture-instruct"],
+    )
     before = ui.app.config_path.read_bytes()
     ui.controls["refine_api_base"][1].set_text(base)
     ui.controls["refine_api_key"][1].set_text("synthetic-key")
@@ -190,20 +194,35 @@ def test_discovered_model_saved_and_consumed_by_real_runtime_refiner(ui, monkeyp
     monkeypatch.setattr(recording_controller, "ensure_ffmpeg_available", lambda: "fixture-ffmpeg")
     monkeypatch.setattr(recording_controller, "choose_record_backend", lambda *_: "ffmpeg")
     monkeypatch.setattr(recording_controller, "resolve_committer", lambda *_: SimpleNamespace())
-    monkeypatch.setattr(recording_controller, "create_provider", lambda *_: SimpleNamespace(provider_name="fixture ASR"))
+    monkeypatch.setattr(
+        recording_controller, "create_provider", lambda *_: SimpleNamespace(provider_name="fixture ASR")
+    )
     constructed = []
+
     def real_constructor(**kwargs):
         result = CloudLLMRefiner(**kwargs)
         constructed.append(result)
         return result
+
     monkeypatch.setattr(providers, "CloudLLMRefiner", real_constructor)
-    recording_controller.build_ptt_hotkey_handlers(args=args, on_result=lambda *_: None, on_error=lambda *_: None, on_busy=lambda *_: None, on_state=lambda *_: None)
+    recording_controller.build_ptt_hotkey_handlers(
+        args=args,
+        on_result=lambda *_: None,
+        on_error=lambda *_: None,
+        on_busy=lambda *_: None,
+        on_state=lambda *_: None,
+    )
     refiner = constructed[0]
     assert refiner.api_format == "openai" and refiner.model == "fixture-instruct"
     posts = []
+
     def post(url, headers, payload):
         posts.append((url, headers, payload))
-        return SimpleNamespace(status_code=200, json=lambda: {"choices": [{"message": {"content": "优化后的合成示例"}, "finish_reason": "stop"}]})
+        return SimpleNamespace(
+            status_code=200,
+            json=lambda: {"choices": [{"message": {"content": "优化后的合成示例"}, "finish_reason": "stop"}]},
+        )
+
     monkeypatch.setattr(refiner, "_post_json", post)
     assert refiner.refine("合成测试原文") == "优化后的合成示例"
     assert posts[0][0] == base + "/v1/chat/completions"
@@ -214,6 +233,7 @@ def test_discovered_model_saved_and_consumed_by_real_runtime_refiner(ui, monkeyp
 
 def test_failed_discovery_does_not_migrate_endpoint(ui, monkeypatch):
     from recordian import native_settings
+
     monkeypatch.setattr(native_settings, "fetch_model_list", lambda *_args, **_kwargs: [])
     ui.controls["refine_api_base"][1].set_text("http://example.invalid:8123")
     ui.discover_button.emit("clicked")

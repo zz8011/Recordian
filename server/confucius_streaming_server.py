@@ -64,9 +64,7 @@ def resolve_system_prompt(header: dict) -> str:
     if not isinstance(system_prompt, str):
         raise HeaderError("system_prompt must be a string")
     if len(system_prompt) > MAX_SYSTEM_PROMPT_CHARS:
-        raise HeaderError(
-            f"system_prompt must be at most {MAX_SYSTEM_PROMPT_CHARS} characters"
-        )
+        raise HeaderError(f"system_prompt must be at most {MAX_SYSTEM_PROMPT_CHARS} characters")
     return system_prompt.strip()
 
 
@@ -146,17 +144,24 @@ def validate_config(args) -> None:
     problems = []
     if not isinstance(args.max_queued_frames, int) or args.max_queued_frames < 1:
         problems.append(f"max_queued_frames must be >= 1, got {args.max_queued_frames!r}")
-    if not isinstance(args.max_session_seconds, (int, float)) \
-            or not math.isfinite(args.max_session_seconds) or args.max_session_seconds <= 0:
+    if (
+        not isinstance(args.max_session_seconds, (int, float))
+        or not math.isfinite(args.max_session_seconds)
+        or args.max_session_seconds <= 0
+    ):
         problems.append(f"max_session_seconds must be positive finite, got {args.max_session_seconds!r}")
-    if not isinstance(args.idle_timeout_s, (int, float)) \
-            or not math.isfinite(args.idle_timeout_s) or args.idle_timeout_s <= 0:
+    if (
+        not isinstance(args.idle_timeout_s, (int, float))
+        or not math.isfinite(args.idle_timeout_s)
+        or args.idle_timeout_s <= 0
+    ):
         problems.append(f"idle_timeout_s must be positive finite, got {args.idle_timeout_s!r}")
-    if not isinstance(args.gpu_memory_utilization, (int, float)) \
-            or not math.isfinite(args.gpu_memory_utilization) \
-            or not 0 < args.gpu_memory_utilization <= 1:
-        problems.append(
-            f"gpu_memory_utilization must be in (0, 1], got {args.gpu_memory_utilization!r}")
+    if (
+        not isinstance(args.gpu_memory_utilization, (int, float))
+        or not math.isfinite(args.gpu_memory_utilization)
+        or not 0 < args.gpu_memory_utilization <= 1
+    ):
+        problems.append(f"gpu_memory_utilization must be in (0, 1], got {args.gpu_memory_utilization!r}")
     if not isinstance(args.max_model_len, int) or args.max_model_len < 256:
         problems.append(f"max_model_len must be an integer >= 256, got {args.max_model_len!r}")
     if not isinstance(args.port, int) or not 0 <= args.port <= 65535:
@@ -222,11 +227,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--r2t2-source",
         default=os.environ.get("R2T2_SOURCE", ""),
         help="Path to the pinned Confucius4-R2T2 source checkout providing the 'r2t2' "
-             "package (env: R2T2_SOURCE). Optional when confucius4-r2t2 is pip-installed.",
+        "package (env: R2T2_SOURCE). Optional when confucius4-r2t2 is pip-installed.",
     )
     parser.add_argument("--host", default="127.0.0.1", help="Bind host (default loopback)")
     parser.add_argument(
-        "--port", type=_port, default=int(os.environ.get("CONFUCIUS_PORT", "8321")),
+        "--port",
+        type=_port,
+        default=int(os.environ.get("CONFUCIUS_PORT", "8321")),
         help="Bind port (env: CONFUCIUS_PORT, default 8321)",
     )
     parser.add_argument("--gpu-memory-utilization", type=_gpu_util, default=0.80)
@@ -239,27 +246,35 @@ def build_parser() -> argparse.ArgumentParser:
         "--token-file",
         default=os.environ.get("CONFUCIUS_TOKEN_FILE", ""),
         help="Local auth token file, created 0600 if missing (env: CONFUCIUS_TOKEN_FILE). "
-             "Default: $XDG_CONFIG_HOME/recordian/confucius_server_token.txt "
-             "(or ~/.config/recordian/...) — never inside the project tree.",
+        "Default: $XDG_CONFIG_HOME/recordian/confucius_server_token.txt "
+        "(or ~/.config/recordian/...) — never inside the project tree.",
     )
     parser.add_argument(
-        "--warmup-wav", default="",
+        "--warmup-wav",
+        default="",
         help="Optional public warmup WAV (16 kHz mono). Default: silence warmup.",
     )
     parser.add_argument(
-        "--max-session-seconds", type=_positive_float, default=DEFAULT_MAX_SESSION_SECONDS,
+        "--max-session-seconds",
+        type=_positive_float,
+        default=DEFAULT_MAX_SESSION_SECONDS,
         help="Per-session audio budget in seconds (explicit cap, not unlimited)",
     )
     parser.add_argument(
-        "--max-queued-frames", type=_positive_int, default=DEFAULT_MAX_QUEUED_FRAMES,
+        "--max-queued-frames",
+        type=_positive_int,
+        default=DEFAULT_MAX_QUEUED_FRAMES,
         help="Bounded server-side frame queue; excess closes the session with an error",
     )
     parser.add_argument(
-        "--idle-timeout-s", type=_positive_float, default=DEFAULT_IDLE_TIMEOUT_S,
+        "--idle-timeout-s",
+        type=_positive_float,
+        default=DEFAULT_IDLE_TIMEOUT_S,
         help="Close the session after this many seconds without any client message",
     )
     parser.add_argument(
-        "--ready-file", default="",
+        "--ready-file",
+        default="",
         help="Optional ready marker (pid/host/port only, no token); removed on exit",
     )
     return parser
@@ -272,8 +287,9 @@ class StreamingSession:
     finish_streaming_transcribe) so tests can inject a fake.
     """
 
-    def __init__(self, model, language: str | None, context: str,
-                 max_session_seconds: float = DEFAULT_MAX_SESSION_SECONDS) -> None:
+    def __init__(
+        self, model, language: str | None, context: str, max_session_seconds: float = DEFAULT_MAX_SESSION_SECONDS
+    ) -> None:
         from recordian.native_core import PcmBuffer
 
         self.model = model
@@ -351,7 +367,7 @@ class StreamingSession:
             return
         ids = tokenizer.encode(raw)
         rollback = UNFIX_TOKEN_NUM
-        while rollback > 0 and not tokenizer.decode(ids[:max(0, len(ids) - rollback)]).startswith(anchor):
+        while rollback > 0 and not tokenizer.decode(ids[: max(0, len(ids) - rollback)]).startswith(anchor):
             rollback -= 1
         self.state.unfixed_token_num = rollback
 
@@ -385,7 +401,7 @@ class StreamingSession:
             # A revised emitted prefix emits nothing until the model agrees
             # again; emitted text cannot be retracted, so never abort for it.
             if len(fixed) > len(self.last_fixed) and fixed.startswith(self.last_fixed):
-                delta = fixed[len(self.last_fixed):]
+                delta = fixed[len(self.last_fixed) :]
                 self.last_fixed = fixed
             self._adapt(text)
             out.append((delta, round(cost_ms, 1)))
@@ -419,9 +435,12 @@ class StreamingSession:
         self.model.finish_streaming_transcribe(self.state, self.first_max_new_tokens)
         cost_ms = (time.perf_counter() - start) * 1000
         raw = getattr(self.state, "_raw_decoded", None)
-        if (self.samples_fed and isinstance(raw, str)
-                and getattr(self.state, "force_language", None) is None
-                and "<asr_text>" not in raw):
+        if (
+            self.samples_fed
+            and isinstance(raw, str)
+            and getattr(self.state, "force_language", None) is None
+            and "<asr_text>" not in raw
+        ):
             raise RuntimeError("incomplete automatic-language transcript at end of stream")
         final = (self.state.text or "").split("|")[0]
         # Continue after the last character both versions agree on, so the
@@ -502,10 +521,8 @@ async def _handle_connection(ws, model, token: str, args, busy_lock) -> None:
             return
         language = resolve_language(header)
         context = resolve_context(header)
-        _log(f"requestId={request_id}: connected language={language or 'auto'} "
-             f"context_chars={len(context)}")
-        await ws.send(json.dumps({"status": "connected", "requestId": request_id,
-                                  "msg": "", "active_connections": 1}))
+        _log(f"requestId={request_id}: connected language={language or 'auto'} context_chars={len(context)}")
+        await ws.send(json.dumps({"status": "connected", "requestId": request_id, "msg": "", "active_connections": 1}))
 
         session = StreamingSession(model, language, context, args.max_session_seconds)
         loop = asyncio.get_running_loop()
@@ -537,8 +554,8 @@ async def _handle_connection(ws, model, token: str, args, busy_lock) -> None:
             done_task = asyncio.ensure_future(receiver_done.wait())
             try:
                 done, _ = await asyncio.wait(
-                    {get_task, done_task}, timeout=args.idle_timeout_s,
-                    return_when=asyncio.FIRST_COMPLETED)
+                    {get_task, done_task}, timeout=args.idle_timeout_s, return_when=asyncio.FIRST_COMPLETED
+                )
                 if not done:
                     raise TimeoutError("idle timeout waiting for client audio")
                 if get_task in done:
@@ -556,8 +573,9 @@ async def _handle_connection(ws, model, token: str, args, busy_lock) -> None:
             already closed with an explicit error; caller must return."""
             nonlocal pending_infer
             if len(data) % 2 != 0 or not data:
-                await ws.send(json.dumps({"status": "error",
-                                          "msg": "audio frames must be non-empty PCM16 (even byte count)"}))
+                await ws.send(
+                    json.dumps({"status": "error", "msg": "audio frames must be non-empty PCM16 (even byte count)"})
+                )
                 await ws.close(code=1008, reason="bad PCM16 frame")
                 return False
             if len(data) > MAX_FRAME_BYTES:
@@ -565,9 +583,11 @@ async def _handle_connection(ws, model, token: str, args, busy_lock) -> None:
                 await ws.close(code=1009, reason="audio frame too large")
                 return False
             if session.samples_fed + len(data) // 2 > max_samples:
-                await ws.send(json.dumps({
-                    "status": "error",
-                    "msg": f"session audio budget exceeded ({args.max_session_seconds:.0f}s)"}))
+                await ws.send(
+                    json.dumps(
+                        {"status": "error", "msg": f"session audio budget exceeded ({args.max_session_seconds:.0f}s)"}
+                    )
+                )
                 await ws.close(code=1008, reason="session audio budget exceeded")
                 return False
             session.feed(data)
@@ -579,10 +599,16 @@ async def _handle_connection(ws, model, token: str, args, busy_lock) -> None:
             deltas = await asyncio.shield(pending_infer)
             pending_infer = None
             for delta, cost_ms in deltas:
-                await ws.send(json.dumps({
-                    "status": "success", "requestId": request_id,
-                    "msg": {"text": delta, "reset": False, "asr_cost_ms": cost_ms}},
-                    ensure_ascii=False))
+                await ws.send(
+                    json.dumps(
+                        {
+                            "status": "success",
+                            "requestId": request_id,
+                            "msg": {"text": delta, "reset": False, "asr_cost_ms": cost_ms},
+                        },
+                        ensure_ascii=False,
+                    )
+                )
             return True
 
         receiver = asyncio.create_task(receiver())
@@ -604,15 +630,19 @@ async def _handle_connection(ws, model, token: str, args, busy_lock) -> None:
 
         kind = terminal["kind"]
         if kind == "overflow":
-            await ws.send(json.dumps({
-                "status": "error",
-                "msg": f"server queue full (max {args.max_queued_frames} frames); "
-                       "client is sending faster than realtime"}))
+            await ws.send(
+                json.dumps(
+                    {
+                        "status": "error",
+                        "msg": f"server queue full (max {args.max_queued_frames} frames); "
+                        "client is sending faster than realtime",
+                    }
+                )
+            )
             await ws.close(code=1008, reason="server backpressure")
             return
         if kind == "bad_text":
-            await ws.send(json.dumps({"status": "error",
-                                      "msg": "unexpected text frame"}))
+            await ws.send(json.dumps({"status": "error", "msg": "unexpected text frame"}))
             await ws.close(code=1008, reason="unexpected text frame")
             return
         if kind == "eos":
@@ -620,13 +650,22 @@ async def _handle_connection(ws, model, token: str, args, busy_lock) -> None:
             delta, cost_ms = await asyncio.shield(pending_infer)
             pending_infer = None
             if delta:
-                await ws.send(json.dumps({
-                    "status": "success", "requestId": request_id,
-                    "msg": {"text": delta, "reset": False, "asr_cost_ms": cost_ms}},
-                    ensure_ascii=False))
-            await ws.send(json.dumps({
-                "status": "success", "requestId": request_id,
-                "msg": {"text": "", "reset": True}}, ensure_ascii=False))
+                await ws.send(
+                    json.dumps(
+                        {
+                            "status": "success",
+                            "requestId": request_id,
+                            "msg": {"text": delta, "reset": False, "asr_cost_ms": cost_ms},
+                        },
+                        ensure_ascii=False,
+                    )
+                )
+            await ws.send(
+                json.dumps(
+                    {"status": "success", "requestId": request_id, "msg": {"text": "", "reset": True}},
+                    ensure_ascii=False,
+                )
+            )
             _log(f"requestId={request_id}: EOS finish, samples={session.samples_fed}")
         await ws.close(code=1000)
     except HeaderError as exc:
@@ -638,6 +677,7 @@ async def _handle_connection(ws, model, token: str, args, busy_lock) -> None:
         _log(f"requestId={request_id}: rejected ({exc})")
     except Exception as exc:  # noqa: BLE001 - disconnects/timeouts land here
         import traceback
+
         _log(f"requestId={request_id}: session ended ({type(exc).__name__}): {exc}")
         _log("TRACEBACK:\n" + traceback.format_exc())
         try:
@@ -697,8 +737,7 @@ async def _serve(args, model, token: str) -> None:
             _log(f"READY {args.host}:{bound_port}")
             if ready_file:
                 with open(ready_file, "w", encoding="utf-8") as handle:
-                    json.dump({"pid": os.getpid(), "host": args.host,
-                               "port": bound_port}, handle)
+                    json.dump({"pid": os.getpid(), "host": args.host, "port": bound_port}, handle)
             await stop_event.wait()
     finally:
         if ready_file and os.path.exists(ready_file):
@@ -760,8 +799,7 @@ def _configure_gguf_logging() -> None:
     # llama_context destruction logs back into an already-finalizing Python.
     # atexit runs before module clearing. Capture every dependency so both
     # libraries restore their native logger while Python is still alive.
-    def restore_native_loggers(bindings=tuple(setters), keepalive=_native_log_callback,
-                               null_callback=callback_type()):
+    def restore_native_loggers(bindings=tuple(setters), keepalive=_native_log_callback, null_callback=callback_type()):
         for binding in bindings:
             binding(null_callback, None)
 
@@ -783,8 +821,7 @@ def load_model(args):
         from r2t2_llama import R2T2LlamaASRModel
 
         _configure_gguf_logging()
-        constructor = (R2T2LlamaASRModel.LlamaHybrid if args.backend == "llama-hybrid"
-                       else R2T2LlamaASRModel.LlamaNative)
+        constructor = R2T2LlamaASRModel.LlamaHybrid if args.backend == "llama-hybrid" else R2T2LlamaASRModel.LlamaNative
         return constructor(
             processor_path=args.model_dir,
             gguf_dir=args.gguf_dir,

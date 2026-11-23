@@ -119,7 +119,9 @@ def _main_impl() -> None:
                 "confidence": result.pass1_result.confidence,
                 "text": result.pass1_result.text,
             },
-            "pass2": None if result.pass2_result is None else {
+            "pass2": None
+            if result.pass2_result is None
+            else {
                 "model": result.pass2_result.model_name,
                 "confidence": result.pass2_result.confidence,
                 "text": result.pass2_result.text,

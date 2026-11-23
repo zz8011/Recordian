@@ -11,6 +11,7 @@ composition implementation (see ../../kimi-ime-review.report.md).
   the one-shot fallback) were fixed in the r5 round and are normal passing
   regressions now — their assertions were NOT weakened.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -189,9 +190,7 @@ def test_empty_stream_on_composition_backend_falls_back_to_oneshot(monkeypatch: 
 
     class _EmptyStreamProvider:
         provider_name = "stub"
-        capabilities = SimpleNamespace(
-            supports_hotwords=False, supports_context=False, supports_language_hint=False
-        )
+        capabilities = SimpleNamespace(supports_hotwords=False, supports_context=False, supports_language_hint=False)
         transcribe_file_calls = 0
 
         def supports_file_streaming(self) -> bool:
@@ -292,7 +291,9 @@ def _patch_controller_env(monkeypatch: pytest.MonkeyPatch, committer: object, pr
         )
 
     monkeypatch.setattr("recordian.recording_controller.ensure_ffmpeg_available", lambda: "/usr/bin/ffmpeg")
-    monkeypatch.setattr("recordian.recording_controller.choose_record_backend", lambda requested, ffmpeg_bin: "ffmpeg-pulse")
+    monkeypatch.setattr(
+        "recordian.recording_controller.choose_record_backend", lambda requested, ffmpeg_bin: "ffmpeg-pulse"
+    )
     monkeypatch.setattr("recordian.recording_controller.resolve_committer", lambda backend: committer)
     monkeypatch.setattr("recordian.recording_controller.create_provider", lambda args: provider)
     monkeypatch.setattr("recordian.recording_controller.get_focused_window_id", lambda: None)
@@ -498,6 +499,4 @@ def test_controller_timeout_legacy_backend_keeps_full_audio_fallback(
     assert result["commit"]["committed"] is True
     assert committer.commits == ["全文兜底"]  # exactly one full-audio commit
     assert provider.transcribe_file_calls == 1
-    assert any(
-        "realtime_asr_timeout_fallback" in str(e.get("message", "")) for e in events
-    )
+    assert any("realtime_asr_timeout_fallback" in str(e.get("message", "")) for e in events)

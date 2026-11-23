@@ -1,4 +1,5 @@
 """Real, isolated processes for BackendManager parent/child lifetime rules."""
+
 from __future__ import annotations
 
 import ctypes
@@ -15,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-_DAEMON = r'''
+_DAEMON = r"""
 import fcntl
 import json
 import os
@@ -41,9 +42,9 @@ if mode == "stubborn-child":
 print(json.dumps({"event": "ready", "pid": os.getpid()}), flush=True)
 while True:
     time.sleep(0.05)
-'''
+"""
 
-_PARENT = r'''
+_PARENT = r"""
 import json
 import queue
 import subprocess
@@ -93,7 +94,7 @@ for line in sys.stdin:
         print(json.dumps({"closed": manager.proc.stdout.closed and manager.proc.stderr.closed}), flush=True)
     elif action == "exit":
         break
-'''
+"""
 
 
 def _eventually(check, *, timeout: float = 6.0) -> bool:
@@ -139,7 +140,7 @@ class _Family:
     def _identity(pid: int) -> tuple[int, int, int]:
         # stat is available without CONFIG_CHECKPOINT_RESTORE. Parse after the
         # final ')' because a process comm can itself contain spaces or ')'.
-        fields = Path(f"/proc/{pid}/stat").read_text().rsplit(')', 1)[1].split()
+        fields = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()
         return int(fields[2]), int(fields[3]), int(fields[19])  # PGID, SID, start time
 
     def own(self, pid: int) -> None:
@@ -147,7 +148,7 @@ class _Family:
         # in that isolated group, then signal through pidfds during teardown.
         # Never require the optional /proc/<pid>/task/<pid>/children file.
         self.handles[pid] = os.pidfd_open(pid)
-        for entry in Path('/proc').iterdir():
+        for entry in Path("/proc").iterdir():
             if not entry.name.isdecimal():
                 continue
             candidate = int(entry.name)
@@ -313,6 +314,7 @@ def test_family_restores_subreaper_even_on_errors(tmp_path, monkeypatch, failure
     create = next(fixture)
     try:
         if failure == "cleanup":
+
             class BrokenFamily:
                 def __init__(self, *_):
                     pass
@@ -351,14 +353,14 @@ def test_descendant_discovery_without_optional_proc_children(family, monkeypatch
     original = Path.read_text
 
     def no_checkpoint_children(path, *args, **kwargs):
-        if path.name == 'children':
-            raise FileNotFoundError('CONFIG_CHECKPOINT_RESTORE is unavailable')
+        if path.name == "children":
+            raise FileNotFoundError("CONFIG_CHECKPOINT_RESTORE is unavailable")
         return original(path, *args, **kwargs)
 
-    monkeypatch.setattr(Path, 'read_text', no_checkpoint_children)
+    monkeypatch.setattr(Path, "read_text", no_checkpoint_children)
     instance = family()
     instance.ready()
-    assert len(instance.handles) >= 2, 'owned watchdog must be tracked without optional children file'
+    assert len(instance.handles) >= 2, "owned watchdog must be tracked without optional children file"
     instance.parent.kill()
     instance.parent.wait(timeout=5)
     assert _eventually(lambda: all(instance.dead(child) for child in instance.handles))

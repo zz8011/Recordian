@@ -49,8 +49,8 @@ def verify_model_integrity(model_path: Path) -> bool:
 
     try:
         sha256 = hashlib.sha256()
-        with open(model_path, 'rb') as f:
-            for chunk in iter(lambda: f.read(8192), b''):
+        with open(model_path, "rb") as f:
+            for chunk in iter(lambda: f.read(8192), b""):
                 sha256.update(chunk)
         actual_hash = sha256.hexdigest()
         return actual_hash == expected_hash
@@ -232,10 +232,11 @@ def _normalize_tone_token(token: str) -> str:
     # variants like iǎo/iào are grouped under the same base token.
     import unicodedata
 
-    stripped = "".join(
-        ch for ch in unicodedata.normalize("NFD", normalized)
-        if unicodedata.category(ch) != "Mn"
-    ).strip().lower()
+    stripped = (
+        "".join(ch for ch in unicodedata.normalize("NFD", normalized) if unicodedata.category(ch) != "Mn")
+        .strip()
+        .lower()
+    )
     return stripped or normalized
 
 
@@ -414,8 +415,7 @@ def ensure_keywords_file(
         if _is_outfile_usable(bundled_keywords, require_exact_phrases=True):
             return bundled_keywords
         raise RuntimeError(
-            "关键词转换失败：未找到 sherpa-onnx-cli，且 python API 不可用。"
-            " 请安装 sherpa-onnx 和 pypinyin。"
+            "关键词转换失败：未找到 sherpa-onnx-cli，且 python API 不可用。 请安装 sherpa-onnx 和 pypinyin。"
         )
 
     cmd = [
@@ -436,10 +436,7 @@ def ensure_keywords_file(
         if _is_outfile_usable(bundled_keywords, require_exact_phrases=True):
             return bundled_keywords
         detail = (proc.stderr or proc.stdout or "").strip()
-        raise RuntimeError(
-            "关键词转换失败，请检查 tokens_type 与依赖（ppinyin 需要 pypinyin）。"
-            f" detail={detail}"
-        )
+        raise RuntimeError(f"关键词转换失败，请检查 tokens_type 与依赖（ppinyin 需要 pypinyin）。 detail={detail}")
     out_path.chmod(0o600)
     return out_path
 
@@ -486,10 +483,10 @@ class VoiceWakeService:
     def _sanitize_log_message(self, message: str) -> str:
         """Sanitize log messages to prevent sensitive information leakage."""
         patterns = {
-            r'preview=([^,\s]+)': 'preview=<REDACTED>',
-            r'threshold=(\d+\.\d+)': 'threshold=<REDACTED>',
-            r'/home/[^/\s]+': '/home/<USER>',
-            r'profile_path=([^\s]+)': 'profile_path=<REDACTED>',
+            r"preview=([^,\s]+)": "preview=<REDACTED>",
+            r"threshold=(\d+\.\d+)": "threshold=<REDACTED>",
+            r"/home/[^/\s]+": "/home/<USER>",
+            r"profile_path=([^\s]+)": "profile_path=<REDACTED>",
         }
         sanitized = message
         for pattern, replacement in patterns.items():
@@ -511,9 +508,7 @@ class VoiceWakeService:
         ]
         missing = [str(p) for p in required if not p.exists()]
         if missing:
-            raise FileNotFoundError(
-                "语音唤醒模型文件缺失: " + ", ".join(missing)
-            )
+            raise FileNotFoundError("语音唤醒模型文件缺失: " + ", ".join(missing))
 
         # Verify model integrity for int8 models
         model_files = [Path(self.model.encoder), Path(self.model.decoder), Path(self.model.joiner)]
@@ -708,9 +703,7 @@ class VoiceWakeService:
         self._emit(
             {
                 "message": (
-                    "voice_wake_decode_budget"
-                    f" per_cycle={decode_budget_per_cycle}"
-                    f" per_sec={decode_budget_per_sec:.1f}"
+                    f"voice_wake_decode_budget per_cycle={decode_budget_per_cycle} per_sec={decode_budget_per_sec:.1f}"
                 )
             }
         )

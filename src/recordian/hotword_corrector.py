@@ -42,9 +42,7 @@ _URL_RE = re.compile(r"(?:https?://|www\.)\S+", re.IGNORECASE)
 _EMAIL_RE = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
 _FENCE_RE = re.compile(r"```.*?```", re.DOTALL)
 _BACKTICK_RE = re.compile(r"`[^`\n]+`")
-_CODE_RE = re.compile(
-    r"[A-Za-z_][A-Za-z0-9_]*\([^)\n]*\)|\b[A-Za-z]+_[A-Za-z0-9_]+\b"
-)
+_CODE_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\([^)\n]*\)|\b[A-Za-z]+_[A-Za-z0-9_]+\b")
 _LATIN_NUM_RE = re.compile(r"\d+(?:[.,]\d+)*")
 _CJK_NUM_RE = re.compile(r"[零〇一二两三四五六七八九十百千万亿]{2,}")
 _NEGATION_RE = re.compile(

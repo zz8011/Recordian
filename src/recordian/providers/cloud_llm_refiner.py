@@ -43,7 +43,7 @@ def _filter_thinking(chunks: Iterable[str]) -> Iterator[str]:
                 if not depth and index:
                     yield pending[:index]
                 depth = depth + 1 if tag == tags[0] else max(0, depth - 1)
-                pending = pending[index + len(tag):]
+                pending = pending[index + len(tag) :]
                 continue
             keep = max(
                 (size for tag in tags for size in range(1, len(tag)) if pending.endswith(tag[:size])),
@@ -199,9 +199,7 @@ class CloudLLMRefiner(BaseTextRefiner):
         try:
             import requests
         except ModuleNotFoundError as exc:
-            raise RuntimeError(
-                "requests 未安装。请执行: pip install requests"
-            ) from exc
+            raise RuntimeError("requests 未安装。请执行: pip install requests") from exc
         return requests
 
     def _raise_on_error(self, response) -> None:

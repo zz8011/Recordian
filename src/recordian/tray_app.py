@@ -195,6 +195,7 @@ class TrayApp:
         # 录音中点击 overlay -> 请求后端停止录音
         self.overlay.set_on_recording_click(self._on_overlay_recording_click)
         self._gtk_settings_window: Any = None
+        self._gtk_speaker_window: Any = None
         self._diagnostics_window: tk.Toplevel | None = None
         self._diagnostics_text: tk.Text | None = None
         self._diagnostics_status_var: tk.StringVar | None = None
@@ -229,10 +230,12 @@ class TrayApp:
 
     def _on_backend_state_change(self, running: bool, status: str, detail: str) -> None:
         """线程安全的状态更新回调"""
+
         def _update():
             self.state.backend_running = running
             self.state.status = status
             self.state.detail = detail
+
         self.root.after(0, _update)
 
     def _on_overlay_recording_click(self) -> None:
@@ -263,7 +266,7 @@ class TrayApp:
 
     def _handle_event(self, event: dict[str, object]) -> None:
         et = str(event.get("event", ""))
-        if et == 'agent_task':
+        if et == "agent_task":
             self._show_agent_task(event)
             return
         if et == "ready":
@@ -468,9 +471,7 @@ class TrayApp:
             code = event.get("code")
             alive = self._backend_alive()
             if et == "backend_exited":
-                self._log_runtime(
-                    f"backend_exited code={code} intentional={intentional} superseded={alive}"
-                )
+                self._log_runtime(f"backend_exited code={code} intentional={intentional} superseded={alive}")
             else:
                 # 这个事件只由 BackendManager.stop() 发出，即用户/托盘主动停止
                 self._log_runtime("backend_stopped (explicit)")
@@ -480,12 +481,16 @@ class TrayApp:
             detail = "Stopped"
             self.overlay.set_state("idle", detail)
             self._schedule_off_cue_from_overlay("idle", detail)
-            agent_overlay = getattr(self, 'agent_overlay', None)
-            if not alive and agent_overlay is not None and agent_overlay.current_status == 'running':
-                agent_overlay.show_task({
-                    'id': agent_overlay.task_id, 'status': 'interrupted',
-                    'error': 'Recordian 后端已停止，任务结果不确定；不会自动重发。',
-                }, 'Agent')
+            agent_overlay = getattr(self, "agent_overlay", None)
+            if not alive and agent_overlay is not None and agent_overlay.current_status == "running":
+                agent_overlay.show_task(
+                    {
+                        "id": agent_overlay.task_id,
+                        "status": "interrupted",
+                        "error": "Recordian 后端已停止，任务结果不确定；不会自动重发。",
+                    },
+                    "Agent",
+                )
             if et == "backend_exited" and not intentional and not alive:
                 self._schedule_backend_restart(f"exit_code={code}")
         elif et == "log":
@@ -496,17 +501,17 @@ class TrayApp:
         self._update_tray_menu()
 
     def _show_agent_task(self, event: dict[str, object]) -> None:
-        task = event.get('task')
+        task = event.get("task")
         if not isinstance(task, dict):
             return
-        name = str(event.get('agent_name') or 'Agent')
+        name = str(event.get("agent_name") or "Agent")
         try:
             if self.agent_overlay is None:
                 self.agent_overlay = AgentResponseOverlay(self.root)
             self.agent_overlay.show_task(task, name)
         except Exception as exc:
-            self._log_runtime(f'agent_overlay_unavailable: {exc}')
-            if task.get('event_type') == 'finished':
+            self._log_runtime(f"agent_overlay_unavailable: {exc}")
+            if task.get("event_type") == "finished":
                 from recordian.agent_feedback import feedback_message
 
                 title, body, urgency = feedback_message(task, name)
@@ -664,6 +669,7 @@ class TrayApp:
 
             try:
                 from .linux_notify import notify
+
                 notify(effect_status_message(effect, restarted=restarted), title=f"Recordian: {mode_text}")
             except Exception:
                 pass
@@ -692,6 +698,7 @@ class TrayApp:
 
             try:
                 from .linux_notify import notify
+
                 notify(effect_status_message(effect, restarted=restarted), title=f"Recordian: {mode_text}")
             except Exception:
                 pass
@@ -716,6 +723,7 @@ class TrayApp:
 
             try:
                 from .linux_notify import notify
+
                 notify(effect_status_message(effect, restarted=restarted), title=f"Recordian: {mode_text}")
             except Exception:
                 pass
@@ -739,6 +747,7 @@ class TrayApp:
 
             try:
                 from .linux_notify import notify
+
                 notify(effect_status_message(effect, restarted=restarted), title=f"Recordian: {mode_text}")
             except Exception:
                 pass
@@ -778,13 +787,9 @@ class TrayApp:
             config = self._get_cached_config()
             db_raw = str(config.get("auto_lexicon_db", DEFAULT_AUTO_LEXICON_DB_PATH)).strip()
             learned = confirm_text_in_lexicon(Path(db_raw).expanduser(), text)
-            self.events.put(
-                {"event": "log", "message": f"已确认上次文字并记入词库（{learned} 个词条）"}
-            )
+            self.events.put({"event": "log", "message": f"已确认上次文字并记入词库（{learned} 个词条）"})
         except Exception as exc:  # noqa: BLE001
-            self.events.put(
-                {"event": "log", "message": f"记入词库失败: {type(exc).__name__}"}
-            )
+            self.events.put({"event": "log", "message": f"记入词库失败: {type(exc).__name__}"})
 
         # 标金标：同一次确认也等于用户担保「上屏文本就是我说的原话」，
         # 把评测集里对应的样本翻成 gold。与上面的词库结果完全独立：
@@ -793,9 +798,7 @@ class TrayApp:
             from recordian.eval_capture import resolve_eval_capture_dir
 
             config = self._get_cached_config()
-            capture_dir = resolve_eval_capture_dir(
-                config.get("capture_eval_samples_path", "")
-            )
+            capture_dir = resolve_eval_capture_dir(config.get("capture_eval_samples_path", ""))
             outcome = mark_last_text_gold(capture_dir, text)
             gold_messages = {
                 "marked": "已将上次文字对应的评测样本标为金标",
@@ -809,9 +812,7 @@ class TrayApp:
                 }
             )
         except Exception as exc:  # noqa: BLE001
-            self.events.put(
-                {"event": "log", "message": f"标金标失败: {type(exc).__name__}"}
-            )
+            self.events.put({"event": "log", "message": f"标金标失败: {type(exc).__name__}"})
 
     def switch_preset(self, preset_name: str) -> None:
         """切换文字优化 preset"""
@@ -987,20 +988,21 @@ class TrayApp:
     def _start_tray(self) -> None:
         try:
             import gi
+
             try:
-                gi.require_version('AyatanaAppIndicator3', '0.1')
+                gi.require_version("AyatanaAppIndicator3", "0.1")
                 from gi.repository import AyatanaAppIndicator3 as AppIndicator3
             except (ImportError, ValueError):
-                gi.require_version('AppIndicator3', '0.1')
+                gi.require_version("AppIndicator3", "0.1")
                 from gi.repository import AppIndicator3
-            gi.require_version('Gtk', '3.0')
+            gi.require_version("Gtk", "3.0")
             from gi.repository import Gtk
+
             self._indicator_module = AppIndicator3
             self._start_appindicator(AppIndicator3, Gtk)
         except (ImportError, ValueError) as e:
             raise RuntimeError(
-                f"AppIndicator3 not available: {e}\n"
-                "Install the GTK3 AppIndicator or Ayatana AppIndicator bindings."
+                f"AppIndicator3 not available: {e}\nInstall the GTK3 AppIndicator or Ayatana AppIndicator bindings."
             ) from e
 
     def _start_appindicator(self, AppIndicator3, Gtk) -> None:
@@ -1008,6 +1010,7 @@ class TrayApp:
         print("Using AppIndicator3 for tray icon", file=sys.stderr)
 
         from gi.repository import GLib
+
         self._gtk = Gtk
         self._glib = GLib
 
@@ -1023,9 +1026,7 @@ class TrayApp:
             icon_path = "audio-input-microphone"
 
         self.indicator = AppIndicator3.Indicator.new(
-            "recordian",
-            icon_path,
-            AppIndicator3.IndicatorCategory.APPLICATION_STATUS
+            "recordian", icon_path, AppIndicator3.IndicatorCategory.APPLICATION_STATUS
         )
         assert self.indicator is not None
         self.indicator.set_status(AppIndicator3.IndicatorStatus.ACTIVE)
@@ -1062,7 +1063,8 @@ class TrayApp:
         if self.agent_overlay is not None:
             self.agent_overlay.close()
 
-        if hasattr(self, '_glib'):
+        if hasattr(self, "_glib"):
+
             def _gtk_cleanup():
                 if self._gtk_settings_window is not None:
                     try:
@@ -1071,12 +1073,12 @@ class TrayApp:
                         pass
                     self._gtk_settings_window = None
 
-                if hasattr(self, 'indicator') and self.indicator is not None:
+                if hasattr(self, "indicator") and self.indicator is not None:
                     try:
                         self.indicator.set_status(self._indicator_module.IndicatorStatus.PASSIVE)
                     except Exception:
                         pass
-                    if hasattr(self, '_gtk'):
+                    if hasattr(self, "_gtk"):
                         try:
                             self._gtk.main_quit()
                         except Exception:
@@ -1099,6 +1101,7 @@ def handle_exception(exc_type, exc_value, exc_traceback):
 
     logger.error("Uncaught exception", exc_info=(exc_type, exc_value, exc_traceback))
     from recordian.error_tracker import get_error_tracker
+
     tracker = get_error_tracker()
     if tracker:
         tracker.capture_exception(exc_value)
@@ -1137,6 +1140,7 @@ def main() -> None:
         logger.error(f"Fatal error in main: {e}", exc_info=True)
         print(f"{LOG_PREFIX} Fatal error in main: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
         from recordian.error_tracker import get_error_tracker
+
         tracker = get_error_tracker()
         if tracker:
             tracker.capture_exception(e)

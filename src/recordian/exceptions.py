@@ -2,6 +2,7 @@
 
 定义了项目中使用的所有自定义异常类型，提供更精确的错误处理和上下文信息。
 """
+
 from __future__ import annotations
 
 
@@ -10,6 +11,7 @@ class RecordianError(Exception):
 
     所有 Recordian 自定义异常的基类。
     """
+
     pass
 
 
@@ -21,6 +23,7 @@ class ASRError(RecordianError):
     - 音频格式错误
     - ASR 服务不可用
     """
+
     pass
 
 
@@ -32,6 +35,7 @@ class RefinerError(RecordianError):
     - API 调用超时
     - 精炼结果格式错误
     """
+
     pass
 
 
@@ -43,6 +47,7 @@ class CommitError(RecordianError):
     - 键盘模拟失败
     - X11/Wayland 操作失败
     """
+
     pass
 
 
@@ -54,6 +59,7 @@ class ConfigError(RecordianError):
     - 必需配置项缺失
     - 配置值无效
     """
+
     pass
 
 
@@ -65,6 +71,7 @@ class BackendError(RecordianError):
     - 后端进程异常退出
     - 后端通信失败
     """
+
     pass
 
 
@@ -76,6 +83,7 @@ class AudioError(RecordianError):
     - 音频格式转换失败
     - 音频文件读写失败
     """
+
     pass
 
 
@@ -87,6 +95,7 @@ class TimeoutError(RecordianError):
     - 精炼器超时
     - 后端响应超时
     """
+
     pass
 
 
@@ -98,4 +107,5 @@ class ResourceError(RecordianError):
     - 磁盘空间不足
     - 内存不足
     """
+
     pass

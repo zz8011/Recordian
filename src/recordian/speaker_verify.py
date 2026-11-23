@@ -72,8 +72,9 @@ def _apply_preemphasis(frame, coeff: float = 0.97):
     return np.clip(emphasized, -2.0, 2.0)
 
 
-def _assess_sample_quality(samples: Any, sample_rate: int, *, min_rms: float = 0.005,
-                           min_voiced_ratio: float = 0.3) -> dict[str, float]:
+def _assess_sample_quality(
+    samples: Any, sample_rate: int, *, min_rms: float = 0.005, min_voiced_ratio: float = 0.3
+) -> dict[str, float]:
     """Assess audio sample quality for speaker enrollment.
 
     Args:
@@ -317,6 +318,7 @@ def save_speaker_profile(path: Path, profile: SpeakerProfile) -> None:
     # Set umask to ensure file is created with secure permissions (0o600)
     # This prevents TOCTOU vulnerability between file creation and chmod
     import os
+
     old_umask = os.umask(0o077)  # Ensure only owner can read/write
     try:
         path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -326,6 +328,7 @@ def save_speaker_profile(path: Path, profile: SpeakerProfile) -> None:
         except (OSError, NotImplementedError) as e:
             # Windows doesn't support Unix permissions, log warning but don't fail
             import logging
+
             logging.warning(f"Could not set secure permissions on {path}: {e}")
     finally:
         os.umask(old_umask)  # Restore original umask
@@ -450,8 +453,9 @@ def enroll_speaker_profile_from_multiple_wavs(
             samples, sample_rate = _load_wav_any_f32(sample_path)
 
             # Assess quality
-            quality = _assess_sample_quality(samples, sample_rate, min_rms=min_quality_rms,
-                                            min_voiced_ratio=min_quality_voiced_ratio)
+            quality = _assess_sample_quality(
+                samples, sample_rate, min_rms=min_quality_rms, min_voiced_ratio=min_quality_voiced_ratio
+            )
             if not quality["is_acceptable"]:
                 rejected_samples.append(
                     {
@@ -515,13 +519,12 @@ def add_speaker_sample(
 
     # Load and assess new sample
     samples, sample_rate = _load_wav_any_f32(sample_path)
-    quality = _assess_sample_quality(samples, sample_rate, min_rms=min_quality_rms,
-                                    min_voiced_ratio=min_quality_voiced_ratio)
+    quality = _assess_sample_quality(
+        samples, sample_rate, min_rms=min_quality_rms, min_voiced_ratio=min_quality_voiced_ratio
+    )
 
     if not quality["is_acceptable"]:
-        raise ValueError(
-            f"sample_quality_too_low (rms={quality['rms']:.4f}, voiced={quality['voiced_ratio']:.2f})"
-        )
+        raise ValueError(f"sample_quality_too_low (rms={quality['rms']:.4f}, voiced={quality['voiced_ratio']:.2f})")
 
     # Extract embedding
     embedding = extract_speaker_embedding(samples, sample_rate=sample_rate, target_rate=profile.sample_rate)
@@ -542,4 +545,3 @@ def add_speaker_sample(
 
     save_speaker_profile(profile_path, updated_profile)
     return updated_profile
-

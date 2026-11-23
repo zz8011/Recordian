@@ -6,6 +6,7 @@ Provides helper functions for:
 - Normalizing final transcription text (stutter/repeat removal, spoken
   number/URL formatting, trimming).
 """
+
 from __future__ import annotations
 
 _CJK_NUMERIC_CHARS = frozenset("零〇一二两三四五六七八九十百千万亿")
@@ -55,7 +56,7 @@ def _stable_prefix_delta(
         return committed, ""
     stable = current[:prefix_len]
     if stable.startswith(committed):
-        return stable, stable[len(committed):]
+        return stable, stable[len(committed) :]
     return committed, ""
 
 

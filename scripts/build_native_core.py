@@ -4,6 +4,7 @@
 Uses only Python's standard library. Call during packaging/deployment, never from
 the application or an audio callback. Failed builds/ABI checks leave the old library.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -47,7 +48,9 @@ if version() != int(sys.argv[2]):
 """
     result = subprocess.run(
         [sys.executable, "-I", "-c", probe, str(path.resolve()), str(ABI_VERSION)],
-        capture_output=True, text=True, timeout=15,
+        capture_output=True,
+        text=True,
+        timeout=15,
     )
     if result.returncode:
         raise RuntimeError("native library cannot load or does not expose ABI1; old library retained")
@@ -60,17 +63,40 @@ def build(output_dir: Path | None = None) -> Path:
     manifest = str(CRATE / "Cargo.toml")
     # Cargo's structured artifact output also honors CARGO_TARGET_DIR; do not
     # guess a target/release path or accidentally install a stale shared library.
-    package_info = json.loads(subprocess.check_output(
-        ["cargo", "metadata", "--manifest-path", manifest, "--offline", "--locked", "--no-deps", "--format-version=1"],
-        cwd=ROOT, text=True,
-    ))
+    package_info = json.loads(
+        subprocess.check_output(
+            [
+                "cargo",
+                "metadata",
+                "--manifest-path",
+                manifest,
+                "--offline",
+                "--locked",
+                "--no-deps",
+                "--format-version=1",
+            ],
+            cwd=ROOT,
+            text=True,
+        )
+    )
     package = next(p for p in package_info["packages"] if p["name"] == "recordian-core")
     if package["dependencies"]:
         raise RuntimeError("recordian-core must have no Rust dependencies")
     result = subprocess.run(
-        ["cargo", "build", "--manifest-path", manifest, "--offline", "--locked", "--release",
-         "--message-format=json-render-diagnostics"],
-        cwd=ROOT, stdout=subprocess.PIPE, text=True, check=True,
+        [
+            "cargo",
+            "build",
+            "--manifest-path",
+            manifest,
+            "--offline",
+            "--locked",
+            "--release",
+            "--message-format=json-render-diagnostics",
+        ],
+        cwd=ROOT,
+        stdout=subprocess.PIPE,
+        text=True,
+        check=True,
     )
     artifacts: dict[str, Path] = {}
     for line in result.stdout.splitlines():

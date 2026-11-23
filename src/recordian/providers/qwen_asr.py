@@ -6,6 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
+import numpy.typing as npt
 
 from ..models import ASRResult
 from .asr_context import ASRContextComposer
@@ -36,9 +37,7 @@ def _resolve_silero_vad_model() -> Path | None:
     return candidate if candidate.is_file() else None
 
 
-def _silero_speech_bounds(
-    samples: np.ndarray, sample_rate: int, model_path: Path
-) -> tuple[int, int] | None:
+def _silero_speech_bounds(samples: np.ndarray, sample_rate: int, model_path: Path) -> tuple[int, int] | None:
     """Speech (start, end) sample bounds via sherpa-onnx Silero VAD.
 
     Returns None when the runtime/model cannot run or no speech is
@@ -136,9 +135,7 @@ class QwenASRProvider(ASRProvider):
             import torch
             from qwen_asr import Qwen3ASRModel
         except ModuleNotFoundError as exc:
-            raise RuntimeError(
-                "qwen-asr 未安装。请执行: pip install -e '.[qwen-asr]'"
-            ) from exc
+            raise RuntimeError("qwen-asr 未安装。请执行: pip install -e '.[qwen-asr]'") from exc
 
         dtype_map = {
             "bfloat16": torch.bfloat16,
@@ -273,6 +270,7 @@ class QwenASRProvider(ASRProvider):
             # 清理 VAD 临时文件
             if vad_temp_file is not None:
                 import os
+
                 try:
                     os.unlink(vad_temp_file)
                 except OSError:
@@ -306,7 +304,7 @@ class _QwenRealtimeSession:
     def __init__(self, provider: QwenASRProvider, hotwords: list[str]) -> None:
         self._provider = provider
         self._hotwords = list(hotwords)
-        self._pcm = np.zeros((0,), dtype=np.float32)
+        self._pcm: npt.NDArray[np.float32] = np.zeros((0,), dtype=np.float32)
         self._last_text = ""
         self._last_infer_samples = 0
         self._started_at = time.perf_counter()

@@ -1,4 +1,5 @@
 """Recording state enum for Recordian dictation."""
+
 from __future__ import annotations
 
 import enum

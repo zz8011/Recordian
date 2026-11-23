@@ -28,7 +28,9 @@ def _join_stop_threads() -> None:
 
 
 class _Session:
-    def __init__(self, keyboard: object, captured: dict[str, object], calls: dict[str, int], controller: object, restore: object) -> None:
+    def __init__(
+        self, keyboard: object, captured: dict[str, object], calls: dict[str, int], controller: object, restore: object
+    ) -> None:
         self.keyboard = keyboard
         self.captured = captured
         self.calls = calls
@@ -193,7 +195,9 @@ def _call(captured: dict[str, object], name: str) -> None:
     fn()
 
 
-def test_ptt_right_alt_press_release_twice_starts_once_and_stops_once(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_ptt_right_alt_press_release_twice_starts_once_and_stops_once(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     session = _drive(
         monkeypatch,
         tmp_path,
@@ -262,7 +266,9 @@ def test_ptt_right_ctrl_stop_does_not_start(monkeypatch: pytest.MonkeyPatch, tmp
         session.close()
 
 
-def test_duration_processing_rejects_until_complete_then_fresh_press_starts(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_duration_processing_rejects_until_complete_then_fresh_press_starts(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     session = _drive(
         monkeypatch,
         tmp_path,
@@ -281,7 +287,9 @@ def test_duration_processing_rejects_until_complete_then_fresh_press_starts(monk
         session.close()
 
 
-def test_held_key_does_not_restart_until_fresh_press_after_complete(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_held_key_does_not_restart_until_fresh_press_after_complete(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     session = _drive(
         monkeypatch,
         tmp_path,
@@ -432,21 +440,15 @@ def _continuous_controller(monkeypatch: pytest.MonkeyPatch, worker: _RealtimeASR
     monkeypatch.setattr(
         "recordian.recording_controller.choose_record_backend", lambda requested, ffmpeg_bin: "ffmpeg-pulse"
     )
-    monkeypatch.setattr(
-        "recordian.recording_controller.resolve_committer", lambda backend: _CtlFakeCommitter()
-    )
-    monkeypatch.setattr(
-        "recordian.recording_controller.create_provider", lambda args: _CtlConfuciusProvider()
-    )
+    monkeypatch.setattr("recordian.recording_controller.resolve_committer", lambda backend: _CtlFakeCommitter())
+    monkeypatch.setattr("recordian.recording_controller.create_provider", lambda args: _CtlConfuciusProvider())
     monkeypatch.setattr("recordian.recording_controller.get_focused_window_id", lambda: None)
     monkeypatch.setattr("recordian.recording_controller.start_record_process", _fake_start_record_process)
     monkeypatch.setattr("recordian.recording_controller.stop_record_process", lambda *a, **k: None)
     monkeypatch.setattr(
         "recordian.recording_controller.start_wake_session_monitor", lambda context: types.SimpleNamespace()
     )
-    monkeypatch.setattr(
-        "recordian.recording_controller._start_realtime_asr_worker", lambda **kwargs: worker
-    )
+    monkeypatch.setattr("recordian.recording_controller._start_realtime_asr_worker", lambda **kwargs: worker)
 
     def _fake_pipeline(context) -> None:  # noqa: ANN001
         contexts.append(context)
@@ -480,9 +482,7 @@ def _continuous_controller(monkeypatch: pytest.MonkeyPatch, worker: _RealtimeASR
         on_busy=events.append,
         on_state=events.append,
     )
-    return types.SimpleNamespace(
-        start=start, stop=stop, events=events, contexts=contexts, pipeline_done=pipeline_done
-    )
+    return types.SimpleNamespace(start=start, stop=stop, events=events, contexts=contexts, pipeline_done=pipeline_done)
 
 
 def _finished_worker(*, segments: int, outcome: str) -> _RealtimeASRWorkerHandle:
@@ -512,8 +512,7 @@ def test_committed_prefix_failure_emits_visible_error(monkeypatch: pytest.Monkey
 
     errors = [e for e in h.events if e.get("event") == "error"]
     assert any("continuous_partial_failure" in str(e.get("error", "")) for e in errors), (
-        "a failed continuous turn with a committed prefix must surface a visible "
-        "error, not masquerade as success"
+        "a failed continuous turn with a committed prefix must surface a visible error, not masquerade as success"
     )
     # The pipeline still got the preserved-prefix commit_info (no fallback).
     assert h.contexts[0].prefetched_commit_info["committed"] is True
@@ -561,24 +560,24 @@ def test_wake_listening_tracks_recording_and_processing(monkeypatch: pytest.Monk
             self.kwargs = kwargs
 
         def start(self):
-            can_listen = self.kwargs['can_listen']
-            on_event = self.kwargs['on_event']
+            can_listen = self.kwargs["can_listen"]
+            on_event = self.kwargs["on_event"]
             assert can_listen()
-            self.kwargs['on_wake']('嗨小二')
+            self.kwargs["on_wake"]("嗨小二")
             assert not can_listen()
-            on_event({'event': 'processing_started'})
+            on_event({"event": "processing_started"})
             assert not can_listen()
-            on_event({'event': 'result', 'result': {'text': ''}})
+            on_event({"event": "result", "result": {"text": ""}})
             assert can_listen()
             checked.append(True)
 
         def stop(self):
-            assert not self.kwargs['can_listen']()  # daemon stop event wins over idle
+            assert not self.kwargs["can_listen"]()  # daemon stop event wins over idle
 
-    monkeypatch.setattr('recordian.voice_wake.VoiceWakeService', FakeWake)
-    session = _drive(monkeypatch, tmp_path, ['--trigger-mode', 'ptt', '--enable-voice-wake'])
+    monkeypatch.setattr("recordian.voice_wake.VoiceWakeService", FakeWake)
+    session = _drive(monkeypatch, tmp_path, ["--trigger-mode", "ptt", "--enable-voice-wake"])
     try:
         assert checked == [True]
-        assert session.calls['accepted'] == 1
+        assert session.calls["accepted"] == 1
     finally:
         session.close()

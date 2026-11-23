@@ -18,11 +18,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 import time
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
-import sys
 
 try:
     import numpy as np
@@ -42,6 +42,7 @@ except ImportError:
 @dataclass
 class BenchmarkResult:
     """Results from a benchmark run"""
+
     model_type: str  # "fp32" or "int8"
     num_iterations: int
     total_time_s: float
@@ -137,7 +138,7 @@ def benchmark_model(
         return _simulate_benchmark(model_type, num_iterations)
 
     # Initialize model
-    print(f"\nInitializing model...")
+    print("\nInitializing model...")
     try:
         spotter = sherpa_onnx.KeywordSpotter(
             tokens=str(model_dir / "tokens.txt"),
@@ -217,7 +218,7 @@ def benchmark_model(
         throughput_fps=num_iterations / total_time,
     )
 
-    print(f"\n✓ Benchmark complete")
+    print("\n✓ Benchmark complete")
     return result
 
 
@@ -275,7 +276,7 @@ def print_result(result: BenchmarkResult):
     print(f"BENCHMARK RESULTS: {result.model_type.upper()}")
     print(f"{'=' * 70}")
 
-    print(f"\nLatency:")
+    print("\nLatency:")
     print(f"  Average:  {result.avg_latency_ms:6.2f} ms")
     print(f"  P50:      {result.p50_latency_ms:6.2f} ms")
     print(f"  P95:      {result.p95_latency_ms:6.2f} ms")
@@ -283,16 +284,16 @@ def print_result(result: BenchmarkResult):
     print(f"  Min:      {result.min_latency_ms:6.2f} ms")
     print(f"  Max:      {result.max_latency_ms:6.2f} ms")
 
-    print(f"\nCPU Usage:")
+    print("\nCPU Usage:")
     print(f"  Average:  {result.avg_cpu_percent:6.1f} %")
     print(f"  P95:      {result.p95_cpu_percent:6.1f} %")
     print(f"  Max:      {result.max_cpu_percent:6.1f} %")
 
-    print(f"\nThroughput:")
+    print("\nThroughput:")
     print(f"  FPS:      {result.throughput_fps:6.2f} frames/sec")
     print(f"  Total:    {result.total_time_s:6.2f} seconds")
 
-    print(f"\nMemory:")
+    print("\nMemory:")
     print(f"  Usage:    {result.memory_mb:6.2f} MB")
 
 
@@ -304,28 +305,28 @@ def compare_results(fp32: BenchmarkResult, int8: BenchmarkResult):
 
     # Latency comparison
     latency_speedup = fp32.avg_latency_ms / int8.avg_latency_ms
-    print(f"\nLatency:")
+    print("\nLatency:")
     print(f"  FP32:     {fp32.avg_latency_ms:6.2f} ms")
     print(f"  INT8:     {int8.avg_latency_ms:6.2f} ms")
     print(f"  Speedup:  {latency_speedup:6.2f}x faster")
 
     # CPU comparison
     cpu_reduction = (1 - int8.avg_cpu_percent / fp32.avg_cpu_percent) * 100
-    print(f"\nCPU Usage:")
+    print("\nCPU Usage:")
     print(f"  FP32:     {fp32.avg_cpu_percent:6.1f} %")
     print(f"  INT8:     {int8.avg_cpu_percent:6.1f} %")
     print(f"  Reduction: {cpu_reduction:6.1f} %")
 
     # Memory comparison
     memory_reduction = (1 - int8.memory_mb / fp32.memory_mb) * 100
-    print(f"\nMemory:")
+    print("\nMemory:")
     print(f"  FP32:     {fp32.memory_mb:6.2f} MB")
     print(f"  INT8:     {int8.memory_mb:6.2f} MB")
     print(f"  Reduction: {memory_reduction:6.1f} %")
 
     # Throughput comparison
     throughput_improvement = (int8.throughput_fps / fp32.throughput_fps - 1) * 100
-    print(f"\nThroughput:")
+    print("\nThroughput:")
     print(f"  FP32:     {fp32.throughput_fps:6.2f} fps")
     print(f"  INT8:     {int8.throughput_fps:6.2f} fps")
     print(f"  Improvement: {throughput_improvement:6.1f} %")
@@ -354,7 +355,7 @@ def compare_results(fp32: BenchmarkResult, int8: BenchmarkResult):
         print("❌ POOR: Minimal CPU reduction")
 
     # Target check
-    print(f"\nTarget Check (CPU < 100%):")
+    print("\nTarget Check (CPU < 100%):")
     if int8.avg_cpu_percent < 100:
         print(f"✅ PASS: {int8.avg_cpu_percent:.1f}% < 100%")
     else:
@@ -378,9 +379,7 @@ def save_results(results: list[BenchmarkResult], output_file: Path):
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Benchmark voice wake models (FP32 vs INT8)"
-    )
+    parser = argparse.ArgumentParser(description="Benchmark voice wake models (FP32 vs INT8)")
     parser.add_argument(
         "--model-dir",
         type=Path,

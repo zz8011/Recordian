@@ -224,6 +224,7 @@ python benchmark_models.py
 from pathlib import Path
 import numpy as np
 
+
 def test_model_accuracy():
     """Compare FP32 vs INT8 detection accuracy"""
 
@@ -262,10 +263,7 @@ def test_model_accuracy():
         print(f"{match} {phrase:20s} FP32={fp32_detected} INT8={int8_detected}")
 
     # Calculate accuracy
-    matches = sum(
-        1 for phrase in test_phrases
-        if fp32_results.get(phrase) == int8_results.get(phrase)
-    )
+    matches = sum(1 for phrase in test_phrases if fp32_results.get(phrase) == int8_results.get(phrase))
     accuracy = matches / len(test_phrases) * 100
     print(f"\nAccuracy: {accuracy:.1f}% ({matches}/{len(test_phrases)} matches)")
 
@@ -274,11 +272,13 @@ def test_model_accuracy():
     else:
         print("⚠️  WARN: Accuracy loss detected, consider static quantization")
 
+
 def run_detection(encoder, decoder, joiner, test_phrases):
     """Run detection with given models"""
     # Implement actual detection logic here
     # This is a placeholder
     return {phrase: True for phrase in test_phrases}
+
 
 if __name__ == "__main__":
     test_model_accuracy()
@@ -293,6 +293,7 @@ if __name__ == "__main__":
 import time
 from pathlib import Path
 import numpy as np
+
 
 def benchmark_model(encoder, decoder, joiner, num_iterations=100):
     """Benchmark model inference time"""
@@ -326,6 +327,7 @@ def benchmark_model(encoder, decoder, joiner, num_iterations=100):
         "max": max(latencies),
     }
 
+
 def main():
     print("Performance Benchmark: FP32 vs INT8")
     print("=" * 70)
@@ -355,7 +357,7 @@ def main():
     print(f"  P95: {int8_stats['p95']:.2f}ms")
 
     # Calculate speedup
-    speedup = fp32_stats['avg'] / int8_stats['avg']
+    speedup = fp32_stats["avg"] / int8_stats["avg"]
     print("\n3. Speedup")
     print("-" * 70)
     print(f"  Average: {speedup:.2f}x faster")
@@ -368,6 +370,7 @@ def main():
         print("\n✅ GOOD: 1.5x+ speedup achieved")
     else:
         print("\n⚠️  WARN: Speedup less than expected")
+
 
 if __name__ == "__main__":
     main()
@@ -394,6 +397,7 @@ Use static quantization if:
 from pathlib import Path
 import numpy as np
 import wave
+
 
 def collect_calibration_samples(
     audio_dir: Path,
@@ -423,6 +427,7 @@ def collect_calibration_samples(
     np.savez_compressed(output_file, samples=samples)
     print(f"\nSaved {len(samples)} samples to {output_file}")
 
+
 if __name__ == "__main__":
     collect_calibration_samples(
         audio_dir=Path("data/calibration_audio"),
@@ -440,6 +445,7 @@ if __name__ == "__main__":
 from pathlib import Path
 import numpy as np
 from onnxruntime.quantization import quantize_static, CalibrationDataReader, QuantType
+
 
 class AudioCalibrationReader(CalibrationDataReader):
     """Calibration data reader for audio samples"""
@@ -459,6 +465,7 @@ class AudioCalibrationReader(CalibrationDataReader):
 
         # Return as dict with input name
         return {"audio": sample.reshape(1, -1)}
+
 
 def quantize_static_model(
     fp32_path: Path,
@@ -482,6 +489,7 @@ def quantize_static_model(
     )
 
     print(f"  Saved: {int8_path}")
+
 
 if __name__ == "__main__":
     quantize_static_model(

@@ -169,10 +169,10 @@ class PcmBuffer:
             if samples < 0 or samples > len(self) // 2:
                 raise ValueError("insufficient PCM samples")
             if self._library is not None:
-                result = np.empty(samples, dtype=np.float32)
-                if self._library.recordian_pcm_buffer_pop(self._handle, result.ctypes.data, samples):
+                native = np.empty(samples, dtype=np.float32)
+                if self._library.recordian_pcm_buffer_pop(self._handle, native.ctypes.data, samples):
                     raise ValueError("native PCM buffer rejected read")
-                return result
+                return native
             size = samples * 2
             result = np.frombuffer(bytes(self._python[:size]), dtype="<i2").astype(np.float32) / 32768.0
             del self._python[:size]

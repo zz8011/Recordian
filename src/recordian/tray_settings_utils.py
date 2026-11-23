@@ -156,12 +156,15 @@ def validate_settings_dict(raw: dict[str, Any], *, defaults: dict[str, Any]) -> 
     current["wake_owner_threshold"] = _float_clamp("wake_owner_threshold", 0.72, min_val=0.0, max_val=0.99)
     current["wake_owner_window_s"] = _float_clamp("wake_owner_window_s", 1.6, min_val=0.6)
     current["wake_owner_silence_extend_s"] = _float_clamp("wake_owner_silence_extend_s", 0.5, min_val=0.0)
-    current["wake_keyword_threshold"] = _float_clamp("wake_keyword_threshold", DEFAULT_WAKE_KEYWORD_THRESHOLD, min_val=0.0)
+    current["wake_keyword_threshold"] = _float_clamp(
+        "wake_keyword_threshold", DEFAULT_WAKE_KEYWORD_THRESHOLD, min_val=0.0
+    )
 
     # --- str fields (strip with fallback) ----------------------------------
-    current["wake_owner_profile"] = str(
-        current.get("wake_owner_profile", "~/.config/recordian/owner_voice_profile.json")
-    ).strip() or "~/.config/recordian/owner_voice_profile.json"
+    current["wake_owner_profile"] = (
+        str(current.get("wake_owner_profile", "~/.config/recordian/owner_voice_profile.json")).strip()
+        or "~/.config/recordian/owner_voice_profile.json"
+    )
     current["wake_owner_sample"] = str(current.get("wake_owner_sample", "")).strip()
 
     # --- list fields (comma-separated strings) -----------------------------
