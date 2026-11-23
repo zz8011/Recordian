@@ -1,4 +1,5 @@
 """sentry-sdk 3.x 真实 API 回归：init 不抛 TypeError，带 context 的上报不走已移除的 push_scope。"""
+
 import pytest
 
 sentry_sdk = pytest.importorskip("sentry_sdk")
