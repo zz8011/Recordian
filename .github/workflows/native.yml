@@ -38,9 +38,12 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
-      # 这些包已随 ubuntu-24.04 镜像预装；缺失时让步骤直接失败，而不是每次 run 去访问不稳定的 apt 镜像
-      - name: Verify system GIO and isolated D-Bus fixture dependencies are preinstalled
-        run: dpkg -s pkg-config dbus python3-gi gir1.2-glib-2.0 > /dev/null
+      # libglib2.0-dev 提供 Rust cdylib 链接所需的 -lgio-2.0/-lglib-2.0/-lgobject-2.0，不在镜像预装集内
+      - name: Install system GIO and isolated D-Bus fixture dependencies
+        run: |
+          sudo apt-get update -qq -o Acquire::Retries=3 -o Acquire::http::Timeout=20
+          sudo apt-get install -y -qq --no-install-recommends -o Acquire::Retries=3 -o Acquire::http::Timeout=20 \
+            libglib2.0-dev pkg-config dbus python3-gi gir1.2-glib-2.0
       - name: Install Python regression and packaging dependencies
         run: python -m pip install -e '.[dev]' build wheel
       # 静态 ffmpeg（PyPI 随包分发）代替 apt 的 ~100 个依赖包：apt 镜像下载会卡住，且 dpkg 解包要 30s+
