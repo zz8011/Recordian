@@ -1,0 +1,37 @@
+name: apt-install
+description: Install apt packages, caching the downloaded .deb files per runner image so a hit needs no mirror access.
+inputs:
+  packages:
+    description: Space-separated apt package names
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Compute cache key
+      id: key
+      shell: bash
+      env:
+        PACKAGES: ${{ inputs.packages }}
+      run: |
+        echo "key=apt-$(lsb_release -rs)-${ImageVersion:-unknown}-$(echo "$PACKAGES" | sha256sum | cut -c1-16)" >> "$GITHUB_OUTPUT"
+    - name: Restore cached .deb files
+      id: cache
+      uses: actions/cache@v4
+      with:
+        path: ~/apt-debs/*.deb
+        key: ${{ steps.key.outputs.key }}
+    - name: Install from cached .deb files
+      if: steps.cache.outputs.cache-hit == 'true'
+      shell: bash
+      run: sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends ~/apt-debs/*.deb
+    - name: Download and install from the mirror
+      if: steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      env:
+        PACKAGES: ${{ inputs.packages }}
+      run: |
+        mkdir -p ~/apt-debs
+        opts=(-o Acquire::Retries=3 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 -o "Dir::Cache::archives=$HOME/apt-debs")
+        sudo apt-get "${opts[@]}" update -qq
+        # shellcheck disable=SC2086
+        sudo DEBIAN_FRONTEND=noninteractive apt-get "${opts[@]}" install -y -qq --no-install-recommends $PACKAGES

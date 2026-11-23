@@ -5,7 +5,10 @@ from pathlib import Path
 
 import pytest
 
-WORKFLOWS = sorted((Path(__file__).resolve().parent.parent / ".github" / "workflows").glob("*.yml"))
+GITHUB = Path(__file__).resolve().parent.parent / ".github"
+WORKFLOWS = sorted((GITHUB / "workflows").glob("*.yml"))
+# 复合 action 里同样不许吞红
+CHECKED = WORKFLOWS + sorted((GITHUB / "actions").glob("*/action.yml"))
 
 # 任何让失败变绿的写法；确需例外时在此登记（文件名 -> 原因），不要在 workflow 里就地放行。
 SWALLOW = re.compile(r"continue-on-error\s*:|\|\|\s*true\b|\bset\s+\+e\b|fail_ci_if_error\s*:\s*false", re.IGNORECASE)
@@ -14,9 +17,10 @@ ALLOWED: dict[str, str] = {}
 
 def test_workflows_are_discovered() -> None:
     assert {p.name for p in WORKFLOWS} >= {"ci.yml", "native.yml", "release.yml"}
+    assert any(p.parent.name == "apt-install" for p in CHECKED)
 
 
-@pytest.mark.parametrize("path", WORKFLOWS, ids=lambda p: p.name)
+@pytest.mark.parametrize("path", CHECKED, ids=lambda p: f"{p.parent.name}/{p.name}")
 def test_workflow_does_not_swallow_failures(path: Path) -> None:
     if path.name in ALLOWED:
         pytest.skip(ALLOWED[path.name])
