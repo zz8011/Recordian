@@ -22,7 +22,11 @@ ALLOWED: dict[str, str] = {}
 
 
 def logical_lines(text: str) -> list[tuple[int, str]]:
-    """把行尾 ``\\`` 的续行合并成逻辑行，返回 (起始物理行号, 合并后内容)。"""
+    """合并续行为逻辑行，返回 (起始物理行号, 合并后内容)。
+
+    行尾 ``\\`` 是显式续行；行尾 ``||`` 时 shell 把换行当续行（``||`` 换行 ``true`` 同样吞红），
+    两者都并入下一行后再匹配。
+    """
     out: list[tuple[int, str]] = []
     start, buf = 1, []
     for n, line in enumerate(text.splitlines(), 1):
@@ -33,6 +37,8 @@ def logical_lines(text: str) -> list[tuple[int, str]]:
             buf.append(stripped[:-1])
             continue
         buf.append(line)
+        if stripped.endswith("||"):
+            continue
         out.append((start, " ".join(part.rstrip() for part in buf)))
         buf = []
     if buf:  # 文件末尾的悬空续行
