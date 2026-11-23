@@ -1,4 +1,5 @@
 """Tests for release packaging and wheel build integrity."""
+
 from __future__ import annotations
 
 import importlib.util
@@ -20,7 +21,16 @@ def test_make_release_in_clean_workspace(tmp_path: Path) -> None:
     clean_repo.mkdir()
 
     # Core release scripts and metadata
-    for fname in ("make-release.sh", "pyproject.toml", "README.md", "LICENSE", "install.sh", "uninstall.sh", "setup.py", "MANIFEST.in"):
+    for fname in (
+        "make-release.sh",
+        "pyproject.toml",
+        "README.md",
+        "LICENSE",
+        "install.sh",
+        "uninstall.sh",
+        "setup.py",
+        "MANIFEST.in",
+    ):
         shutil.copy(REPO_ROOT / fname, clean_repo / fname)
 
     # Minimal directory fixtures
@@ -31,7 +41,9 @@ def test_make_release_in_clean_workspace(tmp_path: Path) -> None:
     # Native & scripts without compiling or copying target build cache
     native_core = clean_repo / "native" / "recordian-core" / "src"
     native_core.mkdir(parents=True)
-    shutil.copy(REPO_ROOT / "native" / "recordian-core" / "Cargo.toml", clean_repo / "native" / "recordian-core" / "Cargo.toml")
+    shutil.copy(
+        REPO_ROOT / "native" / "recordian-core" / "Cargo.toml", clean_repo / "native" / "recordian-core" / "Cargo.toml"
+    )
     (native_core / "lib.rs").write_text("// dummy", encoding="utf-8")
 
     scripts_dir = clean_repo / "scripts"

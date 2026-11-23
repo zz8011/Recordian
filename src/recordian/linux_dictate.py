@@ -140,9 +140,7 @@ class _MonitorReader:
                 if want >= 0 and len(self._buffer) >= want:
                     break
                 if slot.overflow and not self._buffer:
-                    raise MonitorOverflowError(
-                        f"monitor reader backlog exceeded ({slot.max_bytes} bytes)"
-                    )
+                    raise MonitorOverflowError(f"monitor reader backlog exceeded ({slot.max_bytes} bytes)")
                 if slot.eof or slot.closed or self._closed:
                     break
                 if slot.overflow:
@@ -157,9 +155,7 @@ class _MonitorReader:
         if not out and not self._buffer:
             with slot.cv:
                 if slot.overflow:
-                    raise MonitorOverflowError(
-                        f"monitor reader backlog exceeded ({slot.max_bytes} bytes)"
-                    )
+                    raise MonitorOverflowError(f"monitor reader backlog exceeded ({slot.max_bytes} bytes)")
         return out
 
     def close(self) -> None:
@@ -290,7 +286,11 @@ def add_dictate_args(parser: argparse.ArgumentParser) -> None:
         help="ASR provider backend",
     )
     parser.add_argument("--model", default="Qwen/Qwen3-ASR-0.6B")
-    parser.add_argument("--qwen-model", default="", help="Qwen3-ASR model path or name; overrides --model for qwen-asr provider (default: Qwen3-ASR-0.6B)")
+    parser.add_argument(
+        "--qwen-model",
+        default="",
+        help="Qwen3-ASR model path or name; overrides --model for qwen-asr provider (default: Qwen3-ASR-0.6B)",
+    )
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--hub", default="ms", choices=["ms", "hf"])
     parser.add_argument("--remote-code", default="")
@@ -414,17 +414,21 @@ def build_ffmpeg_record_cmd(
                 "[record]",
             ]
         )
-    monitor_output = [
-        "-map",
-        "[monitor]",
-        "-flush_packets",
-        "1",
-        "-f",
-        "f32le",
-        "-acodec",
-        "pcm_f32le",
-        "pipe:1",
-    ] if enable_monitor else []
+    monitor_output = (
+        [
+            "-map",
+            "[monitor]",
+            "-flush_packets",
+            "1",
+            "-f",
+            "f32le",
+            "-acodec",
+            "pcm_f32le",
+            "pipe:1",
+        ]
+        if enable_monitor
+        else []
+    )
     if record_format == "ogg":
         return base + ["-c:a", "libopus", "-b:a", "24k", str(output_path), *monitor_output]
     if record_format == "wav":
@@ -520,10 +524,10 @@ def create_provider(args: argparse.Namespace) -> ASRProvider:
         endpoint = getattr(args, "asr_endpoint", "http://127.0.0.1:8000/v1/audio/transcriptions")
         api_key = str(getattr(args, "asr_api_key", "")).strip() or None
         timeout_s = getattr(args, "asr_timeout_s", 30)
-        model_name = str(
-            getattr(args, "qwen_model", "")
-            or getattr(args, "model", "Qwen/Qwen3-ASR-0.6B")
-        ).strip() or "Qwen/Qwen3-ASR-0.6B"
+        model_name = (
+            str(getattr(args, "qwen_model", "") or getattr(args, "model", "Qwen/Qwen3-ASR-0.6B")).strip()
+            or "Qwen/Qwen3-ASR-0.6B"
+        )
         language = str(getattr(args, "qwen_language", "")).strip()
         return HttpCloudProvider(
             endpoint=endpoint,
@@ -543,10 +547,7 @@ def create_provider(args: argparse.Namespace) -> ASRProvider:
         # service process (.venv-asr), never in the tray.
         from .providers.qwen_service_asr import QwenServiceASRProvider
 
-        endpoint = (
-            str(getattr(args, "qwen_service_endpoint", "") or "").strip()
-            or "http://127.0.0.1:8323"
-        )
+        endpoint = str(getattr(args, "qwen_service_endpoint", "") or "").strip() or "http://127.0.0.1:8323"
         # Whole-segment decode latency scales with audio length; the
         # Confucius-shaped 60 s default is too tight for long presses.
         timeout_s = max(float(getattr(args, "asr_timeout_s", 60) or 60), 120.0)

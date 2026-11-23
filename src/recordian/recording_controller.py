@@ -4,6 +4,7 @@ Provides :func:`build_hotkey_handlers` (oneshot mode) and
 :func:`build_ptt_hotkey_handlers` (PTT / toggle mode), along with
 helper functions for audio cues and text commit.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -244,6 +245,7 @@ def build_ptt_hotkey_handlers(
 
         if refine_provider == "cloud":
             from .providers import CloudLLMRefiner
+
             api_key = str(getattr(args, "refine_api_key", "")).strip()
             api_model = str(getattr(args, "refine_api_model", "")).strip()
             if not api_model:
@@ -262,6 +264,7 @@ def build_ptt_hotkey_handlers(
             on_state({"event": "log", "message": f"使用云端 LLM: {refiner.model}"})
         elif refine_provider == "llamacpp":
             from .providers import LlamaCppTextRefiner
+
             model_path = getattr(args, "refine_model", "")
             if not model_path:
                 raise RuntimeError("使用 llamacpp provider 需要设置 --refine-model 为 GGUF 模型路径")
@@ -277,6 +280,7 @@ def build_ptt_hotkey_handlers(
             on_state({"event": "log", "message": f"使用 llama.cpp: {refiner.provider_name}"})
         else:
             from .providers import Qwen3TextRefiner
+
             refiner = Qwen3TextRefiner(
                 model_name=getattr(args, "refine_model", "Qwen/Qwen3-0.6B"),
                 device=getattr(args, "refine_device", "cuda"),
@@ -286,7 +290,6 @@ def build_ptt_hotkey_handlers(
             )
             on_state({"event": "log", "message": f"使用本地模型: {refiner.model_name}"})
 
-
     if args.warmup:
         on_state({"event": "model_warmup", "status": "starting", "provider": provider.provider_name})
         t0 = time.perf_counter()
@@ -294,27 +297,39 @@ def build_ptt_hotkey_handlers(
             wav_path = Path(temp_dir) / "warmup.wav"
             # Create a minimal valid WAV file with 0.1s of silence (1600 samples at 16kHz)
             import struct
+
             sample_rate = 16000
             num_samples = 1600  # 0.1 second
             data_size = num_samples * 2  # 16-bit samples
-            wav_data = struct.pack('<4sI4s4sIHHIIHH4sI',
-                b'RIFF',
-                36 + data_size,
-                b'WAVE',
-                b'fmt ',
-                16,  # fmt chunk size
-                1,   # PCM
-                1,   # mono
-                sample_rate,
-                sample_rate * 2,  # byte rate
-                2,   # block align
-                16,  # bits per sample
-                b'data',
-                data_size
-            ) + b'\x00' * data_size
+            wav_data = (
+                struct.pack(
+                    "<4sI4s4sIHHIIHH4sI",
+                    b"RIFF",
+                    36 + data_size,
+                    b"WAVE",
+                    b"fmt ",
+                    16,  # fmt chunk size
+                    1,  # PCM
+                    1,  # mono
+                    sample_rate,
+                    sample_rate * 2,  # byte rate
+                    2,  # block align
+                    16,  # bits per sample
+                    b"data",
+                    data_size,
+                )
+                + b"\x00" * data_size
+            )
             wav_path.write_bytes(wav_data)
             provider.transcribe_file(wav_path, hotwords=[])
-        on_state({"event": "model_warmup", "status": "ready", "provider": provider.provider_name, "latency_ms": (time.perf_counter() - t0) * 1000})
+        on_state(
+            {
+                "event": "model_warmup",
+                "status": "ready",
+                "provider": provider.provider_name,
+                "latency_ms": (time.perf_counter() - t0) * 1000,
+            }
+        )
 
         # Warmup refiner if enabled
         if refiner:
@@ -397,28 +412,30 @@ def build_ptt_hotkey_handlers(
 
     def _transition_to_idle() -> None:
         _cancel_duration_limit_timer()
-        _update_state({
-            "process": None,
-            "temp_dir": None,
-            "audio_path": None,
-            "record_started_at": None,
-            "level_stop": None,
-            "recording_state": RecordingState.IDLE,
-            "record_source": "hotkey",
-            "voice_session_active": False,
-            "voice_last_speech_ts": 0.0,
-            "voice_started_ts": 0.0,
-            "voice_speech_detected": False,
-            "voice_auto_stopping": False,
-            "voice_semantic_enabled": False,
-            "voice_semantic_has_text": False,
-            "voice_semantic_last_text_ts": 0.0,
-            "voice_semantic_last_text": "",
-            "voice_owner_filter_enabled": False,
-            "voice_owner_active": True,
-            "voice_owner_seen": False,
-            "voice_owner_last_score": -1.0,
-        })
+        _update_state(
+            {
+                "process": None,
+                "temp_dir": None,
+                "audio_path": None,
+                "record_started_at": None,
+                "level_stop": None,
+                "recording_state": RecordingState.IDLE,
+                "record_source": "hotkey",
+                "voice_session_active": False,
+                "voice_last_speech_ts": 0.0,
+                "voice_started_ts": 0.0,
+                "voice_speech_detected": False,
+                "voice_auto_stopping": False,
+                "voice_semantic_enabled": False,
+                "voice_semantic_has_text": False,
+                "voice_semantic_last_text_ts": 0.0,
+                "voice_semantic_last_text": "",
+                "voice_owner_filter_enabled": False,
+                "voice_owner_active": True,
+                "voice_owner_seen": False,
+                "voice_owner_last_score": -1.0,
+            }
+        )
 
     def _wait_for_processing_completion() -> None:
         processing_thread = _get_state("processing_thread")
@@ -487,7 +504,8 @@ def build_ptt_hotkey_handlers(
             agent_capture = agent_hub.begin_capture(trigger_source) if agent_hub is not None else None
             capture_args = agent_capture.arguments(args) if agent_capture is not None else args
             committer = (
-                agent_capture.sink if agent_capture is not None and agent_capture.mode == "agent"
+                agent_capture.sink
+                if agent_capture is not None and agent_capture.mode == "agent"
                 else select_desktop_committer(base_committer)
             )
             _apply_target_window(committer, {"target_window_id": target_wid})
@@ -516,33 +534,37 @@ def build_ptt_hotkey_handlers(
                 duration_s=None,
                 enable_monitor=True,
             )
-            _update_state({
-                "process": record_handle,
-                "output_mute": output_mute,
-                "temp_dir": temp_dir,
-                "audio_path": audio_path,
-                "record_started_at": time.perf_counter(),
-                "record_source": trigger_source,
-                "voice_session_active": trigger_source == "voice_wake",
-                "voice_last_speech_ts": time.monotonic(),
-                "voice_started_ts": time.monotonic(),
-                "voice_speech_detected": False,
-                "voice_auto_stopping": False,
-                "voice_semantic_enabled": trigger_source == "voice_wake" and bool(getattr(args, "wake_use_semantic_gate", False)),
-                "voice_semantic_has_text": False,
-                "voice_semantic_last_text_ts": 0.0,
-                "voice_semantic_last_text": "",
-                "voice_owner_filter_enabled": trigger_source == "voice_wake" and bool(getattr(args, "wake_owner_verify", False)),
-                # Optimistically allow the first speech frames after wake trigger.
-                # Owner verification can still deactivate the session once there
-                # is enough audio to make a real decision.
-                "voice_owner_active": True,
-                "voice_owner_seen": False,
-                "voice_owner_last_score": -1.0,
-                "realtime_asr_worker": None,
-                "agent_capture": agent_capture,
-                "capture_args": capture_args,
-            })
+            _update_state(
+                {
+                    "process": record_handle,
+                    "output_mute": output_mute,
+                    "temp_dir": temp_dir,
+                    "audio_path": audio_path,
+                    "record_started_at": time.perf_counter(),
+                    "record_source": trigger_source,
+                    "voice_session_active": trigger_source == "voice_wake",
+                    "voice_last_speech_ts": time.monotonic(),
+                    "voice_started_ts": time.monotonic(),
+                    "voice_speech_detected": False,
+                    "voice_auto_stopping": False,
+                    "voice_semantic_enabled": trigger_source == "voice_wake"
+                    and bool(getattr(args, "wake_use_semantic_gate", False)),
+                    "voice_semantic_has_text": False,
+                    "voice_semantic_last_text_ts": 0.0,
+                    "voice_semantic_last_text": "",
+                    "voice_owner_filter_enabled": trigger_source == "voice_wake"
+                    and bool(getattr(args, "wake_owner_verify", False)),
+                    # Optimistically allow the first speech frames after wake trigger.
+                    # Owner verification can still deactivate the session once there
+                    # is enough audio to make a real decision.
+                    "voice_owner_active": True,
+                    "voice_owner_seen": False,
+                    "voice_owner_last_score": -1.0,
+                    "realtime_asr_worker": None,
+                    "agent_capture": agent_capture,
+                    "capture_args": capture_args,
+                }
+            )
             on_state({"event": "recording_started", "record_backend": recorder_backend, "audio_path": str(audio_path)})
 
             # Start audio level sampling thread
@@ -634,7 +656,9 @@ def build_ptt_hotkey_handlers(
                     if duration_limit_s is not None:
                         started_at = state.get("record_started_at")
                         if state.get("process") is record_handle and started_at is not None:
-                            remaining_s = max(0.0, duration_limit_s - (time.perf_counter() - float(cast(float, started_at))))
+                            remaining_s = max(
+                                0.0, duration_limit_s - (time.perf_counter() - float(cast(float, started_at)))
+                            )
                             limit_timer = timer_factory(
                                 remaining_s,
                                 lambda: _on_duration_limit(record_handle, duration_limit_s),
@@ -672,10 +696,7 @@ def build_ptt_hotkey_handlers(
             abort_timer: object = None
             claimed = False
             with state_lock:
-                if (
-                    record_handle is not None
-                    and state.get("process") is record_handle
-                ) or (
+                if (record_handle is not None and state.get("process") is record_handle) or (
                     # Recorder never created (start_record_process raised):
                     # nothing was ever published, the outer lock is still ours
                     # and no stop could have consumed anything.
@@ -687,31 +708,33 @@ def build_ptt_hotkey_handlers(
                     abort_temp_dir = cast(TemporaryDirectory[str] | None, state.get("temp_dir")) or temp_dir
                     abort_level_stop = state.get("level_stop")
                     abort_timer = state.get("duration_limit_timer")
-                    state.update({
-                        "process": None,
-                        "output_mute": None,
-                        "temp_dir": None,
-                        "audio_path": None,
-                        "record_started_at": None,
-                        "level_stop": None,
-                        "duration_limit_timer": None,
-                        "realtime_asr_worker": None,
-                        "recording_state": RecordingState.IDLE,
-                        "record_source": "hotkey",
-                        "voice_session_active": False,
-                        "voice_last_speech_ts": 0.0,
-                        "voice_started_ts": 0.0,
-                        "voice_speech_detected": False,
-                        "voice_auto_stopping": False,
-                        "voice_semantic_enabled": False,
-                        "voice_semantic_has_text": False,
-                        "voice_semantic_last_text_ts": 0.0,
-                        "voice_semantic_last_text": "",
-                        "voice_owner_filter_enabled": False,
-                        "voice_owner_active": True,
-                        "voice_owner_seen": False,
-                        "voice_owner_last_score": -1.0,
-                    })
+                    state.update(
+                        {
+                            "process": None,
+                            "output_mute": None,
+                            "temp_dir": None,
+                            "audio_path": None,
+                            "record_started_at": None,
+                            "level_stop": None,
+                            "duration_limit_timer": None,
+                            "realtime_asr_worker": None,
+                            "recording_state": RecordingState.IDLE,
+                            "record_source": "hotkey",
+                            "voice_session_active": False,
+                            "voice_last_speech_ts": 0.0,
+                            "voice_started_ts": 0.0,
+                            "voice_speech_detected": False,
+                            "voice_auto_stopping": False,
+                            "voice_semantic_enabled": False,
+                            "voice_semantic_has_text": False,
+                            "voice_semantic_last_text_ts": 0.0,
+                            "voice_semantic_last_text": "",
+                            "voice_owner_filter_enabled": False,
+                            "voice_owner_active": True,
+                            "voice_owner_seen": False,
+                            "voice_owner_last_score": -1.0,
+                        }
+                    )
             if claimed:
                 # All blocking work happens here, outside state_lock, on THIS
                 # start's snapshots only.
@@ -792,27 +815,29 @@ def build_ptt_hotkey_handlers(
             _audio_path = cast(Path, audio_path)
             _temp_dir = cast(TemporaryDirectory[str], temp_dir)
 
-            state.update({
-                "process": None,
-                "audio_path": None,
-                "temp_dir": None,
-                "record_started_at": None,
-                "level_stop": None,
-                "recording_state": RecordingState.PROCESSING,
-                "output_mute": None,
-                "voice_session_active": False,
-                "voice_auto_stopping": False,
-                "voice_semantic_enabled": False,
-                "voice_semantic_has_text": False,
-                "voice_semantic_last_text_ts": 0.0,
-                "voice_semantic_last_text": "",
-                "voice_owner_filter_enabled": False,
-                "voice_owner_active": True,
-                "voice_owner_seen": False,
-                "voice_owner_last_score": -1.0,
-                "realtime_asr_worker": None,
-                "duration_limit_timer": None,
-            })
+            state.update(
+                {
+                    "process": None,
+                    "audio_path": None,
+                    "temp_dir": None,
+                    "record_started_at": None,
+                    "level_stop": None,
+                    "recording_state": RecordingState.PROCESSING,
+                    "output_mute": None,
+                    "voice_session_active": False,
+                    "voice_auto_stopping": False,
+                    "voice_semantic_enabled": False,
+                    "voice_semantic_has_text": False,
+                    "voice_semantic_last_text_ts": 0.0,
+                    "voice_semantic_last_text": "",
+                    "voice_owner_filter_enabled": False,
+                    "voice_owner_active": True,
+                    "voice_owner_seen": False,
+                    "voice_owner_last_score": -1.0,
+                    "realtime_asr_worker": None,
+                    "duration_limit_timer": None,
+                }
+            )
 
         # Cancel outside the lock; cancel() on an already-firing timer only
         # sets its finished event, and the atomic handle check above makes a
@@ -856,14 +881,23 @@ def build_ptt_hotkey_handlers(
 
         record_latency_ms = (time.perf_counter() - _started) * 1000
         audio_path = Path(_audio_path)
-        on_state({"event": "processing_started", "record_backend": recorder_backend, "audio_path": str(audio_path), "record_latency_ms": record_latency_ms})
+        on_state(
+            {
+                "event": "processing_started",
+                "record_backend": recorder_backend,
+                "audio_path": str(audio_path),
+                "record_latency_ms": record_latency_ms,
+            }
+        )
 
         def _worker() -> None:
             try:
+
                 def _deliver_result(payload):
                     if agent_hub is not None:
                         agent_hub.accept_transcript(
-                            agent_capture, payload,
+                            agent_capture,
+                            payload,
                             failed=bool(getattr(realtime_asr_worker, "error", "")),
                         )
                     on_result(payload)
@@ -879,9 +913,7 @@ def build_ptt_hotkey_handlers(
                 realtime_segments_committed = 0
                 if isinstance(realtime_asr_worker, _RealtimeASRWorkerHandle):
                     asr_timeout_s = float(getattr(args, "asr_timeout_s", 30.0))
-                    realtime_composition_started = bool(
-                        getattr(realtime_asr_worker, "composition_started", False)
-                    )
+                    realtime_composition_started = bool(getattr(realtime_asr_worker, "composition_started", False))
                     realtime_asr_worker.thread.join(timeout=asr_timeout_s)
                     if realtime_asr_worker.thread.is_alive():
                         # Signal the worker first so a late finish can no
@@ -905,16 +937,11 @@ def build_ptt_hotkey_handlers(
                         # "suppressed". For a composition-capable backend
                         # even a False reading cannot prove "no session":
                         # the only safe classification is uncertain.
-                        composition_now = bool(
-                            getattr(realtime_asr_worker, "composition_started", False)
-                        )
-                        refused_now = bool(
-                            getattr(realtime_asr_worker, "composition_refused", False)
-                        )
-                        begin_may_be_pending = (
-                            bool(resolve_remote_paste_routing(args).commit_local)
-                            and _composition_capable_committer(committer)
-                        )
+                        composition_now = bool(getattr(realtime_asr_worker, "composition_started", False))
+                        refused_now = bool(getattr(realtime_asr_worker, "composition_refused", False))
+                        begin_may_be_pending = bool(
+                            resolve_remote_paste_routing(args).commit_local
+                        ) and _composition_capable_committer(committer)
                         if composition_now or refused_now or begin_may_be_pending:
                             # Deadline hit while a composition session held a
                             # preedit on the focused context, was refused, or
@@ -966,15 +993,9 @@ def build_ptt_hotkey_handlers(
                         realtime_transcribe_latency_ms = realtime_asr_worker.transcribe_latency_ms
                         if isinstance(realtime_asr_worker.commit_info, dict):
                             realtime_commit_info = realtime_asr_worker.commit_info
-                        realtime_outcome = str(
-                            getattr(realtime_asr_worker, "outcome", "") or ""
-                        )
-                        realtime_composition_session = getattr(
-                            realtime_asr_worker, "composition_session", None
-                        )
-                        realtime_semif_applied = bool(
-                            getattr(realtime_asr_worker, "semif_applied", False)
-                        )
+                        realtime_outcome = str(getattr(realtime_asr_worker, "outcome", "") or "")
+                        realtime_composition_session = getattr(realtime_asr_worker, "composition_session", None)
+                        realtime_semif_applied = bool(getattr(realtime_asr_worker, "semif_applied", False))
                         if realtime_asr_worker.error:
                             on_state({"event": "log", "message": f"realtime_asr_failed: {realtime_asr_worker.error}"})
                             # A failure does not imply an empty
@@ -994,9 +1015,7 @@ def build_ptt_hotkey_handlers(
                 # "already committed" contract keeps the prefetched commit
                 # (no re-transcription, no second commit, no file fallback).
                 if isinstance(realtime_asr_worker, _RealtimeASRWorkerHandle):
-                    realtime_segments_committed = int(
-                        getattr(realtime_asr_worker, "segments_committed", 0) or 0
-                    )
+                    realtime_segments_committed = int(getattr(realtime_asr_worker, "segments_committed", 0) or 0)
                     if not realtime_outcome:
                         realtime_outcome = str(getattr(realtime_asr_worker, "outcome", "") or "")
                 pipeline_refiner = refiner if realtime_segments_committed == 0 else None
@@ -1041,10 +1060,7 @@ def build_ptt_hotkey_handlers(
                         on_error=on_error,
                     )
                 )
-                if (
-                    realtime_segments_committed > 0
-                    and realtime_outcome not in {"committed", "released_for_refine"}
-                ):
+                if realtime_segments_committed > 0 and realtime_outcome not in {"committed", "released_for_refine"}:
                     # A continuous turn that committed a prefix and then
                     # failed is NOT a success: the pipeline result carries the
                     # preserved prefix (never a fallback re-commit), and this

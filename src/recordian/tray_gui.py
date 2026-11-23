@@ -12,6 +12,7 @@ All functionality has been moved to focused submodules:
 Importing from this module still works but new code should import
 from the specific submodule directly.
 """
+
 from __future__ import annotations
 
 # Re-export everything that used to live in tray_gui.py

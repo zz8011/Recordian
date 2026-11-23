@@ -191,7 +191,8 @@ class WakeModelConfig:
 import time
 from typing import Any, Callable, TypeVar
 
-T = TypeVar('T')
+T = TypeVar("T")
+
 
 class TTLCache:
     """Time-To-Live cache with automatic expiration"""
@@ -219,6 +220,7 @@ class TTLCache:
 
     def cached(self, key_func: Callable[..., str]):
         """Decorator for caching function results"""
+
         def decorator(func: Callable[..., T]) -> Callable[..., T]:
             def wrapper(*args, **kwargs) -> T:
                 key = key_func(*args, **kwargs)
@@ -229,7 +231,9 @@ class TTLCache:
                 result = func(*args, **kwargs)
                 self.set(key, result)
                 return result
+
             return wrapper
+
         return decorator
 ```
 
@@ -237,14 +241,17 @@ class TTLCache:
 ```python
 from functools import lru_cache
 
+
 # Cache tone variant groups (static per tokens file)
 @lru_cache(maxsize=8)
 def _load_tone_variant_groups_cached(tokens_path_str: str) -> dict[str, list[str]]:
     """Cached version of _load_tone_variant_groups"""
     return _load_tone_variant_groups(Path(tokens_path_str))
 
+
 # Cache keyword file generation
 _keyword_cache = TTLCache(ttl_seconds=3600)  # 1 hour TTL
+
 
 def ensure_keywords_file(
     *,
@@ -322,6 +329,7 @@ quantize_dynamic(
 from onnxruntime.quantization import quantize_static, CalibrationDataReader
 import numpy as np
 
+
 class AudioCalibrationReader(CalibrationDataReader):
     def __init__(self, audio_samples: list[np.ndarray]):
         self.samples = audio_samples
@@ -334,6 +342,7 @@ class AudioCalibrationReader(CalibrationDataReader):
         sample = self.samples[self.index]
         self.index += 1
         return {"audio": sample}
+
 
 # Collect calibration data (100-1000 samples)
 calibration_samples = [...]  # Real audio samples
@@ -393,10 +402,11 @@ test_phrases = ["嗨小二", "嘿小二", "小二"]
 
 # Test performance
 import time
+
 start = time.perf_counter()
 # Run 100 inferences
 elapsed = time.perf_counter() - start
-print(f"Average latency: {elapsed/100*1000:.1f}ms")
+print(f"Average latency: {elapsed / 100 * 1000:.1f}ms")
 ```
 
 ---
@@ -435,6 +445,7 @@ import psutil
 import time
 import threading
 
+
 class CPUMonitor:
     def __init__(self, interval: float = 1.0):
         self.interval = interval
@@ -469,6 +480,7 @@ class CPUMonitor:
             cpu_percent = process.cpu_percent(interval=self.interval)
             self.samples.append(cpu_percent)
 
+
 # Usage
 monitor = CPUMonitor(interval=0.5)
 monitor.start()
@@ -485,12 +497,14 @@ print(f"CPU Usage: avg={stats['avg']:.1f}% max={stats['max']:.1f}% p95={stats['p
 import time
 from collections import defaultdict
 
+
 class LatencyProfiler:
     def __init__(self):
         self.timings: dict[str, list[float]] = defaultdict(list)
 
     def measure(self, name: str):
         """Context manager for measuring code blocks"""
+
         class Timer:
             def __init__(self, profiler, name):
                 self.profiler = profiler
@@ -517,6 +531,7 @@ class LatencyProfiler:
             p95 = sorted(times)[int(len(times) * 0.95)]
             lines.append(f"  {name}: avg={avg:.2f}ms p50={p50:.2f}ms p95={p95:.2f}ms n={len(times)}")
         return "\n".join(lines)
+
 
 # Usage in voice_wake.py
 profiler = LatencyProfiler()

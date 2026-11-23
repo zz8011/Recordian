@@ -1,4 +1,5 @@
 """文本精炼集成测试"""
+
 from __future__ import annotations
 
 from recordian.config import Pass2PolicyConfig
@@ -47,10 +48,7 @@ class TestTextRefinementIntegration:
 
         # 高英文比例文本
         asr_result = ASRResult(
-            text="This is a test with English content",
-            confidence=0.95,
-            english_ratio=0.8,
-            model_name="test"
+            text="This is a test with English content", confidence=0.95, english_ratio=0.8, model_name="test"
         )
         context = SessionContext(hotwords=[], force_high_precision=False)
 
@@ -109,10 +107,7 @@ class TestTextRefinementIntegration:
 
         # 低置信度 + 高英文比例
         asr_result = ASRResult(
-            text="This is low confidence English text",
-            confidence=0.75,
-            english_ratio=0.8,
-            model_name="test"
+            text="This is low confidence English text", confidence=0.75, english_ratio=0.8, model_name="test"
         )
         context = SessionContext(hotwords=[], force_high_precision=False)
 
@@ -186,11 +181,7 @@ class TestRefinementEdgeCases:
         policy = Pass2Policy(config)
 
         # 包含各种 Unicode 字符
-        asr_result = ASRResult(
-            text="测试文本 🎉 emoji 和特殊字符 ©®™",
-            confidence=0.95,
-            model_name="test"
-        )
+        asr_result = ASRResult(text="测试文本 🎉 emoji 和特殊字符 ©®™", confidence=0.95, model_name="test")
         context = SessionContext(hotwords=[], force_high_precision=False)
 
         decision = policy.evaluate(asr_result, context)
@@ -220,11 +211,7 @@ class TestRefinementEdgeCases:
         policy = Pass2Policy(config)
 
         # 中英混合
-        asr_result = ASRResult(
-            text="这是一段中英混合的text，包含English和中文",
-            confidence=0.95,
-            model_name="test"
-        )
+        asr_result = ASRResult(text="这是一段中英混合的text，包含English和中文", confidence=0.95, model_name="test")
         context = SessionContext(hotwords=[], force_high_precision=False)
 
         decision = policy.evaluate(asr_result, context)
@@ -266,11 +253,7 @@ class TestRefinementEdgeCases:
         policy = Pass2Policy(config)
 
         # 数字和标点
-        asr_result = ASRResult(
-            text="价格是 123.45 元，折扣 20%。",
-            confidence=0.95,
-            model_name="test"
-        )
+        asr_result = ASRResult(text="价格是 123.45 元，折扣 20%。", confidence=0.95, model_name="test")
         context = SessionContext(hotwords=[], force_high_precision=False)
 
         decision = policy.evaluate(asr_result, context)

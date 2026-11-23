@@ -61,7 +61,7 @@ def test_every_sample_and_inference_prefix_preserved(srv, samples, split):
     elif split == "odd_sample_frames":
         stride = 10238  # 5119 complete samples; wire PCM remains even bytes.
     for start in range(0, len(pcm), stride):
-        session.feed(pcm[start:start + stride])
+        session.feed(pcm[start : start + stride])
         session.process_ready()
     session.finish()
 
@@ -80,17 +80,22 @@ def test_every_sample_and_inference_prefix_preserved(srv, samples, split):
     covered = 0
     for size, segment, prefix in zip(expected_sizes, model.segments, model.prefixes, strict=True):
         assert segment.dtype == np.float32
-        np.testing.assert_array_equal(segment, expected[covered:covered + size])
+        np.testing.assert_array_equal(segment, expected[covered : covered + size])
         covered += size
         np.testing.assert_array_equal(prefix, expected[:covered])
     assert covered == samples
     assert session.samples_fed == samples
     assert len(session.buffer) == 0
     assert model.finish_budgets == [4]
-    assert model.init_calls == [{
-        "context": "public test context", "language": "English",
-        "unfixed_chunk_num": 0, "unfixed_token_num": 2, "chunk_size_sec": 0.16,
-    }]
+    assert model.init_calls == [
+        {
+            "context": "public test context",
+            "language": "English",
+            "unfixed_chunk_num": 0,
+            "unfixed_token_num": 2,
+            "chunk_size_sec": 0.16,
+        }
+    ]
     full_calls = len(expected_sizes) - bool(remaining)
     assert model.budgets[:full_calls] == ([4] * full_calls)
     if remaining:
@@ -100,14 +105,16 @@ def test_every_sample_and_inference_prefix_preserved(srv, samples, split):
 
 
 def test_fixed_deltas_remain_aligned_with_rollback_budget(srv):
-    model = RecordingModel(replies=[
-        ("hello|metadata", "he|metadata"),
-        ("hello|metadata", "hell|metadata"),
-        ("hell|metadata", "he|metadata"),
-        ("hello|metadata", "hello|metadata"),
-        ("hello|metadata", "hello|metadata"),
-        ("hello world|metadata", "hello world|metadata"),
-    ])
+    model = RecordingModel(
+        replies=[
+            ("hello|metadata", "he|metadata"),
+            ("hello|metadata", "hell|metadata"),
+            ("hell|metadata", "he|metadata"),
+            ("hello|metadata", "hello|metadata"),
+            ("hello|metadata", "hello|metadata"),
+            ("hello world|metadata", "hello world|metadata"),
+        ]
+    )
     session = srv.StreamingSession(model, None, "")
     session.feed(_pcm(5120 + 5 * 2560))
     deltas = session.process_ready()
@@ -147,11 +154,13 @@ def test_decode_budget_covers_rollback_and_forward_progress(srv, monkeypatch, ro
 def test_non_transcript_fixed_prefix_does_not_consume_speech(srv):
     # A larger upstream rollback can expose language metadata as `fixed`
     # before the ASR tag itself becomes fixed. It is not spoken text.
-    model = RecordingModel(replies=[
-        ("今天", "language None"),
-        ("今天早上", "今天"),
-        ("今天早上好", "今天早上"),
-    ])
+    model = RecordingModel(
+        replies=[
+            ("今天", "language None"),
+            ("今天早上", "今天"),
+            ("今天早上好", "今天早上"),
+        ]
+    )
     session = srv.StreamingSession(model, None, "")
     session.feed(_pcm(5120 + 2 * 2560))
     deltas = [delta for delta, _ in session.process_ready()]
@@ -210,9 +219,16 @@ def test_final_odd_sample_tail_reaches_model_in_full(srv):
     assert model.finish_calls == 1
 
 
-@pytest.mark.parametrize("seconds,capacity", [
-    (30.0, 960000), (0.16, 5120), (0.3200625, 10242), (3600.0, 960000), (1e308, 960000),
-])
+@pytest.mark.parametrize(
+    "seconds,capacity",
+    [
+        (30.0, 960000),
+        (0.16, 5120),
+        (0.3200625, 10242),
+        (3600.0, 960000),
+        (1e308, 960000),
+    ],
+)
 def test_session_buffer_capacity_is_bounded(srv, seconds, capacity):
     session = srv.StreamingSession(FakeModel(), None, "", max_session_seconds=seconds)
     session.feed(b"\0" * capacity)
@@ -271,20 +287,23 @@ async def _drive_connection(srv, monkeypatch, audio, *, seconds=30.0):
     return model, ws, submissions
 
 
-@pytest.mark.parametrize("frame_samples,expected_submissions", [
-    ([], ["finish"]),
-    ([2560], ["finish"]),
-    ([2560, 2560], ["process_ready", "finish"]),
-    ([1280] * 6, ["process_ready", "process_ready", "finish"]),
-    ([5120, 1280, 1280, 1], ["process_ready", "process_ready", "finish"]),
-    ([10240], ["process_ready", "finish"]),
-])
+@pytest.mark.parametrize(
+    "frame_samples,expected_submissions",
+    [
+        ([], ["finish"]),
+        ([2560], ["finish"]),
+        ([2560, 2560], ["process_ready", "finish"]),
+        ([1280] * 6, ["process_ready", "process_ready", "finish"]),
+        ([5120, 1280, 1280, 1], ["process_ready", "process_ready", "finish"]),
+        ([10240], ["process_ready", "finish"]),
+    ],
+)
 def test_no_executor_submission_until_a_complete_chunk(srv, monkeypatch, frame_samples, expected_submissions):
     pcm = _pcm(sum(frame_samples))
     audio = []
     offset = 0
     for samples in frame_samples:
-        audio.append(pcm[offset:offset + samples * 2])
+        audio.append(pcm[offset : offset + samples * 2])
         offset += samples * 2
     model, ws, submissions = asyncio.run(_drive_connection(srv, monkeypatch, audio))
     assert submissions == expected_submissions
@@ -297,12 +316,15 @@ def test_no_executor_submission_until_a_complete_chunk(srv, monkeypatch, frame_s
     assert model.finish_calls == 1
 
 
-@pytest.mark.parametrize("audio,seconds,code,reason", [
-    ([b""], 30.0, 1008, "bad PCM16 frame"),
-    ([b"\0"], 30.0, 1008, "bad PCM16 frame"),
-    ([b"\0" * 20482], 30.0, 1009, "audio frame too large"),
-    ([_pcm(2560), _pcm(1)], 0.16, 1008, "session audio budget exceeded"),
-])
+@pytest.mark.parametrize(
+    "audio,seconds,code,reason",
+    [
+        ([b""], 30.0, 1008, "bad PCM16 frame"),
+        ([b"\0"], 30.0, 1008, "bad PCM16 frame"),
+        ([b"\0" * 20482], 30.0, 1009, "audio frame too large"),
+        ([_pcm(2560), _pcm(1)], 0.16, 1008, "session audio budget exceeded"),
+    ],
+)
 def test_admission_errors_do_not_submit_executor_work(srv, monkeypatch, audio, seconds, code, reason):
     model, ws, submissions = asyncio.run(_drive_connection(srv, monkeypatch, audio, seconds=seconds))
     assert submissions == []
@@ -435,7 +457,7 @@ def test_one_hour_admission_streams_beyond_thirty_second_buffer(srv, monkeypatch
             # Feed legal 640 ms frames, waiting for each batch's inference.
             # Retain the production queue bound; no socket or audio clock.
             for start in range(0, len(pcm), 20480):
-                frame = pcm[start:start + 20480]
+                frame = pcm[start : start + 20480]
                 ws.incoming.put_nowait(frame)
                 admitted_samples = (start + len(frame)) // 2
                 calls = 1 + (admitted_samples - 5120) // 2560
@@ -457,7 +479,10 @@ def test_one_hour_admission_streams_beyond_thirty_second_buffer(srv, monkeypatch
         assert [len(segment) for segment in model.segments] == [5120] + [2560] * 191 + [1920]
         assert model.finish_budgets == [4]
         messages = [json.loads(frame) for frame in ws.sent]
-        assert sum(frame.get("msg", {}).get("reset", False) for frame in messages if isinstance(frame.get("msg"), dict)) == 1
+        assert (
+            sum(frame.get("msg", {}).get("reset", False) for frame in messages if isinstance(frame.get("msg"), dict))
+            == 1
+        )
         with pytest.raises(RuntimeError, match="closed"):
             len(sessions[0].buffer)
 

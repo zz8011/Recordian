@@ -547,9 +547,7 @@ def test_alias_person_role_and_abstain_keep_original() -> None:
 
 def test_alias_weak_distribution_keeps_original() -> None:
     weak = {"tool": 0.6, "person": 0.3, "unclear": 0.1}
-    session = _Session(
-        lambda call: {"answers": {"role": {"choice": "tool", "probabilities": weak}}}
-    )
+    session = _Session(lambda call: {"answers": {"role": {"choice": "tool", "probabilities": weak}}})
     corrector = _alias_corrector(session)
     try:
         text = "用jeff运行浏览器测试"
@@ -619,9 +617,7 @@ def test_alias_veto_is_per_heard_token_not_per_snapshot() -> None:
     ]
     session = _Session(
         lambda call: {
-            "answers": _role_answers(
-                {"role": "tool" if "「cody」" in str(call["json"]["state"]) else "person"}
-            )
+            "answers": _role_answers({"role": "tool" if "「cody」" in str(call["json"]["state"]) else "person"})
         }
     )
     corrector = StreamingHotwordCorrector(
@@ -1023,9 +1019,7 @@ def test_corrector_from_args_centralizes_wiring() -> None:
 
     # 老配置没有 correction_provider 时必须落到新的默认 jev，
     # 而不是继续用 semif 的短超时走 HTTP。
-    legacy = corrector_from_args(
-        argparse.Namespace(enable_semif_correction=True, semif_timeout_s=0.3), ["时期"]
-    )
+    legacy = corrector_from_args(argparse.Namespace(enable_semif_correction=True, semif_timeout_s=0.3), ["时期"])
     try:
         assert legacy._provider == "jev"
         assert legacy._timeout_s == 1.5
@@ -1156,6 +1150,7 @@ def test_technical_context_words_get_exactly_one_role_request() -> None:
         ("服务器上的jeff模型怎么样", "服务器上的jev模型怎么样"),
         ("jeff的推理延迟很低", "jev的推理延迟很低"),
     ):
+
         def handler(call: dict[str, object]) -> dict[str, object]:
             questions = call["json"]["questions"]
             assert set(questions) == {"role"}
@@ -1184,9 +1179,7 @@ def test_technical_context_keeps_person_and_weak_verdicts() -> None:
             corrector.close()
 
     weak = {"tool": 0.6, "person": 0.3, "unclear": 0.1}
-    session = _Session(
-        lambda call: {"answers": {"role": {"choice": "tool", "probabilities": weak}}}
-    )
+    session = _Session(lambda call: {"answers": {"role": {"choice": "tool", "probabilities": weak}}})
     corrector = _alias_corrector(session)
     try:
         text = "jeff的推理延迟很低"

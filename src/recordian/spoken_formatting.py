@@ -81,9 +81,21 @@ def _formatting_protected_spans(text: str) -> list[tuple[int, int]]:
         spans.extend((match.start(), match.end()) for match in pattern.finditer(text))
     return spans
 
+
 _DIGIT_MAP = {
-    "零": 0, "〇": 0, "一": 1, "二": 2, "两": 2, "三": 3, "四": 4,
-    "五": 5, "六": 6, "七": 7, "八": 8, "九": 9, "幺": 1,
+    "零": 0,
+    "〇": 0,
+    "一": 1,
+    "二": 2,
+    "两": 2,
+    "三": 3,
+    "四": 4,
+    "五": 5,
+    "六": 6,
+    "七": 7,
+    "八": 8,
+    "九": 9,
+    "幺": 1,
 }
 _UNITS = {"十": 10, "百": 100, "千": 1000}
 # 幺 is a spoken digit (号码/端口/IP), not a cardinal word. Keep it out of
@@ -96,9 +108,7 @@ _DIGIT_RE = re.compile(rf"[{_DIGIT}]+")
 _POS_DIGIT_RE = re.compile(rf"[{_POS_DIGIT}]+")
 # Chinese mobile numbers are identifiers, including when surrounded by prose.
 # Claim only complete 11-digit runs with a valid 1[3-9] prefix.
-_MOBILE_RE = re.compile(
-    rf"(?<![{_NUMRUN}幺0-9])([{_POS_DIGIT}]{{11}})(?![{_NUMRUN}幺0-9])"
-)
+_MOBILE_RE = re.compile(rf"(?<![{_NUMRUN}幺0-9])([{_POS_DIGIT}]{{11}})(?![{_NUMRUN}幺0-9])")
 _OCTET = rf"(?:[0-9]{{1,3}}|[{_POS_DIGIT}]{{1,3}}|[{_DIGIT}十百]{{2,6}})"
 _IP_RE = re.compile(
     rf"(?<![{_NUMRUN}A-Za-z0-9.])({_OCTET})\s*点\s*({_OCTET})\s*点\s*({_OCTET})\s*点\s*({_OCTET})(?![{_NUMRUN}A-Za-z0-9])"
@@ -106,8 +116,26 @@ _IP_RE = re.compile(
 _DATE_RE = re.compile(
     rf"(?<![{_NUMRUN}])([{_DIGIT}]{{4}})年([{_NUMRUN}]{{1,3}})月([{_NUMRUN}]{{1,3}})(日|号)(?![{_NUMRUN}])"
 )
-_TLDS = ("com", "cn", "net", "org", "io", "dev", "ai", "app", "me", "info",
-         "biz", "edu", "gov", "xyz", "top", "cc", "tv", "co")
+_TLDS = (
+    "com",
+    "cn",
+    "net",
+    "org",
+    "io",
+    "dev",
+    "ai",
+    "app",
+    "me",
+    "info",
+    "biz",
+    "edu",
+    "gov",
+    "xyz",
+    "top",
+    "cc",
+    "tv",
+    "co",
+)
 _URL_DOT_RE = re.compile(
     r"(?<![A-Za-z0-9.])(www|[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)"
     r"((?:\s*点\s*[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)+)"
@@ -117,12 +145,44 @@ _DECIMAL_RE = re.compile(rf"(?<![{_NUMRUN}.点])([{_NUMRUN}]{{1,9}})点([{_DIGIT
 # realtime_asr's raw-tail seam, which used to carry its own shorter list and
 # therefore missed 手机号/电话/数字.
 NUMBER_MARKERS = (
-    "身份证号", "银行卡号", "快递单号", "电话号码", "验证码", "错误码",
-    "状态码", "订单号", "版本号", "工单号", "房间号", "座位号",
-    "手机号", "序列号", "车牌号", "航班号", "编号", "号码",
-    "房号", "门牌", "分机", "工号", "学号", "卡号", "账号",
-    "车牌", "电话", "端口", "服务器", "数字", "密码", "邮编",
-    "QQ号", "QQ", "qq", "HTTP", "IP", "ip",
+    "身份证号",
+    "银行卡号",
+    "快递单号",
+    "电话号码",
+    "验证码",
+    "错误码",
+    "状态码",
+    "订单号",
+    "版本号",
+    "工单号",
+    "房间号",
+    "座位号",
+    "手机号",
+    "序列号",
+    "车牌号",
+    "航班号",
+    "编号",
+    "号码",
+    "房号",
+    "门牌",
+    "分机",
+    "工号",
+    "学号",
+    "卡号",
+    "账号",
+    "车牌",
+    "电话",
+    "端口",
+    "服务器",
+    "数字",
+    "密码",
+    "邮编",
+    "QQ号",
+    "QQ",
+    "qq",
+    "HTTP",
+    "IP",
+    "ip",
 )
 _MARKER_ALT = "|".join(sorted(NUMBER_MARKERS, key=len, reverse=True))
 # Every character a spoken number can be built from, 幺 included. A marker
@@ -176,9 +236,18 @@ _APPROX_PAIRS = frozenset({"一两", "两三", "三四", "四五", "五六", "�
 # Proper nouns and complete calendar phrases. Bare 十一 is a value (11);
 # only the full holiday names stay Chinese.
 _PROTECTED_WORDS = (
-    "十三香", "九一八", "一二九", "五一", "六一", "七一", "八一", "三八",
-    "十一黄金周", "十一假期",
-    "三番五次", "两次三番",
+    "十三香",
+    "九一八",
+    "一二九",
+    "五一",
+    "六一",
+    "七一",
+    "八一",
+    "三八",
+    "十一黄金周",
+    "十一假期",
+    "三番五次",
+    "两次三番",
 )
 
 
@@ -374,8 +443,26 @@ def _single_number(token: str) -> str | None:
 
 
 _PROSE_MEASURES = (
-    "分钟", "小时", "公斤", "个", "只", "条", "本", "张", "次", "遍",
-    "件", "份", "套", "台", "辆", "页", "米", "秒", "元", "倍",
+    "分钟",
+    "小时",
+    "公斤",
+    "个",
+    "只",
+    "条",
+    "本",
+    "张",
+    "次",
+    "遍",
+    "件",
+    "份",
+    "套",
+    "台",
+    "辆",
+    "页",
+    "米",
+    "秒",
+    "元",
+    "倍",
 )
 _PROSE_MEASURE_ALT = "|".join(sorted(_PROSE_MEASURES, key=len, reverse=True))
 _ASCII_MARKER_PREFIX_RE = re.compile(rf"(?:{_MARKER_ALT})(?:是|为|[:：])?\s*$")
@@ -430,12 +517,8 @@ def _restore_prose_ascii_numbers(text: str) -> str:
         if before == "点" and after == "分":
             continue
         measure = re.match(_PROSE_MEASURE_ALT, text[end:])
-        between_chinese = (
-            "\u4e00" <= before <= "\u9fff" and "\u4e00" <= after <= "\u9fff"
-        )
-        prose_tail = (
-            "\u4e00" <= before <= "\u9fff" and (not after or after in "，。！？；、：")
-        )
+        between_chinese = "\u4e00" <= before <= "\u9fff" and "\u4e00" <= after <= "\u9fff"
+        prose_tail = "\u4e00" <= before <= "\u9fff" and (not after or after in "，。！？；、：")
         if measure is None and (len(digits) > 3 or not (between_chinese or prose_tail)):
             continue
         edits.append((start, end, _ascii_cardinal_to_chinese(digits, classifier=measure is not None)))
@@ -446,9 +529,7 @@ def _restore_prose_ascii_numbers(text: str) -> str:
 
 def _touches_cjk(text: str, start: int, end: int) -> bool:
     """A cardinal beside Chinese text is prose, not a standalone number."""
-    return (
-        start > 0 and "\u4e00" <= text[start - 1] <= "\u9fff"
-    ) or (
+    return (start > 0 and "\u4e00" <= text[start - 1] <= "\u9fff") or (
         end < len(text) and "\u4e00" <= text[end] <= "\u9fff"
     )
 

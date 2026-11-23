@@ -26,5 +26,7 @@ def test_effect_messages_are_user_facing() -> None:
     assert effect_label(SettingEffect.RESTART_REQUIRED) == "重启后端生效"
     assert effect_status_message(SettingEffect.IMMEDIATE, restarted=False) == "已保存，设置立即生效"
     assert effect_status_message(SettingEffect.NEXT_SESSION, restarted=False) == "已保存，设置会在下次录音时生效"
-    assert effect_status_message(SettingEffect.RESTART_REQUIRED, restarted=False) == "已保存到配置文件；需要重启后端后生效"
+    assert (
+        effect_status_message(SettingEffect.RESTART_REQUIRED, restarted=False) == "已保存到配置文件；需要重启后端后生效"
+    )
     assert effect_status_message(SettingEffect.RESTART_REQUIRED, restarted=True) == "已保存并重启后端，设置已应用"

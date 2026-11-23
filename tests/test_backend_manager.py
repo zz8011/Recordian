@@ -1,4 +1,5 @@
 """测试 BackendManager 的进程管理和异常处理"""
+
 from __future__ import annotations
 
 import os
@@ -159,8 +160,7 @@ class TestBackendManagerStart:
         "command",
         [
             "python -m recordian.hotkey_dictate --config-path /tmp/other-config.json",
-            "/other-worktree/.venv/bin/python -m recordian.hotkey_dictate "
-            "--config-path /tmp/test_config.json",
+            "/other-worktree/.venv/bin/python -m recordian.hotkey_dictate --config-path /tmp/test_config.json",
             "python -c 'print(\"recordian.hotkey_dictate\")'",
             "python unrelated.py recordian.hotkey_dictate",
             "python -m recordian.hotkey_dictate --config-path /tmp/test_config.json",
@@ -260,7 +260,6 @@ class TestBackendManagerStart:
 
         # 验证没有创建新进程
         mock_popen.assert_not_called()
-
 
 
 class TestBackendManagerStop:
@@ -525,7 +524,6 @@ class TestBackendManagerProcessExit:
             assert mock_proc not in processes
 
 
-
 class TestBackendManagerRestart:
     """测试重启功能"""
 
@@ -747,7 +745,6 @@ class TestBackendManagerCleanup:
         _terminate_backend_process(proc)
         killpg.assert_not_called()
         proc.terminate.assert_not_called()
-
 
 
 class TestBackendManagerRequestStopRecording:

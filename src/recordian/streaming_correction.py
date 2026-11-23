@@ -87,21 +87,67 @@ _HELP_ROLE_RE = re.compile(r"^(?:帮|替)(?:我|你|您|他|她|它|咱|们|忙|
 _COORDINATED_BEFORE_RE = re.compile(r"(?:我|你|您|他|她|咱|们)[和跟与同]$")
 _COORDINATED_AFTER_RE = re.compile(r"^(?:和|跟|与|同)(?:我|你|您|他|她|咱|们)")
 _ARTIFACT_NOUNS = (
-    "软件", "工具", "程序", "插件", "应用", "浏览器", "终端", "命令",
-    "脚本", "项目", "仓库", "代码", "进程", "模型", "服务器", "服务",
-    "系统", "平台", "框架", "引擎", "客户端", "库",
+    "软件",
+    "工具",
+    "程序",
+    "插件",
+    "应用",
+    "浏览器",
+    "终端",
+    "命令",
+    "脚本",
+    "项目",
+    "仓库",
+    "代码",
+    "进程",
+    "模型",
+    "服务器",
+    "服务",
+    "系统",
+    "平台",
+    "框架",
+    "引擎",
+    "客户端",
+    "库",
 )
 # Affirmative software context. A lexicon meaning of "软件" is not evidence.
 # The cue may sit in this utterance or the bounded previous-segment tail.
 # Presence only makes a span eligible for the unchanged .70/.20 role gate.
 _SOFTWARE_CONTEXT_CUES = (
-    "打开", "安装", "启动", "运行", "执行", "卸载", "重启", "关闭",
-    "更新", "升级", "配置", "部署", "编译", "调用",
-    "软件", "工具", "程序", "插件", "应用", "浏览器", "终端", "命令",
-    "脚本", "项目", "仓库", "测试", "调试", "代码", "进程",
+    "打开",
+    "安装",
+    "启动",
+    "运行",
+    "执行",
+    "卸载",
+    "重启",
+    "关闭",
+    "更新",
+    "升级",
+    "配置",
+    "部署",
+    "编译",
+    "调用",
+    "软件",
+    "工具",
+    "程序",
+    "插件",
+    "应用",
+    "浏览器",
+    "终端",
+    "命令",
+    "脚本",
+    "项目",
+    "仓库",
+    "测试",
+    "调试",
+    "代码",
+    "进程",
     # Technical context that names the software without a verb cue
     # (e.g. “服务器上的jeff模型怎么样”, “jeff的推理延迟很低”).
-    "模型", "服务器", "推理",
+    "模型",
+    "服务器",
+    "推理",
 )
 
 
@@ -259,11 +305,7 @@ def _alias_spans(
             start, end = match.start(), match.end()
             if _overlaps_span(start, end, protected):
                 continue
-            if (
-                _meta_mention(text, start, end)
-                or _negated_before(text, start)
-                or _bare_person_alias(text, start, end)
-            ):
+            if _meta_mention(text, start, end) or _negated_before(text, start) or _bare_person_alias(text, start, end):
                 continue
             index = _clause_index(clauses, start)
             per_clause.setdefault(index, []).append((start, end, match.group(0)))
@@ -320,7 +362,8 @@ def _apply_alias_edits(base: str, edits: list[tuple[int, int, str, str]]) -> str
     """Apply role replacements right to left; offsets refer to the snapshot."""
     choices = [
         Choice(
-            f"alias{i}", {"criteria": {"apply": "Apply the validated alias choice"}},
+            f"alias{i}",
+            {"criteria": {"apply": "Apply the validated alias choice"}},
             {"apply": (CandidateEdit(start, end, surface, word),)},
         )
         for i, (start, end, surface, word) in enumerate(edits)
@@ -572,15 +615,19 @@ class StreamingHotwordCorrector:
             return deterministic, None, []
         protected = self.semantic_protected_spans(deterministic)
         span = ambiguous_pinyin_span(
-            deterministic, self._terms, frequencies=self._frequencies,
+            deterministic,
+            self._terms,
+            frequencies=self._frequencies,
             is_eligible=lambda start, end: (
-                not _meta_mention(deterministic, start, end)
-                and not _overlaps_span(start, end, protected)
+                not _meta_mention(deterministic, start, end) and not _overlaps_span(start, end, protected)
             ),
         )
         # The software-context gate is applied per clause inside _alias_spans.
         alias_spans = _alias_spans(
-            deterministic, self._aliases, self._context, extra_protected=protected,
+            deterministic,
+            self._aliases,
+            self._context,
+            extra_protected=protected,
         )
         return deterministic, span, alias_spans
 
@@ -729,18 +776,23 @@ class StreamingHotwordCorrector:
             if stale:
                 result = job.deterministic
                 emit_judge_event(
-                    logger, site="streaming_corrector", outcome="skipped_stale",
-                    timeout_budget_ms=timeout_s * 1000, text_len=len(job.origin),
+                    logger,
+                    site="streaming_corrector",
+                    outcome="skipped_stale",
+                    timeout_budget_ms=timeout_s * 1000,
+                    text_len=len(job.origin),
                     correction_applied=False,
                 )
             else:
                 started = time.perf_counter()
                 result = self._judge(job, session, endpoint, timeout_s)
                 emit_judge_event(
-                    logger, site="streaming_corrector",
+                    logger,
+                    site="streaming_corrector",
                     outcome="corrected" if result != job.deterministic else "no_change",
                     latency_ms=(time.perf_counter() - started) * 1000,
-                    timeout_budget_ms=timeout_s * 1000, text_len=len(job.origin),
+                    timeout_budget_ms=timeout_s * 1000,
+                    text_len=len(job.origin),
                     correction_applied=result != job.deterministic,
                 )
             with self._cv:
@@ -799,9 +851,12 @@ class StreamingHotwordCorrector:
                 words[f"c{index}"] = token
                 options[f"c{index}"] = _criterion(deterministic, surface, token, start, end)
             choice = Choice(
-                "pick", {"type": "choice", "instructions": _INSTRUCTIONS, "criteria": options},
-                {key: () if key == "keep" else (CandidateEdit(start, end, surface, word),)
-                 for key, word in words.items()},
+                "pick",
+                {"type": "choice", "instructions": _INSTRUCTIONS, "criteria": options},
+                {
+                    key: () if key == "keep" else (CandidateEdit(start, end, surface, word),)
+                    for key, word in words.items()
+                },
             )
             state = self._state(job, surface)
             policy: dict[str, float] = {}
@@ -811,9 +866,12 @@ class StreamingHotwordCorrector:
                     state, choice = built
                 policy = {"min_top": WORD_MIN_TOP, "min_margin": WORD_MIN_MARGIN}
             updated = judge_choices(
-                deterministic, state, [choice],
+                deterministic,
+                state,
+                [choice],
                 request=lambda _budget, state, questions, **kwargs: ask(state, questions, **kwargs),
-                timeout_s=timeout_s, **policy,
+                timeout_s=timeout_s,
+                **policy,
             )
             if updated != deterministic:
                 self._publish_partial(job, updated)
@@ -903,7 +961,9 @@ def corrector_from_args(
     )
 
     if provider == "jev" and bool(getattr(args, "enable_particle_correction", False)):
-        return ParticleCorrector(corrector, timeout_s=timeout_s, endpoint=str(getattr(args, "semif_endpoint", "") or ""))
+        return ParticleCorrector(
+            corrector, timeout_s=timeout_s, endpoint=str(getattr(args, "semif_endpoint", "") or "")
+        )
     return corrector
 
 

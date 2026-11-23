@@ -26,6 +26,7 @@ One request slot: the model decodes serially (single user, one GPU);
 a concurrent request gets 429 and the client retries within its own
 deadline instead of queueing unboundedly behind a long decode.
 """
+
 from __future__ import annotations
 
 import argparse

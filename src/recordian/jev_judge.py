@@ -49,10 +49,14 @@ def request_jev_choices(
 
     def _emit(outcome: str, applied: bool = False) -> None:
         emit_judge_event(
-            logger, site="jev_request", outcome=outcome,
+            logger,
+            site="jev_request",
+            outcome=outcome,
             latency_ms=(time.perf_counter() - started) * 1000,
-            timeout_budget_ms=timeout_s * 1000, text_len=len(state),
-            correction_applied=applied, extra=f"questions={len(questions)}",
+            timeout_budget_ms=timeout_s * 1000,
+            text_len=len(state),
+            correction_applied=applied,
+            extra=f"questions={len(questions)}",
         )
 
     if timeout_s <= 0 or not questions:
@@ -104,6 +108,7 @@ def request_jev_choices(
         # failures are not silent. Limit to 500 chars to avoid log spam.
         if stderr and proc.returncode != 0:
             import logging
+
             logging.getLogger(__name__).warning(
                 "jev ask failed (rc=%d): %s",
                 proc.returncode,
@@ -130,8 +135,10 @@ def request_jev_choices(
             continue
         picked = answers.get(name)
         results[name] = interpret_choice(
-            criteria, picked if isinstance(picked, dict) else None,
-            min_top=min_top, min_margin=min_margin,
+            criteria,
+            picked if isinstance(picked, dict) else None,
+            min_top=min_top,
+            min_margin=min_margin,
         )
     _emit(
         "answered" if any(v is not None for v in results.values()) else "gate_rejected",

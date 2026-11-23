@@ -1,4 +1,5 @@
 """Streaming failure regressions using only synthetic PCM and fake transports."""
+
 import threading
 
 import pytest
@@ -131,7 +132,8 @@ def test_uncertain_tail_commit_keeps_preview_without_retry(monkeypatch):
     provider = _FakeProvider(["第一段。", "尾段。"])
     worker = _Harness(
         reader=_Reader(_speech(1.5) + _silence(0.4) + _speech(0.5)),
-        provider=provider, session=session,
+        provider=provider,
+        session=session,
     ).run()
     assert session.segments == ["第一段。"]
     assert session.commits == ["尾段。"], "ambiguous commit must never be repeated"
@@ -144,12 +146,24 @@ def test_partial_prefix_result_reports_incomplete_in_fake_tray():
     from test_duration_guard import _handle, _make_fake_tray
 
     fake, overlay_calls, notifications, _ = _make_fake_tray()
-    _handle(fake, {"event": "result", "result": {
-        "text": "第一段。尾段。", "asr_path": "prefetched",
-        "commit": {"backend": "fcitx", "committed": True,
-                   "outcome": "uncertain", "incomplete": True,
-                   "recovery_text": "尾段。", "segments_committed": 1},
-    }})
+    _handle(
+        fake,
+        {
+            "event": "result",
+            "result": {
+                "text": "第一段。尾段。",
+                "asr_path": "prefetched",
+                "commit": {
+                    "backend": "fcitx",
+                    "committed": True,
+                    "outcome": "uncertain",
+                    "incomplete": True,
+                    "recovery_text": "尾段。",
+                    "segments_committed": 1,
+                },
+            },
+        },
+    )
     assert fake.state.status == "error"
     assert "已自动复制" in fake.state.detail
     assert fake.state.last_run.text == "第一段。尾段。"
@@ -167,7 +181,8 @@ def test_socket_reopen_failure_preserves_held_tail(monkeypatch):
     provider = _FakeProvider(["前文一百二"])
     provider.fail_on_open[1] = ConnectionError("synthetic reopen failure")
     worker = _Harness(
-        reader=_Reader(_speech(1.5) + _silence(0.4) + _speech(0.5)), provider=provider,
+        reader=_Reader(_speech(1.5) + _silence(0.4) + _speech(0.5)),
+        provider=provider,
     ).run()
     assert worker.segments_committed == 1
     assert worker.final_text == "前文一百二"
@@ -182,7 +197,9 @@ def test_uncertain_segment_preserves_its_held_tail(monkeypatch):
     session = _FakeCompositionSession()
     session.fail_segment_at = 1
     worker = _Harness(
-        reader=_Reader(_speech(1.5) + _silence(0.4) + _speech(0.5)), provider=provider, session=session,
+        reader=_Reader(_speech(1.5) + _silence(0.4) + _speech(0.5)),
+        provider=provider,
+        session=session,
     ).run()
     assert session.segments == ["前文"]
     assert worker.final_text == "前文一百二"
@@ -194,12 +211,14 @@ def test_twenty_fresh_sessions_recover_without_threads_or_eos_replay(mode):
     from recordian.providers.confucius_asr import EOS_MESSAGE
 
     for _ in range(20):
+
         def reply(sock):
             if mode == "disconnect":
                 sock.feed_drop()
             else:
                 sock.feed(_success("终稿", reset=True))
                 sock.feed_close(1000)
+
         ws = FakeWebSocket(greeting=_connected_greeting(), on_eos=reply)
         session = _make_session(ws)
         session.push_audio(_f32_frame())
@@ -246,23 +265,29 @@ def test_buffered_downgrade_after_prefix_does_not_duplicate_recovery(monkeypatch
     _short_segment_settings(monkeypatch)
     session = _FakeCompositionSession()
     original_commit = session.commit_segment
+
     def downgrade(text):
         result = original_commit(text)
         session.supports_segments = False
         return result
+
     session.commit_segment = downgrade
     provider = _FakeProvider(
-        ["第一段。", "缓冲段。", "待核对尾巴"], partials=["第一段。", "缓冲段。", "待核对尾巴"],
+        ["第一段。", "缓冲段。", "待核对尾巴"],
+        partials=["第一段。", "缓冲段。", "待核对尾巴"],
     )
     original_finish = _FakeASRSession.finish
+
     def disconnect_tail(self):
         if self.final_text == "待核对尾巴":
             raise ConnectionError("synthetic disconnect")
         return original_finish(self)
+
     monkeypatch.setattr(_FakeASRSession, "finish", disconnect_tail)
     worker = _Harness(
         reader=_Reader(_speech(1.5) + _silence(0.4) + _speech(1.5) + _silence(0.4) + _speech(0.5)),
-        provider=provider, session=session,
+        provider=provider,
+        session=session,
     ).run()
     assert session.segments == ["第一段。"]
     assert session.commits == []

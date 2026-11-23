@@ -67,11 +67,11 @@ def test_get_clipboard_text_prefers_xsel(monkeypatch) -> None:
     assert linux_commit._get_clipboard_text() == "剪贴板内容"
 
 
-
 def test_run_command_with_input_no_dead_returncode_check() -> None:
     import inspect
 
     from recordian import linux_commit
+
     source = inspect.getsource(linux_commit._run_command_with_input)
     lines = [line for line in source.split("\n") if "returncode != 0" in line]
     assert len(lines) == 0, f"发现死代码: {lines}"
@@ -124,7 +124,9 @@ def test_xdotool_clipboard_timeout_zero_uses_persistent_write(monkeypatch):
         lambda proc: (_ for _ in ()).throw(AssertionError("transient owner should not be stopped when timeout=0")),
     )
     monkeypatch.setattr("recordian.linux_commit._set_clipboard_text", lambda text: order.append(f"set:{text}"))
-    monkeypatch.setattr("recordian.linux_commit._xdotool_key", lambda shortcut, *, window_id=None: order.append(f"paste:{shortcut}"))
+    monkeypatch.setattr(
+        "recordian.linux_commit._xdotool_key", lambda shortcut, *, window_id=None: order.append(f"paste:{shortcut}")
+    )
     monkeypatch.setattr("time.sleep", lambda seconds: slept.append(seconds))
 
     committer = XdotoolClipboardCommitter(clipboard_timeout_ms=0)
@@ -144,9 +146,13 @@ def test_xdotool_clipboard_nonzero_timeout_retains_transient_owner_until_timeout
 
     monkeypatch.setattr("recordian.linux_commit.which", lambda x: "/usr/bin/" + x)
     monkeypatch.setattr("recordian.linux_commit._start_transient_clipboard_owner", lambda text: fake_proc)
-    monkeypatch.setattr("recordian.linux_commit._stop_transient_clipboard_owner", lambda proc: order.append("owner:stop"))
+    monkeypatch.setattr(
+        "recordian.linux_commit._stop_transient_clipboard_owner", lambda proc: order.append("owner:stop")
+    )
     monkeypatch.setattr("recordian.linux_commit._set_clipboard_text", lambda text: order.append(f"set:{text}"))
-    monkeypatch.setattr("recordian.linux_commit._xdotool_key", lambda shortcut, *, window_id=None: order.append(f"paste:{shortcut}"))
+    monkeypatch.setattr(
+        "recordian.linux_commit._xdotool_key", lambda shortcut, *, window_id=None: order.append(f"paste:{shortcut}")
+    )
 
     committer = XdotoolClipboardCommitter(clipboard_timeout_ms=200)
     committer.commit("测试文本")
@@ -169,8 +175,13 @@ def test_xdotool_clipboard_nonzero_timeout_stops_owner_on_exception(monkeypatch)
 
     monkeypatch.setattr("recordian.linux_commit.which", lambda x: "/usr/bin/" + x)
     monkeypatch.setattr("recordian.linux_commit._start_transient_clipboard_owner", lambda text: fake_proc)
-    monkeypatch.setattr("recordian.linux_commit._stop_transient_clipboard_owner", lambda proc: order.append("owner:stop"))
-    monkeypatch.setattr("recordian.linux_commit.send_paste_shortcut", lambda *, target_window_id=None: (_ for _ in ()).throw(CommitError("paste failed")))
+    monkeypatch.setattr(
+        "recordian.linux_commit._stop_transient_clipboard_owner", lambda proc: order.append("owner:stop")
+    )
+    monkeypatch.setattr(
+        "recordian.linux_commit.send_paste_shortcut",
+        lambda *, target_window_id=None: (_ for _ in ()).throw(CommitError("paste failed")),
+    )
 
     committer = XdotoolClipboardCommitter(clipboard_timeout_ms=5000)
     with pytest.raises(CommitError, match="paste failed"):
@@ -230,7 +241,9 @@ def test_xdotool_clipboard_delayed_old_timer_does_not_clear_new_commit(monkeypat
     monkeypatch.setattr("recordian.linux_commit.which", lambda x: "/usr/bin/" + x)
     monkeypatch.setattr("recordian.linux_commit._start_transient_clipboard_owner", lambda text: owners.pop(0))
     monkeypatch.setattr("recordian.linux_commit._stop_transient_clipboard_owner", lambda proc: stopped.append(proc))
-    monkeypatch.setattr("recordian.linux_commit._set_clipboard_text", lambda text: clipboard_calls.append(f"set:{text}"))
+    monkeypatch.setattr(
+        "recordian.linux_commit._set_clipboard_text", lambda text: clipboard_calls.append(f"set:{text}")
+    )
     monkeypatch.setattr("recordian.linux_commit._xdotool_key", lambda shortcut, *, window_id=None: None)
     monkeypatch.setattr("time.sleep", lambda seconds: None)
 
@@ -323,11 +336,15 @@ def test_xdotool_clipboard_short_timeout_starts_timer_after_paste_and_hold(monke
 
     monkeypatch.setattr("recordian.linux_commit.which", lambda x: "/usr/bin/" + x)
     monkeypatch.setattr("recordian.linux_commit._start_transient_clipboard_owner", lambda text: fake_proc)
-    monkeypatch.setattr("recordian.linux_commit._stop_transient_clipboard_owner", lambda proc: timeline.append("owner:stop"))
+    monkeypatch.setattr(
+        "recordian.linux_commit._stop_transient_clipboard_owner", lambda proc: timeline.append("owner:stop")
+    )
     monkeypatch.setattr("recordian.linux_commit._set_clipboard_text", lambda text: timeline.append(f"set:{text}"))
     monkeypatch.setattr(
         "recordian.linux_commit.send_paste_shortcut",
-        lambda *, target_window_id=None: timeline.append("paste") or CommitResult(backend="xdotool", committed=True, detail="paste_only:ctrl+v"),
+        lambda *, target_window_id=None: (
+            timeline.append("paste") or CommitResult(backend="xdotool", committed=True, detail="paste_only:ctrl+v")
+        ),
     )
     monkeypatch.setattr("time.sleep", lambda seconds: timeline.append("wait"))
 
@@ -348,7 +365,9 @@ def test_xdotool_clipboard_fallback_cleans_clipboard_on_paste_failure(monkeypatc
 
     monkeypatch.setattr("recordian.linux_commit.which", lambda x: "/usr/bin/" + x)
     monkeypatch.setattr("recordian.linux_commit._start_transient_clipboard_owner", lambda text: None)
-    monkeypatch.setattr("recordian.linux_commit._set_clipboard_text", lambda text: clipboard_calls.append(f"set:{text}"))
+    monkeypatch.setattr(
+        "recordian.linux_commit._set_clipboard_text", lambda text: clipboard_calls.append(f"set:{text}")
+    )
     monkeypatch.setattr("time.sleep", lambda seconds: None)
 
     def _fail_paste(*, target_window_id=None):
@@ -374,7 +393,9 @@ def test_xdotool_clipboard_committer_falls_back_when_no_transient_owner(monkeypa
     monkeypatch.setattr("recordian.linux_commit.which", lambda x: "/usr/bin/" + x)
     monkeypatch.setattr("recordian.linux_commit._start_transient_clipboard_owner", lambda text: None)
     monkeypatch.setattr("recordian.linux_commit._set_clipboard_text", lambda text: order.append(f"clipboard:{text}"))
-    monkeypatch.setattr("recordian.linux_commit._xdotool_key", lambda shortcut, *, window_id=None: order.append(f"paste:{shortcut}"))
+    monkeypatch.setattr(
+        "recordian.linux_commit._xdotool_key", lambda shortcut, *, window_id=None: order.append(f"paste:{shortcut}")
+    )
     monkeypatch.setattr("time.sleep", lambda seconds: None)
 
     committer = XdotoolClipboardCommitter(clipboard_timeout_ms=0)
@@ -502,13 +523,19 @@ def test_fcitx_native_wayland_enter_uses_wtype_after_focus_check(monkeypatch) ->
     from recordian.linux_commit import FcitxCommitter, send_hard_enter
 
     calls = []
-    monkeypatch.setattr("recordian.wayland_desktop.desktop_query", lambda _: {
-        "address": "0xtarget", "xwayland": False,
-    })
+    monkeypatch.setattr(
+        "recordian.wayland_desktop.desktop_query",
+        lambda _: {
+            "address": "0xtarget",
+            "xwayland": False,
+        },
+    )
     monkeypatch.setattr("recordian.linux_commit.which", lambda name: "/usr/bin/" + name)
     monkeypatch.setattr("recordian.linux_commit.time.sleep", lambda seconds: calls.append(("wait", seconds)))
     monkeypatch.setattr("recordian.linux_commit._run_command", lambda cmd: calls.append(("key", cmd)))
-    monkeypatch.setattr("recordian.linux_commit._xdotool_hard_return", lambda **kw: (_ for _ in ()).throw(AssertionError("X11 Enter")))
+    monkeypatch.setattr(
+        "recordian.linux_commit._xdotool_hard_return", lambda **kw: (_ for _ in ()).throw(AssertionError("X11 Enter"))
+    )
 
     result = send_hard_enter(FcitxCommitter(target_window_address="0xtarget", target_xwayland=False))
     assert result.committed
@@ -518,10 +545,16 @@ def test_fcitx_native_wayland_enter_uses_wtype_after_focus_check(monkeypatch) ->
 def test_fcitx_enter_refuses_changed_window(monkeypatch) -> None:
     from recordian.linux_commit import FcitxCommitter, send_hard_enter
 
-    monkeypatch.setattr("recordian.wayland_desktop.desktop_query", lambda _: {
-        "address": "0xother", "xwayland": False,
-    })
-    monkeypatch.setattr("recordian.linux_commit._run_command", lambda cmd: (_ for _ in ()).throw(AssertionError("unexpected key")))
+    monkeypatch.setattr(
+        "recordian.wayland_desktop.desktop_query",
+        lambda _: {
+            "address": "0xother",
+            "xwayland": False,
+        },
+    )
+    monkeypatch.setattr(
+        "recordian.linux_commit._run_command", lambda cmd: (_ for _ in ()).throw(AssertionError("unexpected key"))
+    )
     result = send_hard_enter(FcitxCommitter(target_window_address="0xtarget", target_xwayland=False))
     assert not result.committed
     assert result.detail == "hard_enter_failed:focus_changed"
@@ -575,9 +608,13 @@ def test_send_hard_enter_fcitx_explicit_xwayland_retains_xdotool(monkeypatch) ->
 def test_fcitx_delete_chars_with_address_checks_focus_safety(monkeypatch) -> None:
     from recordian.linux_commit import FcitxCommitter
 
-    monkeypatch.setattr("recordian.wayland_desktop.desktop_query", lambda _: {
-        "address": "0xother_window", "xwayland": False,
-    })
+    monkeypatch.setattr(
+        "recordian.wayland_desktop.desktop_query",
+        lambda _: {
+            "address": "0xother_window",
+            "xwayland": False,
+        },
+    )
     monkeypatch.setattr(
         "recordian.linux_commit._run_command",
         lambda cmd: (_ for _ in ()).throw(AssertionError("keys should not be sent when focus changed")),
@@ -593,9 +630,13 @@ def test_fcitx_delete_chars_with_address_native_wayland_uses_wtype(monkeypatch) 
     from recordian.linux_commit import FcitxCommitter
 
     calls = []
-    monkeypatch.setattr("recordian.wayland_desktop.desktop_query", lambda _: {
-        "address": "0xtarget", "xwayland": False,
-    })
+    monkeypatch.setattr(
+        "recordian.wayland_desktop.desktop_query",
+        lambda _: {
+            "address": "0xtarget",
+            "xwayland": False,
+        },
+    )
     monkeypatch.setattr("recordian.linux_commit.which", lambda name: "/usr/bin/" + name)
     monkeypatch.setattr("recordian.linux_commit._run_command", lambda cmd: calls.append(cmd))
 
@@ -828,7 +869,10 @@ def test_xdotool_key_refocuses_when_target_window_changed(monkeypatch) -> None:
 def test_paste_to_enter_delay_seconds_only_for_paste_style_commits() -> None:
     from recordian.linux_commit import CommitResult, paste_to_enter_delay_seconds
 
-    assert paste_to_enter_delay_seconds(CommitResult(backend="xdotool-clipboard", committed=True, detail="paste:ctrl+v")) > 0.0
+    assert (
+        paste_to_enter_delay_seconds(CommitResult(backend="xdotool-clipboard", committed=True, detail="paste:ctrl+v"))
+        > 0.0
+    )
     assert paste_to_enter_delay_seconds(CommitResult(backend="xdotool", committed=True, detail="typed")) == 0.0
 
 
@@ -836,10 +880,12 @@ def test_paste_to_enter_delay_seconds_only_for_paste_style_commits() -> None:
 # Electron Detection Tests
 # ============================================================================
 
+
 def _set_x_display(monkeypatch) -> None:
     # 结果不随当前会话（Wayland 或 X11）变化：Electron 检测只依赖 DISPLAY 与 xprop。
     monkeypatch.setenv("DISPLAY", ":0")
     monkeypatch.setenv("XDG_SESSION_TYPE", "x11")
+
 
 def test_is_electron_window_detects_wechat(monkeypatch):
     """测试检测微信 Electron 应用"""
@@ -849,7 +895,7 @@ def test_is_electron_window_detects_wechat(monkeypatch):
 
     def _fake_run(cmd, **kwargs):
         result = Mock()
-        result.stdout = "WM_CLASS(STRING) = \"wechat\", \"WeChatAppEx\"\n_NET_WM_NAME(UTF8_STRING) = \"微信\""
+        result.stdout = 'WM_CLASS(STRING) = "wechat", "WeChatAppEx"\n_NET_WM_NAME(UTF8_STRING) = "微信"'
         result.returncode = 0
         return result
 
@@ -870,7 +916,7 @@ def test_is_electron_window_detects_vscode(monkeypatch):
 
     def _fake_run(cmd, **kwargs):
         result = Mock()
-        result.stdout = "WM_CLASS(STRING) = \"code\", \"Code\"\n_NET_WM_NAME(UTF8_STRING) = \"Visual Studio Code\""
+        result.stdout = 'WM_CLASS(STRING) = "code", "Code"\n_NET_WM_NAME(UTF8_STRING) = "Visual Studio Code"'
         result.returncode = 0
         return result
 
@@ -890,7 +936,7 @@ def test_is_electron_window_rejects_firefox(monkeypatch):
 
     def _fake_run(cmd, **kwargs):
         result = Mock()
-        result.stdout = "WM_CLASS(STRING) = \"Navigator\", \"Firefox\"\n_NET_WM_NAME(UTF8_STRING) = \"Mozilla Firefox\""
+        result.stdout = 'WM_CLASS(STRING) = "Navigator", "Firefox"\n_NET_WM_NAME(UTF8_STRING) = "Mozilla Firefox"'
         result.returncode = 0
         return result
 
@@ -913,7 +959,7 @@ def test_is_electron_window_caches_result(monkeypatch):
     def _fake_run(cmd, **kwargs):
         call_count["count"] += 1
         result = Mock()
-        result.stdout = "WM_CLASS(STRING) = \"wechat\", \"WeChatAppEx\""
+        result.stdout = 'WM_CLASS(STRING) = "wechat", "WeChatAppEx"'
         result.returncode = 0
         return result
 
@@ -957,7 +1003,7 @@ def test_is_electron_window_checks_xwayland_window_in_wayland_session(monkeypatc
     def _fake_run(cmd, **kwargs):
         calls.append(cmd)
         result = Mock()
-        result.stdout = "WM_CLASS(STRING) = \"wechat\", \"WeChatAppEx\""
+        result.stdout = 'WM_CLASS(STRING) = "wechat", "WeChatAppEx"'
         result.returncode = 0
         return result
 
@@ -995,7 +1041,7 @@ def test_is_terminal_window_detects_gnome_terminal(monkeypatch):
 
     def _fake_run(cmd, **kwargs):
         result = Mock()
-        result.stdout = "WM_CLASS(STRING) = \"gnome-terminal-server\", \"Gnome-terminal\""
+        result.stdout = 'WM_CLASS(STRING) = "gnome-terminal-server", "Gnome-terminal"'
         result.returncode = 0
         return result
 
@@ -1031,7 +1077,7 @@ def test_is_terminal_window_rejects_browser(monkeypatch):
 
     def _fake_run(cmd, **kwargs):
         result = Mock()
-        result.stdout = "WM_CLASS(STRING) = \"Navigator\", \"Firefox\""
+        result.stdout = 'WM_CLASS(STRING) = "Navigator", "Firefox"'
         result.returncode = 0
         return result
 
@@ -1065,6 +1111,7 @@ def test_send_paste_shortcut_uses_ctrl_shift_v_for_ghostty(monkeypatch):
 # ============================================================================
 # Committer Routing Tests
 # ============================================================================
+
 
 def test_resolve_committer_auto_with_electron_window(monkeypatch):
     """测试 auto 模式检测到 Electron 窗口时使用 xdotool-clipboard"""
@@ -1100,6 +1147,7 @@ def test_resolve_committer_auto_fallback_creates_fallback_chain(monkeypatch):
 # ============================================================================
 # Fallback Mechanism Tests
 # ============================================================================
+
 
 def test_committer_with_fallback_succeeds_on_first_try(monkeypatch):
     """测试主方式成功时不触发降级"""
@@ -1194,10 +1242,12 @@ def test_fcitx_committer_sends_commit_text(monkeypatch):
 
     def _run(cmd, **kwargs):
         calls.append(cmd)
+
         class Result:
             returncode = 0
             stdout = 's "gtk3 gedit"'
             stderr = ""
+
         return Result()
 
     monkeypatch.setattr("recordian.linux_commit.which", lambda name: "/usr/bin/" + name if name == "busctl" else None)
@@ -1241,6 +1291,7 @@ def test_streaming_committer_keeps_fcitx_channel(monkeypatch):
 # busctl reply parsing + composition session edge cases (round 2)
 # ---------------------------------------------------------------------------
 
+
 def test_parse_busctl_string_real_formats():
     """Decode actual `busctl call` stdout shapes (typed + JSON + unicode)."""
     from recordian.linux_commit import _parse_busctl_string
@@ -1250,13 +1301,9 @@ def test_parse_busctl_string_real_formats():
     assert _parse_busctl_string('s "committed gtk3 gedit"') == "committed gtk3 gedit"
     assert _parse_busctl_string(
         's "0123abcd preedit=1 frontend=gtk3 program=gtk-demo"'
-    ) == "0123abcd preedit=1 frontend=gtk3 program=gtk3-demo".replace(
-        "gtk3-demo", "gtk-demo"
-    )
+    ) == "0123abcd preedit=1 frontend=gtk3 program=gtk3-demo".replace("gtk3-demo", "gtk-demo")
     # JSON mode (busctl --json=short):
-    assert _parse_busctl_string(
-        '{"type":"s","data":"committed wayland WeChat"}'
-    ) == "committed wayland WeChat"
+    assert _parse_busctl_string('{"type":"s","data":"committed wayland WeChat"}') == "committed wayland WeChat"
     # C-style escapes inside the quoted value:
     assert _parse_busctl_string(r's "said \"hi\""') == 'said "hi"'
     assert _parse_busctl_string(r's "a\nb"') == "a\nb"
@@ -1301,9 +1348,7 @@ def test_begin_composition_parses_busctl_typed_descriptor(monkeypatch):
         "recordian.linux_commit.which",
         lambda name: "/usr/bin/" + name if name == "busctl" else None,
     )
-    monkeypatch.setattr(
-        "recordian.linux_commit.subprocess.run", _busctl_run_factory(replies, calls)
-    )
+    monkeypatch.setattr("recordian.linux_commit.subprocess.run", _busctl_run_factory(replies, calls))
 
     session = FcitxCommitter().begin_composition("")
     assert session.token == "9f0e1d2c3b4a5f6e"
@@ -1313,7 +1358,9 @@ def test_begin_composition_parses_busctl_typed_descriptor(monkeypatch):
 
 def test_preedit_capability_downgrades_segment_writes(monkeypatch) -> None:
     session = linux_commit.FcitxStreamingSession(
-        linux_commit.FcitxCommitter(), "token", preedit_capable=True,
+        linux_commit.FcitxCommitter(),
+        "token",
+        preedit_capable=True,
         supports_segments=True,
     )
     calls: list[str] = []
@@ -1332,7 +1379,9 @@ def test_preedit_capability_downgrades_segment_writes(monkeypatch) -> None:
 
 def test_segment_unsafe_refusal_preserves_bound_session(monkeypatch) -> None:
     session = linux_commit.FcitxStreamingSession(
-        linux_commit.FcitxCommitter(), "token", preedit_capable=True,
+        linux_commit.FcitxCommitter(),
+        "token",
+        preedit_capable=True,
         supports_segments=True,
     )
     calls: list[str] = []
@@ -1341,8 +1390,7 @@ def test_segment_unsafe_refusal_preserves_bound_session(monkeypatch) -> None:
         calls.append(method)
         if method == "CommitSegment":
             raise linux_commit.CommitError(
-                "CommitSegment: Call failed: surrounding text unsafe "
-                "(org.fcitx.Fcitx.Recordian.Error.SegmentsUnsafe)"
+                "CommitSegment: Call failed: surrounding text unsafe (org.fcitx.Fcitx.Recordian.Error.SegmentsUnsafe)"
             )
         return "committed wayland_v2 editor" if method == "CommitSession" else "updated"
 
@@ -1360,17 +1408,15 @@ def test_session_commit_busctl_reply_marks_committed(monkeypatch):
 
     calls: list = []
     replies = [
-        's "9f0e preedit=1 frontend=gtk3 program=p"',   # BeginSession
-        's "updated"',                                  # UpdatePreedit
-        's "committed gtk3 p"',                         # CommitSession
+        's "9f0e preedit=1 frontend=gtk3 program=p"',  # BeginSession
+        's "updated"',  # UpdatePreedit
+        's "committed gtk3 p"',  # CommitSession
     ]
     monkeypatch.setattr(
         "recordian.linux_commit.which",
         lambda name: "/usr/bin/" + name if name == "busctl" else None,
     )
-    monkeypatch.setattr(
-        "recordian.linux_commit.subprocess.run", _busctl_run_factory(replies, calls)
-    )
+    monkeypatch.setattr("recordian.linux_commit.subprocess.run", _busctl_run_factory(replies, calls))
 
     session = FcitxCommitter().begin_composition("")
     assert session.update_preedit("你好").committed
@@ -1391,9 +1437,7 @@ def test_session_commit_empty_text_cleared_concludes_session(monkeypatch):
         "recordian.linux_commit.which",
         lambda name: "/usr/bin/" + name if name == "busctl" else None,
     )
-    monkeypatch.setattr(
-        "recordian.linux_commit.subprocess.run", _busctl_run_factory(replies, calls)
-    )
+    monkeypatch.setattr("recordian.linux_commit.subprocess.run", _busctl_run_factory(replies, calls))
 
     session = FcitxCommitter().begin_composition("")
     result = session.commit("")
@@ -1417,10 +1461,7 @@ def test_session_commit_transport_failure_cancels_preedit(monkeypatch):
             return SimpleNamespace(
                 returncode=1,
                 stdout="",
-                stderr=(
-                    "Failed to call method: unexpected transport error "
-                    "(connection reset by peer)"
-                ),
+                stderr=("Failed to call method: unexpected transport error (connection reset by peer)"),
             )
         raw = replies.pop(0) if replies else 's "ok"'
         return SimpleNamespace(returncode=0, stdout=raw, stderr="")
@@ -1456,6 +1497,7 @@ def test_begin_composition_surfaces_existing_preedit_error(monkeypatch):
                 "org.fcitx.Fcitx.Recordian.Error.ExistingPreedit: "
                 "input context already has a non-empty preedit"
             )
+
         return Fail()
 
     monkeypatch.setattr(
@@ -1537,13 +1579,9 @@ def test_session_update_failure_keeps_uncertain_diagnostics_when_cleanup_fails(m
         calls.append(cmd)
         method = _method_of(cmd)
         if method == "UpdatePreedit":
-            return SimpleNamespace(
-                returncode=1, stdout="", stderr="Call failed: unknown session"
-            )
+            return SimpleNamespace(returncode=1, stdout="", stderr="Call failed: unknown session")
         if method == "CancelSession":
-            return SimpleNamespace(
-                returncode=1, stdout="", stderr="Call failed: connection closed"
-            )
+            return SimpleNamespace(returncode=1, stdout="", stderr="Call failed: connection closed")
         raw = replies.pop(0) if replies else 's "ok"'
         return SimpleNamespace(returncode=0, stdout=raw, stderr="")
 

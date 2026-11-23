@@ -117,7 +117,10 @@ void main() {
                 width=self.WINDOW_WIDTH,
                 height=self.ORB_SIZE + self.CAPTION_HEIGHT,
                 caption="Recordian Overlay",
-                style=overlay_style, resizable=False, visible=False, config=config,
+                style=overlay_style,
+                resizable=False,
+                visible=False,
+                config=config,
             )
         except Exception:
             overlay_style = getattr(
@@ -129,7 +132,9 @@ void main() {
                 width=self.WINDOW_WIDTH,
                 height=self.ORB_SIZE + self.CAPTION_HEIGHT,
                 caption="Recordian Overlay",
-                style=overlay_style, resizable=False, visible=False,
+                style=overlay_style,
+                resizable=False,
+                visible=False,
             )
         window.set_vsync(False)
         gl.glClearColor(0.0, 0.0, 0.0, 0.0)
@@ -145,6 +150,7 @@ void main() {
             import ctypes
 
             from pyglet.libs.x11 import xlib
+
             x_display = getattr(window, "_x_display", None)
             if x_display is not None:
                 root = xlib.XDefaultRootWindow(x_display)
@@ -156,17 +162,20 @@ void main() {
                 win_y = ctypes.c_int()
                 mask = ctypes.c_uint()
                 xlib.XQueryPointer(
-                    x_display, root,
-                    ctypes.byref(root_return), ctypes.byref(child_return),
-                    ctypes.byref(root_x), ctypes.byref(root_y),
-                    ctypes.byref(win_x), ctypes.byref(win_y),
-                    ctypes.byref(mask)
+                    x_display,
+                    root,
+                    ctypes.byref(root_return),
+                    ctypes.byref(child_return),
+                    ctypes.byref(root_x),
+                    ctypes.byref(root_y),
+                    ctypes.byref(win_x),
+                    ctypes.byref(win_y),
+                    ctypes.byref(mask),
                 )
                 mouse_x, mouse_y = root_x.value, root_y.value
                 target_screen = None
                 for screen in display.get_screens():
-                    if (screen.x <= mouse_x < screen.x + screen.width and
-                            screen.y <= mouse_y < screen.y + screen.height):
+                    if screen.x <= mouse_x < screen.x + screen.width and screen.y <= mouse_y < screen.y + screen.height:
                         target_screen = screen
                         break
                 if target_screen is None:
@@ -181,6 +190,7 @@ void main() {
 
         try:
             from pyglet.libs.x11 import xlib as x11
+
             xdisp = getattr(window, "_x_display", None)
             xwin = getattr(window, "_window", None)
             if xdisp is not None and xwin is not None:
@@ -207,7 +217,8 @@ void main() {
             Shader(fragment_src, "fragment"),
         )
         quad = program.vertex_list(
-            4, gl.GL_TRIANGLE_STRIP,
+            4,
+            gl.GL_TRIANGLE_STRIP,
             position=("f", [-1.0, -1.0, 1.0, -1.0, -1.0, 1.0, 1.0, 1.0]),
         )
         time_scale = orb_shader.apply_orb_uniforms(program, "idle")
@@ -351,7 +362,9 @@ void main() {
                         self.target_amplitude = 0.0
                         self.base_mode = 0.0
                         _set_clickable(False)
-                        delay = self.IDLE_HIDE_DELAY_WITH_DETAIL_S if self.detail.strip() else self.IDLE_HIDE_DELAY_EMPTY_S
+                        delay = (
+                            self.IDLE_HIDE_DELAY_WITH_DETAIL_S if self.detail.strip() else self.IDLE_HIDE_DELAY_EMPTY_S
+                        )
                         self.hide_deadline = time.time() + delay
                 elif cmd == "level":
                     level = max(0.0, min(1.0, float(payload)))  # type: ignore[arg-type]

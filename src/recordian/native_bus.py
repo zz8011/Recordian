@@ -1,4 +1,5 @@
 """Cached versioned Rust GIO transport. Native failures never select busctl."""
+
 from __future__ import annotations
 
 import ctypes
@@ -17,8 +18,13 @@ class _NativeBusError(CommitError):
 
 _MAX_STRING_BYTES = 1_048_576
 _SIGNATURES = {
-    "Ping": "", "BeginSession": "s", "UpdatePreedit": "ss", "CommitSegment": "sus",
-    "CommitSession": "ss", "CancelSession": "s", "CommitText": "s",
+    "Ping": "",
+    "BeginSession": "s",
+    "UpdatePreedit": "ss",
+    "CommitSegment": "sus",
+    "CommitSession": "ss",
+    "CancelSession": "s",
+    "CommitText": "s",
 }
 _UNSET = object()
 _selection: NativeBus | CommitError | None | object = _UNSET
@@ -51,9 +57,20 @@ class NativeBus:
         signatures = {
             "recordian_dbus_abi_version": ([], ctypes.c_uint32),
             "recordian_dbus_new_v1": ([ctypes.c_char_p, pointer, pointer, pointer], ctypes.c_int),
-            "recordian_dbus_call_v1": ([ctypes.c_void_p, ctypes.c_char_p, ctypes.c_char_p,
-                                       ctypes.POINTER(ctypes.c_char_p), ctypes.c_size_t,
-                                       ctypes.c_int32, pointer, pointer, pointer], ctypes.c_int),
+            "recordian_dbus_call_v1": (
+                [
+                    ctypes.c_void_p,
+                    ctypes.c_char_p,
+                    ctypes.c_char_p,
+                    ctypes.POINTER(ctypes.c_char_p),
+                    ctypes.c_size_t,
+                    ctypes.c_int32,
+                    pointer,
+                    pointer,
+                    pointer,
+                ],
+                ctypes.c_int,
+            ),
             "recordian_dbus_free_v1": ([ctypes.c_void_p], None),
             "recordian_dbus_string_free_v1": ([ctypes.c_void_p], None),
         }
@@ -75,8 +92,7 @@ class NativeBus:
         finally:
             self._library.recordian_dbus_string_free_v1(pointer)
 
-    def _finish(self, status: int, output: ctypes.c_void_p,
-                name: ctypes.c_void_p, message: ctypes.c_void_p) -> str:
+    def _finish(self, status: int, output: ctypes.c_void_p, name: ctypes.c_void_p, message: ctypes.c_void_p) -> str:
         # Consume every allocation even when a malformed ABI returns invalid
         # UTF-8 or output together with an error. No borrowed C strings escape.
         values = []
@@ -103,7 +119,10 @@ class NativeBus:
             return
         name, message = ctypes.c_void_p(), ctypes.c_void_p()
         status = self._library.recordian_dbus_new_v1(
-            self._address, ctypes.byref(self._handle), ctypes.byref(name), ctypes.byref(message),
+            self._address,
+            ctypes.byref(self._handle),
+            ctypes.byref(name),
+            ctypes.byref(message),
         )
         try:
             self._finish(status, ctypes.c_void_p(), name, message)
@@ -126,8 +145,15 @@ class NativeBus:
             self._connect()
             output, name, message = ctypes.c_void_p(), ctypes.c_void_p(), ctypes.c_void_p()
             status = self._library.recordian_dbus_call_v1(
-                self._handle, _encode(method), _encode(signature), pointers, len(encoded), timeout_ms,
-                ctypes.byref(output), ctypes.byref(name), ctypes.byref(message),
+                self._handle,
+                _encode(method),
+                _encode(signature),
+                pointers,
+                len(encoded),
+                timeout_ms,
+                ctypes.byref(output),
+                ctypes.byref(name),
+                ctypes.byref(message),
             )
             return self._finish(status, output, name, message)
 

@@ -37,9 +37,7 @@ def _resolve_silero_vad_model() -> Path | None:
     return candidate if candidate.is_file() else None
 
 
-def _silero_speech_bounds(
-    samples: np.ndarray, sample_rate: int, model_path: Path
-) -> tuple[int, int] | None:
+def _silero_speech_bounds(samples: np.ndarray, sample_rate: int, model_path: Path) -> tuple[int, int] | None:
     """Speech (start, end) sample bounds via sherpa-onnx Silero VAD.
 
     Returns None when the runtime/model cannot run or no speech is
@@ -137,9 +135,7 @@ class QwenASRProvider(ASRProvider):
             import torch
             from qwen_asr import Qwen3ASRModel
         except ModuleNotFoundError as exc:
-            raise RuntimeError(
-                "qwen-asr 未安装。请执行: pip install -e '.[qwen-asr]'"
-            ) from exc
+            raise RuntimeError("qwen-asr 未安装。请执行: pip install -e '.[qwen-asr]'") from exc
 
         dtype_map = {
             "bfloat16": torch.bfloat16,
@@ -274,6 +270,7 @@ class QwenASRProvider(ASRProvider):
             # 清理 VAD 临时文件
             if vad_temp_file is not None:
                 import os
+
                 try:
                     os.unlink(vad_temp_file)
                 except OSError:

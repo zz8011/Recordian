@@ -15,6 +15,7 @@ re-decodes the accumulated audio at most every ``preview_interval_s``
 model the in-process ``QwenASRProvider`` session already uses.
 ``push_audio`` never blocks on a decode.
 """
+
 from __future__ import annotations
 
 import array
@@ -316,8 +317,7 @@ class _QwenServiceRealtimeSession:
             pcm = bytes(self._pcm)
         self._preview_wake.set()
         if not pcm:
-            return ASRResult(text="", model_name=self._provider.provider_name,
-                             metadata={"source": "qwen_asr_service"})
+            return ASRResult(text="", model_name=self._provider.provider_name, metadata={"source": "qwen_asr_service"})
         chunk_bytes = int(_FINISH_CHUNK_S * SAMPLE_RATE) * 2
         texts: list[str] = []
         language: str | None = None

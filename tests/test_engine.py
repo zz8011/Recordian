@@ -9,7 +9,9 @@ from recordian.providers.base import ASRProvider
 
 
 class FakeProvider(ASRProvider):
-    def __init__(self, name: str, text: str, confidence: float | None = None, delay: float = 0.0, is_cloud: bool = False) -> None:
+    def __init__(
+        self, name: str, text: str, confidence: float | None = None, delay: float = 0.0, is_cloud: bool = False
+    ) -> None:
         self._name = name
         self._text = text
         self._confidence = confidence
@@ -64,6 +66,7 @@ class TestEngineTimeoutHandling:
         pass2 = FakeProvider("p2", text="慢速结果", confidence=0.9, delay=2.0)
 
         from recordian.config import AppConfig
+
         config = AppConfig()
         config.policy.pass2_timeout_ms_local = 500  # 500ms 超时
 
@@ -85,9 +88,10 @@ class TestEngineTimeoutHandling:
         pass2 = FakeProvider("p2", text="云端结果", confidence=0.9, delay=1.5, is_cloud=True)
 
         from recordian.config import AppConfig
+
         config = AppConfig()
         config.policy.pass2_timeout_ms_cloud = 2000  # 云端 2 秒超时
-        config.policy.pass2_timeout_ms_local = 500   # 本地 500ms 超时
+        config.policy.pass2_timeout_ms_local = 500  # 本地 500ms 超时
 
         engine = DictationEngine(pass1, pass2_provider=pass2, config=config)
 
@@ -103,6 +107,7 @@ class TestEngineTimeoutHandling:
         pass2 = FakeProvider("p2", text="Pass2结果", confidence=0.9, delay=0.1)
 
         from recordian.config import AppConfig
+
         config = AppConfig()
         config.policy.pass2_timeout_ms_local = -1000  # 负数超时
 
@@ -121,6 +126,7 @@ class TestEngineTimeoutHandling:
         pass2 = FakeProvider("p2", text="Pass2结果", confidence=0.9, delay=0.1)
 
         from recordian.config import AppConfig
+
         config = AppConfig()
         config.policy.pass2_timeout_ms_local = 999999999  # 超大超时值
 
@@ -141,6 +147,7 @@ class TestEngineTimeoutHandling:
         pass2 = FakeProvider("p2", text="Pass2结果", confidence=0.9, delay=0.5)
 
         from recordian.config import AppConfig
+
         config = AppConfig()
         config.policy.pass2_timeout_ms_local = 0  # 零超时
 
@@ -158,6 +165,7 @@ class TestEngineTimeoutHandling:
         pass2 = FakeProvider("p2", text="Pass2结果", confidence=0.9, delay=0.2)
 
         from recordian.config import AppConfig
+
         config = AppConfig()
         config.policy.pass2_timeout_ms_local = 1000  # 1 秒超时
 
@@ -170,9 +178,7 @@ class TestEngineTimeoutHandling:
         assert result.pass2_result is not None
         assert result.pass2_result.text == "Pass2结果"
 
-    def test_pass2_non_timeout_exception_keeps_pass1_result_and_logs(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    def test_pass2_non_timeout_exception_keeps_pass1_result_and_logs(self, caplog: pytest.LogCaptureFixture) -> None:
         """测试 Pass2 提供方抛出非超时异常时保留 Pass1 结果并记录日志"""
         import logging
 

@@ -1,4 +1,5 @@
 """测试 Recordian 异常层次结构"""
+
 from __future__ import annotations
 
 import pytest

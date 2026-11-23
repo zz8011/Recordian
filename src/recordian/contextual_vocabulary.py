@@ -17,15 +17,20 @@ _INSTRUCTIONS = "这是整句识别假设。只能选择一个候选条件。不
 
 
 def vocabulary_choice(
-    text: str, span: dict[str, Any], *, context: str = "",
+    text: str,
+    span: dict[str, Any],
+    *,
+    context: str = "",
 ) -> tuple[str, Choice] | None:
     """Build one bounded choice while keeping offsets in the full snapshot."""
     start, end = span.get("start"), span.get("end")
     surface = span.get("surface")
     if (
-        type(start) is not int or type(end) is not int
+        type(start) is not int
+        or type(end) is not int
         or not 0 <= start < end <= len(text)
-        or not isinstance(surface, str) or text[start:end] != surface
+        or not isinstance(surface, str)
+        or text[start:end] != surface
     ):
         return None
     begin, stop = max(0, start - CONTEXT_FLANK), min(len(text), end + CONTEXT_FLANK)
@@ -43,8 +48,7 @@ def vocabulary_choice(
         seen.add(candidate)
         key = f"c{len(options) - 1}"
         options[key] = (
-            f"此语境应该使用{candidate}，应把{surface}替换为{candidate}，其余不变。"
-            + before + candidate + after
+            f"此语境应该使用{candidate}，应把{surface}替换为{candidate}，其余不变。" + before + candidate + after
         )
         edits[key] = (CandidateEdit(start, end, surface, candidate),)
         if len(options) >= MAX_OPTIONS:
@@ -52,5 +56,7 @@ def vocabulary_choice(
     if len(options) == 1:
         return None
     return state, Choice(
-        "pick", {"type": "choice", "instructions": _INSTRUCTIONS, "criteria": options}, edits,
+        "pick",
+        {"type": "choice", "instructions": _INSTRUCTIONS, "criteria": options},
+        edits,
     )

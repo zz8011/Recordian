@@ -287,9 +287,7 @@ def test_harness_prefers_edited_text_as_reference(tmp_path: Path) -> None:
     dataset_dir = tmp_path / "eval-capture"
     _write_wav(dataset_dir / "audio" / "a.wav")
     row = _dataset_row("a", "audio/a.wav", "asr final", gold=True, edited_text="human corrected")
-    (dataset_dir / "index.jsonl").write_text(
-        json.dumps(row, ensure_ascii=False) + "\n", encoding="utf-8"
-    )
+    (dataset_dir / "index.jsonl").write_text(json.dumps(row, ensure_ascii=False) + "\n", encoding="utf-8")
 
     clips = harness.load_dataset(dataset_dir)
     assert clips[0]["reference"] == "human corrected"

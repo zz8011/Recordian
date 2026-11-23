@@ -1,4 +1,5 @@
 """Recording audit regressions: synthetic audio, no desktop or live services."""
+
 from __future__ import annotations
 
 import json
@@ -31,7 +32,9 @@ def _isolate_external_io(monkeypatch):
     monkeypatch.setattr(recording_controller, "begin_output_mute", lambda: None)
     monkeypatch.setattr(wayland_desktop, "select_desktop_committer", lambda committer: committer)
     monkeypatch.setattr(
-        pipeline, "send_remote_paste_from_args", lambda *args, **kwargs: {"enabled": False},
+        pipeline,
+        "send_remote_paste_from_args",
+        lambda *args, **kwargs: {"enabled": False},
     )
 
 
@@ -50,10 +53,15 @@ def test_cancel_during_final_preedit_never_commits(monkeypatch):
     monkeypatch.setattr(linux_commit, "_fcitx_busctl_call", blocked_call)
     asr = _ScriptedSession([""], finish_text="最终文本")
     worker = _start_realtime_asr_worker(
-        args=_worker_args(), provider=_RealtimeProvider(asr), record_handle=_record_handle(1),
-        committer=linux_commit.FcitxCommitter(), enable_local_commit=True,
-        auto_hard_enter=False, resolve_hotwords=lambda: [],
-        normalize_final_text=lambda text: text, on_state=lambda event: None,
+        args=_worker_args(),
+        provider=_RealtimeProvider(asr),
+        record_handle=_record_handle(1),
+        committer=linux_commit.FcitxCommitter(),
+        enable_local_commit=True,
+        auto_hard_enter=False,
+        resolve_hotwords=lambda: [],
+        normalize_final_text=lambda text: text,
+        on_state=lambda event: None,
     )
     assert worker is not None
     try:
@@ -117,13 +125,16 @@ def test_interrupted_refinement_preserves_entire_asr(monkeypatch, carried_sessio
     provider = _RealtimeProvider(_ScriptedSession([]))
     results, errors = [], []
     context = _pipeline_context(
-        provider=provider, committer=committer,
+        provider=provider,
+        committer=committer,
         args=_pipeline_args(enable_streaming_commit=False, enable_streaming_refine=True),
         prefetched_asr_text="第一项。第二项。第三项。",
         prefetched_commit_info={"committed": False, "outcome": "released_for_refine"} if carried_session else None,
         prefetched_outcome="released_for_refine" if carried_session else "no_composition",
-        composition_session=session, refiner=InterruptedRefiner(),
-        result_events=results, error_events=errors,
+        composition_session=session,
+        refiner=InterruptedRefiner(),
+        result_events=results,
+        error_events=errors,
     )
     pipeline.run_postprocess_pipeline(context)
     assert not errors
@@ -147,9 +158,13 @@ def test_failed_bound_refine_stream_keeps_original_without_fallback(monkeypatch)
 
     results, errors = [], []
     context = _pipeline_context(
-        provider=_RealtimeProvider(_ScriptedSession([])), committer=linux_commit.FcitxCommitter(),
-        args=_pipeline_args(), prefetched_asr_text="嗯，第一项。第二项。第三项。",
-        refiner=InterruptedRefiner(), result_events=results, error_events=errors,
+        provider=_RealtimeProvider(_ScriptedSession([])),
+        committer=linux_commit.FcitxCommitter(),
+        args=_pipeline_args(),
+        prefetched_asr_text="嗯，第一项。第二项。第三项。",
+        refiner=InterruptedRefiner(),
+        result_events=results,
+        error_events=errors,
     )
     pipeline.run_postprocess_pipeline(context)
     assert not errors
@@ -165,7 +180,9 @@ def test_buffered_continuous_text_survives_trailing_silence(tmp_path):
     session = _FakeCompositionSession()
     session.supports_segments = False
     harness = _Harness(
-        reader=_Reader(samples.tobytes()), session=session, refine_enabled=True,
+        reader=_Reader(samples.tobytes()),
+        session=session,
+        refine_enabled=True,
         provider=_FakeProvider(finals=["完整原文。", ""], partials=["完整原文。", ""]),
     )
     worker = harness.run()
@@ -175,11 +192,16 @@ def test_buffered_continuous_text_survives_trailing_silence(tmp_path):
     audio.write_wav_mono_f32(wav_path, samples)
     results, errors = [], []
     context = _pipeline_context(
-        provider=harness.provider, committer=SimpleNamespace(backend_name="fcitx"),
-        args=_pipeline_args(), prefetched_asr_text=worker.final_text,
-        prefetched_commit_info=worker.commit_info, prefetched_outcome=worker.outcome,
-        composition_session=session, prefetched_semif_applied=True,
-        result_events=results, error_events=errors,
+        provider=harness.provider,
+        committer=SimpleNamespace(backend_name="fcitx"),
+        args=_pipeline_args(),
+        prefetched_asr_text=worker.final_text,
+        prefetched_commit_info=worker.commit_info,
+        prefetched_outcome=worker.outcome,
+        composition_session=session,
+        prefetched_semif_applied=True,
+        result_events=results,
+        error_events=errors,
     )
     context.audio_path = wav_path
     pipeline.run_postprocess_pipeline(context)
@@ -188,10 +210,19 @@ def test_buffered_continuous_text_survives_trailing_silence(tmp_path):
     assert results[0]["result"]["text"] == "完整原文。"
 
 
-@pytest.mark.parametrize("outcome", [
-    "committed", "released_for_refine", "no_composition", "stale", "uncertain",
-    "cancelled", "suppressed", "uncertain_prefix",
-])
+@pytest.mark.parametrize(
+    "outcome",
+    [
+        "committed",
+        "released_for_refine",
+        "no_composition",
+        "stale",
+        "uncertain",
+        "cancelled",
+        "suppressed",
+        "uncertain_prefix",
+    ],
+)
 def test_prefetched_turn_never_rescans_or_replays_audio(monkeypatch, outcome):
     opened, writes = [], []
 
@@ -210,15 +241,20 @@ def test_prefetched_turn_never_rescans_or_replays_audio(monkeypatch, outcome):
     provider = _RealtimeProvider(_ScriptedSession([]))
     results, errors = [], []
     context = _pipeline_context(
-        provider=provider, committer=SimpleNamespace(backend_name="fake", commit=commit),
-        args=_pipeline_args(enable_streaming_commit=False), prefetched_asr_text="保留原文。",
+        provider=provider,
+        committer=SimpleNamespace(backend_name="fake", commit=commit),
+        args=_pipeline_args(enable_streaming_commit=False),
+        prefetched_asr_text="保留原文。",
         prefetched_commit_info={
-            "committed": outcome in {"committed", "uncertain_prefix"}, "outcome": status,
+            "committed": outcome in {"committed", "uncertain_prefix"},
+            "outcome": status,
             "segments_committed": 1 if outcome == "uncertain_prefix" else 0,
         },
-        prefetched_outcome=status, prefetched_composition_started=status != "no_composition",
+        prefetched_outcome=status,
+        prefetched_composition_started=status != "no_composition",
         composition_session=session if status == "released_for_refine" else None,
-        result_events=results, error_events=errors,
+        result_events=results,
+        error_events=errors,
     )
     pipeline.run_postprocess_pipeline(context)
     assert not errors
@@ -266,10 +302,14 @@ def test_fallback_silence_scan_reads_bounded_blocks(monkeypatch, silence):
     results, errors = [], []
     provider = _RealtimeProvider(_ScriptedSession([]))
     context = _pipeline_context(
-        provider=provider, committer=SimpleNamespace(
-            backend_name="fake", commit=lambda text: linux_commit.CommitResult("fake", True),
-        ), args=_pipeline_args(enable_streaming_commit=False),
-        result_events=results, error_events=errors,
+        provider=provider,
+        committer=SimpleNamespace(
+            backend_name="fake",
+            commit=lambda text: linux_commit.CommitResult("fake", True),
+        ),
+        args=_pipeline_args(enable_streaming_commit=False),
+        result_events=results,
+        error_events=errors,
     )
     pipeline.run_postprocess_pipeline(context)
     assert not errors
@@ -278,9 +318,14 @@ def test_fallback_silence_scan_reads_bounded_blocks(monkeypatch, silence):
     assert results[0]["result"]["text"] == ("" if silence else "全文兜底")
 
 
-@pytest.mark.parametrize("frame, expected", [
-    ([16384], 0.5), ([16384, 0], 0.25), ([16384, -16384], 0.0),
-])
+@pytest.mark.parametrize(
+    "frame, expected",
+    [
+        ([16384], 0.5),
+        ([16384, 0], 0.25),
+        ([16384, -16384], 0.0),
+    ],
+)
 def test_chunked_rms_preserves_pcm16_mono_downmix(tmp_path, frame, expected):
     path = tmp_path / "rms.wav"
     samples = np.tile(np.array(frame, dtype="<i2"), (32001, 1))
@@ -305,7 +350,10 @@ def test_empty_wav_rms_retains_inconclusive_result(tmp_path):
 @pytest.mark.parametrize("route", ["oneshot_refine", "carried_stream_refine", "file_stream_refine"])
 @pytest.mark.parametrize("capture_samples", [False, True])
 def test_refinement_logs_counts_while_ui_and_opt_in_capture_keep_text(
-    monkeypatch, tmp_path, route, capture_samples,
+    monkeypatch,
+    tmp_path,
+    route,
+    capture_samples,
 ):
     original = "合成审计原文 synthetic_private_ASR_7f4e 号样本记录。"
     refined = "合成审计精炼 synthetic_private_refined_4a9b。"
@@ -335,15 +383,22 @@ def test_refinement_logs_counts_while_ui_and_opt_in_capture_keep_text(
     session = committer.begin_composition("") if carried else None
     events, results, errors = [], [], []
     context = _pipeline_context(
-        provider=Provider(), committer=committer, refiner=Refiner(),
+        provider=Provider(),
+        committer=committer,
+        refiner=Refiner(),
         args=_pipeline_args(
-            enable_streaming_commit=route != "oneshot_refine", enable_streaming_refine=carried,
-            capture_refine_samples=capture_samples, capture_refine_samples_path=str(capture_path),
+            enable_streaming_commit=route != "oneshot_refine",
+            enable_streaming_refine=carried,
+            capture_refine_samples=capture_samples,
+            capture_refine_samples_path=str(capture_path),
         ),
         prefetched_asr_text=original if carried else "",
         prefetched_commit_info={"committed": False, "outcome": "released_for_refine"} if carried else None,
         prefetched_outcome="released_for_refine" if carried else "",
-        composition_session=session, state_events=events, result_events=results, error_events=errors,
+        composition_session=session,
+        state_events=events,
+        result_events=results,
+        error_events=errors,
     )
     pipeline.run_postprocess_pipeline(context)
     assert not errors
@@ -377,8 +432,12 @@ def test_file_asr_ui_partial_keeps_text_without_full_text_logs(monkeypatch):
 
     events, results, errors = [], [], []
     context = _pipeline_context(
-        provider=Provider(), committer=linux_commit.FcitxCommitter(), args=_pipeline_args(),
-        state_events=events, result_events=results, error_events=errors,
+        provider=Provider(),
+        committer=linux_commit.FcitxCommitter(),
+        args=_pipeline_args(),
+        state_events=events,
+        result_events=results,
+        error_events=errors,
     )
     pipeline.run_postprocess_pipeline(context)
     assert not errors

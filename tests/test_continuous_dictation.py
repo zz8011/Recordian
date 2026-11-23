@@ -8,6 +8,7 @@ raw number/URL seam is tested against the production formatting chain, not
 against fake rules. Timing constants come from duration_guard and are
 monkeypatched down where a short segment helps.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -43,6 +44,7 @@ _CORRECTOR_ARGS = argparse.Namespace(
 # ---------------------------------------------------------------------------
 # Fakes
 # ---------------------------------------------------------------------------
+
 
 def _pcm(seconds: float, amp: float) -> bytes:
     n = int(round(seconds * RATE))
@@ -142,9 +144,7 @@ class _FakeProvider:
         cancel_event: threading.Event | None = None,
     ) -> _FakeASRSession:
         index = len(self.open_calls)
-        self.open_calls.append(
-            {"hotwords": hotwords, "prefix_context": prefix_context, "cancel_event": cancel_event}
-        )
+        self.open_calls.append({"hotwords": hotwords, "prefix_context": prefix_context, "cancel_event": cancel_event})
         if index in self.fail_on_open:
             raise self.fail_on_open[index]
         final = self.finals[index] if index < len(self.finals) else None
@@ -279,6 +279,7 @@ class _Harness:
 # Held-tail splitting / joining (unit)
 # ---------------------------------------------------------------------------
 
+
 def test_split_held_tail_holds_raw_number_url_and_word() -> None:
     assert _split_held_tail("价格是一百二") == ("价格是", "一百二")
     assert _split_held_tail("参见www点exa") == ("参见", "www点exa")
@@ -347,12 +348,15 @@ def test_join_raw_tail_english_word_gets_one_space() -> None:
 # Full rotation: 90 s virtual audio, exact samples, 4 sessions
 # ---------------------------------------------------------------------------
 
+
 def test_ninety_seconds_rotate_exact_samples_and_single_capture() -> None:
     payload = (
-        _speech(20.0) + _silence(0.4)   # soft cut at 20.4 s
-        + _speech(24.0)                 # hard cut at 24 s
-        + _speech(23.6) + _silence(0.4)  # cut at 24 s
-        + _speech(21.6)                 # EOF tail
+        _speech(20.0)
+        + _silence(0.4)  # soft cut at 20.4 s
+        + _speech(24.0)  # hard cut at 24 s
+        + _speech(23.6)
+        + _silence(0.4)  # cut at 24 s
+        + _speech(21.6)  # EOF tail
     )
     assert len(payload) == 90 * RATE * BPS
     provider = _FakeProvider(["第一段。", "第二段。", "第三段。", "最后一段。"])
@@ -417,8 +421,7 @@ def test_wayland_echo_downgrades_any_editor_before_first_segment() -> None:
         return result
 
     session.update_preedit = update_and_downgrade  # type: ignore[method-assign]
-    h = _Harness(reader=_Reader(_speech(25.0)),
-                 provider=_FakeProvider(["第一段。", "第二段。"]), session=session)
+    h = _Harness(reader=_Reader(_speech(25.0)), provider=_FakeProvider(["第一段。", "第二段。"]), session=session)
     worker = h.run()
 
     assert session.segments == []
@@ -431,11 +434,12 @@ def test_segments_unsafe_refusal_buffers_tail_after_committed_prefix() -> None:
     session = _FakeCompositionSession()
     session.fail_segment_at = 2
     session.fail_segment_outcome = "buffered"
-    payload = (_speech(20.0) + _silence(0.4) + _speech(24.0)
-               + _speech(23.6) + _silence(0.4) + _speech(21.6))
-    h = _Harness(reader=_Reader(payload),
-                 provider=_FakeProvider(["第一段。", "第二段。", "第三段。", "最后一段。"]),
-                 session=session)
+    payload = _speech(20.0) + _silence(0.4) + _speech(24.0) + _speech(23.6) + _silence(0.4) + _speech(21.6)
+    h = _Harness(
+        reader=_Reader(payload),
+        provider=_FakeProvider(["第一段。", "第二段。", "第三段。", "最后一段。"]),
+        session=session,
+    )
     worker = h.run()
 
     assert session.segments == ["第一段。", "第二段。"]
@@ -463,7 +467,8 @@ def test_auto_enter_failure_is_visible_after_successful_text_commit(monkeypatch)
         lambda _: _Result(False, detail="hard_enter_failed:focus_changed"),
     )
     h = _Harness(
-        reader=_Reader(_speech(1.0)), provider=_FakeProvider(["文字"]),
+        reader=_Reader(_speech(1.0)),
+        provider=_FakeProvider(["文字"]),
         auto_hard_enter=True,
     )
     worker = h.run()
@@ -475,6 +480,7 @@ def test_auto_enter_failure_is_visible_after_successful_text_commit(monkeypatch)
 # ---------------------------------------------------------------------------
 # Raw held tail across a boundary, through the REAL formatting chain
 # ---------------------------------------------------------------------------
+
 
 def _short_segment_settings(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(guard, "CONTINUOUS_SEGMENT_MIN_S", 1.0)
@@ -563,6 +569,7 @@ def test_display_normalisation_does_not_rewrite_held_tail(monkeypatch: pytest.Mo
 # ---------------------------------------------------------------------------
 # Raw held tail across a boundary: 幺 / 百分数 / explicit number markers
 # ---------------------------------------------------------------------------
+
 
 def test_boundary_next_yi_stays_chinese_and_port_tail_joins(monkeypatch: pytest.MonkeyPatch) -> None:
     """The e2e counterexample shape: at the segment cut after
@@ -667,6 +674,7 @@ def test_boundary_keeps_marker_connector_and_digits_for_next_segment(
 # Busy model at handoff: fail closed, keep the committed prefix
 # ---------------------------------------------------------------------------
 
+
 def test_busy_rejection_at_rotation_keeps_prefix_and_stops(monkeypatch: pytest.MonkeyPatch) -> None:
     _short_segment_settings(monkeypatch)
     from recordian.providers.confucius_asr import ConfuciusBusyRejected
@@ -691,6 +699,7 @@ def test_busy_rejection_at_rotation_keeps_prefix_and_stops(monkeypatch: pytest.M
 # ---------------------------------------------------------------------------
 # EOF during handoff: one tail flush, no empty new socket
 # ---------------------------------------------------------------------------
+
 
 def test_eof_right_after_boundary_opens_no_empty_socket(monkeypatch: pytest.MonkeyPatch) -> None:
     _short_segment_settings(monkeypatch)
@@ -725,6 +734,7 @@ def test_eof_mid_segment_flushes_tail_once(monkeypatch: pytest.MonkeyPatch) -> N
 # ---------------------------------------------------------------------------
 # Cancel paths: zero preedit/segment/final writes after the cancel lands
 # ---------------------------------------------------------------------------
+
 
 def test_cancel_mid_stream_commits_nothing_and_retracts(monkeypatch: pytest.MonkeyPatch) -> None:
     _short_segment_settings(monkeypatch)
@@ -824,6 +834,7 @@ def test_cancel_after_segment_keeps_prefix_reports_cancelled(monkeypatch: pytest
 # Bounded fanout overflow
 # ---------------------------------------------------------------------------
 
+
 def test_monitor_overflow_is_explicit_and_fatal() -> None:
     payload = _speech(30.0)
     provider = _FakeProvider(["不会到达"])
@@ -841,6 +852,7 @@ def test_monitor_overflow_is_explicit_and_fatal() -> None:
 # ---------------------------------------------------------------------------
 # Stale / uncertain IME outcomes: no duplicates, no retry, no fallback
 # ---------------------------------------------------------------------------
+
 
 def test_stale_preedit_stops_without_any_commit() -> None:
     payload = _speech(1.0)
@@ -861,6 +873,7 @@ def test_stale_preedit_stops_without_any_commit() -> None:
 # ime_stale rebind: re-validate through BeginSession, resume preedit-only
 # ---------------------------------------------------------------------------
 
+
 def test_preedit_stale_rebinds_and_turn_completes() -> None:
     stale_session = _FakeCompositionSession()
     stale_session.preedit_result = _Result(False, outcome="stale", detail="preedit_stale")
@@ -873,7 +886,9 @@ def test_preedit_stale_rebinds_and_turn_completes() -> None:
 
     provider = _FakeProvider(["文本"], partials=["文本"])
     h = _Harness(
-        reader=_Reader(_speech(1.0)), provider=provider, session=stale_session,
+        reader=_Reader(_speech(1.0)),
+        provider=provider,
+        session=stale_session,
         rebind_session=_rebind,
     )
     worker = h.run()
@@ -903,7 +918,9 @@ def test_segment_commit_stale_rebinds_and_buffers_piece(
     rebound = _FakeCompositionSession()
     provider = _FakeProvider(["第一段。", "第二段。", "第三段。"])
     h = _Harness(
-        reader=_Reader(payload), provider=provider, session=session,
+        reader=_Reader(payload),
+        provider=provider,
+        session=session,
         rebind_session=lambda: rebound,
     )
     worker = h.run()
@@ -933,7 +950,9 @@ def test_rebind_refused_keeps_fail_closed() -> None:
 
     provider = _FakeProvider(["不应等到最终识别"], partials=["已经说到一半"])
     h = _Harness(
-        reader=_Reader(_speech(1.0)), provider=provider, session=session,
+        reader=_Reader(_speech(1.0)),
+        provider=provider,
+        session=session,
         rebind_session=_refused,
     )
     worker = h.run()
@@ -981,8 +1000,10 @@ def test_rebind_budget_exhausted_fails_closed(monkeypatch: pytest.MonkeyPatch) -
     payload = (_speech(1.5) + _silence(0.4)) * 4 + _speech(0.5)
     provider = _FakeProvider(["第一段。", "第二段。", "第三段。", "第四段。", "尾巴。"])
     h = _Harness(
-        reader=_Reader(payload), provider=provider,
-        session=_StaleOnNewTextSession(seen), rebind_session=_rebind,
+        reader=_Reader(payload),
+        provider=provider,
+        session=_StaleOnNewTextSession(seen),
+        rebind_session=_rebind,
     )
     worker = h.run()
 
@@ -1010,7 +1031,9 @@ def test_interrupted_first_partial_remains_copyable_without_commit(outcome: str)
     session.preedit_result = _Result(False, outcome=outcome, detail="interrupted")
     provider = _FakeProvider(["不应等到最终识别"], partials=["已经说到一半"])
     worker = _Harness(
-        reader=_Reader(_speech(1.0)), provider=provider, session=session,
+        reader=_Reader(_speech(1.0)),
+        provider=provider,
+        session=session,
     ).run()
     assert worker.final_text == "已经说到一半"
     assert worker.commit_info["committed"] is False
@@ -1100,7 +1123,7 @@ def test_corrector_context_is_bounded_committed_tail(monkeypatch: pytest.MonkeyP
     assert h.corrector_contexts, "corrector was built at least once"
     assert all(len(c) <= guard.CONTINUOUS_CONTEXT_CHARS for c in h.corrector_contexts)
     # Provider prefix_context is the same bounded committed tail.
-    assert provider.open_calls[1].get("prefix_context") == long_first[-guard.CONTINUOUS_CONTEXT_CHARS:]
+    assert provider.open_calls[1].get("prefix_context") == long_first[-guard.CONTINUOUS_CONTEXT_CHARS :]
 
 
 def test_refine_released_only_when_no_segment_committed() -> None:
@@ -1133,6 +1156,7 @@ def test_refine_enabled_buffers_segments_and_releases_whole_utterance() -> None:
 # ---------------------------------------------------------------------------
 # IME token TTL keepalive during long silence (>120 s native inactivity TTL)
 # ---------------------------------------------------------------------------
+
 
 def test_long_silence_refreshes_same_token_then_commits() -> None:
     # Production 30 s audio-counted refresh; well under the 120 s token TTL.
@@ -1214,9 +1238,7 @@ class _BlockingJudgeSession:
         self.calls = 0
         self.closed = False
 
-    def post(
-        self, url: str, json: dict | None = None, timeout: float | None = None
-    ) -> _PeakedResponse:
+    def post(self, url: str, json: dict | None = None, timeout: float | None = None) -> _PeakedResponse:
         self.calls += 1
         self._entered.set()
         assert self._release.wait(timeout=5.0), "SemIf request was never released"
@@ -1257,8 +1279,12 @@ def test_same_snapshot_partial_poll_shows_ready_judgment_before_finish(
         return corrector
 
     session = _FakeCompositionSession()
-    h = _Harness(reader=_Reader(_speech(1.5) + _silence(0.4) + _speech(0.5)), provider=provider,
-                 session=session, build_corrector=_build)
+    h = _Harness(
+        reader=_Reader(_speech(1.5) + _silence(0.4) + _speech(0.5)),
+        provider=provider,
+        session=session,
+        build_corrector=_build,
+    )
 
     # Each preedit is stamped with how many ASR finish() calls had happened:
     # the ready correction must be displayed before the first finish.
@@ -1318,9 +1344,7 @@ class _RoleJudgeSession:
         self.payloads: list[dict[str, object]] = []
         self.closed = False
 
-    def post(
-        self, url: str, json: dict | None = None, timeout: float | None = None
-    ) -> _PeakedResponse:
+    def post(self, url: str, json: dict | None = None, timeout: float | None = None) -> _PeakedResponse:
         self.payloads.append(json)  # type: ignore[arg-type]
         questions = json["questions"]  # type: ignore[index]
         assert set(questions) == {"role"}, questions
@@ -1352,18 +1376,14 @@ def test_segment_with_twin_software_clauses_commits_jev_at_the_real_boundary(
 
     _short_segment_settings(monkeypatch)
     judge = _RoleJudgeSession()
-    monkeypatch.setattr(
-        semif_judge, "require_requests", lambda: SimpleNamespace(Session=lambda: judge)
-    )
+    monkeypatch.setattr(semif_judge, "require_requests", lambda: SimpleNamespace(Session=lambda: judge))
 
     segment = "服务器上的jeff模型怎么样，端口1234，服务器上的jeff模型怎么样"
     provider = _FakeProvider([segment, "服务器上的jeff模型怎么样，比例35%。"])
     h = _Harness(
         reader=_Reader(_speech(1.5) + _silence(0.4) + _speech(0.5)),
         provider=provider,
-        build_corrector=lambda context="": corrector_from_args(
-            _ALIAS_SEMIF_ARGS, [], context=context
-        ),
+        build_corrector=lambda context="": corrector_from_args(_ALIAS_SEMIF_ARGS, [], context=context),
     )
     worker = h.run()
 
@@ -1389,18 +1409,14 @@ def test_segment_never_rewrites_a_bare_helper_person_name(
 
     _short_segment_settings(monkeypatch)
     judge = _RoleJudgeSession()
-    monkeypatch.setattr(
-        semif_judge, "require_requests", lambda: SimpleNamespace(Session=lambda: judge)
-    )
+    monkeypatch.setattr(semif_judge, "require_requests", lambda: SimpleNamespace(Session=lambda: judge))
 
     segment = "打开jeff工具检查这个项目，Jeff帮我调试脚本"
     provider = _FakeProvider([segment, "记录完成。"])
     h = _Harness(
         reader=_Reader(_speech(1.5) + _silence(0.4) + _speech(0.5)),
         provider=provider,
-        build_corrector=lambda context="": corrector_from_args(
-            _ALIAS_SEMIF_ARGS, [], context=context
-        ),
+        build_corrector=lambda context="": corrector_from_args(_ALIAS_SEMIF_ARGS, [], context=context),
     )
     worker = h.run()
 
@@ -1456,9 +1472,7 @@ def test_repeated_text_in_a_new_segment_is_submitted_not_polled(
 
     assert len(built) >= 2, "a new corrector is built after the segment commit"
     assert built[0].closed is True
-    assert built[1].submits == ["重复。"], (
-        "the first partial of the new segment must submit, not poll a stale snapshot"
-    )
+    assert built[1].submits == ["重复。"], "the first partial of the new segment must submit, not poll a stale snapshot"
     assert h.session.segments == ["重复。"]
     assert worker.outcome == "committed"
 
@@ -1466,6 +1480,7 @@ def test_repeated_text_in_a_new_segment_is_submitted_not_polled(
 # ---------------------------------------------------------------------------
 # Idle keepalive must never replay an already committed prefix
 # ---------------------------------------------------------------------------
+
 
 def test_idle_keepalive_after_segment_commit_never_replays_prefix(
     monkeypatch: pytest.MonkeyPatch,
@@ -1491,11 +1506,9 @@ def test_idle_keepalive_after_segment_commit_never_replays_prefix(
 
     assert session.segments == ["第一段。"]
     assert committed_at, "the first segment must commit"
-    after = session.preedits[committed_at[0]:]
+    after = session.preedits[committed_at[0] :]
     assert any(p == "" for p in after), "the idle keepalive must re-touch the same token"
-    assert all("第一段。" not in p for p in after), (
-        "a committed prefix must never be pushed back into the preedit"
-    )
+    assert all("第一段。" not in p for p in after), "a committed prefix must never be pushed back into the preedit"
     assert session.cancelled == 0, "the keepalive stays on the same composition token"
     assert worker.segments_committed == 1
     assert worker.final_text == "第一段。尾巴。"
@@ -1505,6 +1518,7 @@ def test_idle_keepalive_after_segment_commit_never_replays_prefix(
 # ---------------------------------------------------------------------------
 # Sub-frame reads: bounded alignment, no spin, no duplicated samples
 # ---------------------------------------------------------------------------
+
 
 class _ShortReadReader:
     """Delivers scripted short reads before falling back to full chunks."""
@@ -1586,11 +1600,15 @@ def test_wayland_clipboard_worker_rotates_65_seconds_and_pastes_once(monkeypatch
     monkeypatch.setattr(desktop.subprocess, "run", lambda cmd, **kw: calls.append((cmd, kw)))
     args = argparse.Namespace(**vars(_CORRECTOR_ARGS), enable_streaming_commit=True)
     worker = realtime_asr._start_realtime_asr_worker(
-        args=args, provider=provider,
+        args=args,
+        provider=provider,
         record_handle=SimpleNamespace(monitor_sample_rate=RATE, monitor_channels=1),
         committer=desktop.WaylandClipboardCommitter("target"),
-        enable_local_commit=True, auto_hard_enter=False, resolve_hotwords=lambda: [],
-        normalize_final_text=_normalize_final_text, on_state=lambda _: None,
+        enable_local_commit=True,
+        auto_hard_enter=False,
+        resolve_hotwords=lambda: [],
+        normalize_final_text=_normalize_final_text,
+        on_state=lambda _: None,
         refine_enabled=refine_enabled,
     )
     assert worker is not None
@@ -1625,23 +1643,33 @@ def test_controller_cancel_stops_final_particle_request(monkeypatch, at_registra
 
     _short_segment_settings(monkeypatch)
     calls = []
+
     def ask(*args, **kwargs):
         calls.append(h.cancel_event.is_set())
         return {}
+
     monkeypatch.setattr(pc, "request_jev_choices", ask)
+
     def finish(self, text):
         if not at_registration:
             h.worker.cancel_session()
         return text
+
     monkeypatch.setattr(StreamingHotwordCorrector, "finish", finish)
     args = SimpleNamespace(enable_particle_correction=True, correction_provider="jev")
+
     def build(context=""):
         result = corrector_from_args(args, [])
         if at_registration:
             h.worker.cancel_session()
         return result
-    payload = _speech(.6) if at_eof else _speech(1.5) + _silence(.4) + _speech(5.0)
-    h = _Harness(reader=_Reader(payload), provider=_FakeProvider(["认真仔细的检查。"], speech_final="认真仔细的检查。"), build_corrector=build)
+
+    payload = _speech(0.6) if at_eof else _speech(1.5) + _silence(0.4) + _speech(5.0)
+    h = _Harness(
+        reader=_Reader(payload),
+        provider=_FakeProvider(["认真仔细的检查。"], speech_final="认真仔细的检查。"),
+        build_corrector=build,
+    )
     worker = h.run()
     assert worker.outcome == "cancelled"
     assert calls == []

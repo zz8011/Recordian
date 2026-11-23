@@ -1,4 +1,5 @@
 """测试性能基准测试框架"""
+
 from __future__ import annotations
 
 import time

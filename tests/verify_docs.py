@@ -19,6 +19,7 @@ def check_file(filepath, keywords):
     except Exception as e:
         return [f"  ❌ 错误: {e}"]
 
+
 def main():
     print("=" * 60)
     print("文档验证")
@@ -70,6 +71,7 @@ def main():
     else:
         print("❌ 部分文档验证失败")
         return 1
+
 
 if __name__ == "__main__":
     sys.exit(main())

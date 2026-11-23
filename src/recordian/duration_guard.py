@@ -23,6 +23,7 @@ comment. If the server default ever changes, change BOTH places.
 No settings are added on purpose: the limit is fixed so it cannot drift
 away from the server budget via user configuration.
 """
+
 from __future__ import annotations
 
 # Mirrors server/confucius_streaming_server.py DEFAULT_MAX_SESSION_SECONDS.

@@ -59,6 +59,7 @@ def test_final_only_equal_length_repeated_clause_edits(monkeypatch):
 
 def test_fluent_candidate_context_keeps_original_edit_offsets(monkeypatch):
     """The judge must see fluent words as well as the exact character it may edit."""
+
     def ask(timeout, state, questions, **options):
         answers = {}
         for name, question in questions.items():
@@ -70,9 +71,7 @@ def test_fluent_candidate_context_keeps_original_edit_offsets(monkeypatch):
 
     monkeypatch.setattr(pc, "request_jev_choices", ask)
     corrector = pc.ParticleCorrector(Identity(), timeout_s=1.5)
-    assert corrector.finish("她把流程讲的很清楚；她把流程讲的很清楚。") == (
-        "她把流程讲得很清楚；她把流程讲的很清楚。"
-    )
+    assert corrector.finish("她把流程讲的很清楚；她把流程讲的很清楚。") == ("她把流程讲得很清楚；她把流程讲的很清楚。")
 
 
 @pytest.mark.parametrize("text", ["稳妥的安排", "深入的研究。", "我跑的快！"])
@@ -84,11 +83,13 @@ def test_context_poor_fragments_are_preserved_without_judgment(monkeypatch, text
 
 def test_judge_receives_neighboring_clauses_for_nominal_context(monkeypatch):
     text = "先分配值班人员，细心的负责复核记录，其他人整理仓库。"
+
     def ask(timeout, state, questions, **options):
         context = next(iter(questions.values()))["instructions"]
         assert "先分配值班人员" in context
         assert "其他人整理仓库" in context
         return dict.fromkeys(questions, "的")
+
     monkeypatch.setattr(pc, "request_jev_choices", ask)
     corrector = pc.ParticleCorrector(Identity(), timeout_s=1.5)
     assert corrector.finish(text) == text
@@ -96,6 +97,7 @@ def test_judge_receives_neighboring_clauses_for_nominal_context(monkeypatch):
 
 def test_long_context_is_bounded_and_keeps_late_candidate(monkeypatch):
     text = "资料已经归档。" * 200 + "她把流程讲的很清楚。" * 200
+
     def ask(timeout, state, questions, **options):
         assert len(state) < 700
         assert len(questions) == 1
@@ -103,16 +105,17 @@ def test_long_context_is_bounded_and_keeps_late_candidate(monkeypatch):
         assert len(context) < 700
         assert "她把流程讲【的】很清楚" in context
         return dict.fromkeys(questions, "得")
+
     monkeypatch.setattr(pc, "request_jev_choices", ask)
     corrector = pc.ParticleCorrector(Identity(), timeout_s=1.5)
     assert corrector.finish(text) == (
-        "资料已经归档。" * 200 + "她把流程讲的很清楚。" * 2
-        + "她把流程讲得很清楚。" * 196 + "她把流程讲的很清楚。" * 2
+        "资料已经归档。" * 200 + "她把流程讲的很清楚。" * 2 + "她把流程讲得很清楚。" * 196 + "她把流程讲的很清楚。" * 2
     )
 
 
 def test_repeated_clause_does_not_apply_a_choice_to_other_contexts(monkeypatch):
     text = "请你，仔细的检查，然后提交报告。" + "材料已经归档。" * 80 + "这里缺少，仔细的检查，只有敷衍应付。"
+
     def ask(timeout, state, questions, **options):
         assert len(questions) == 1
         answers = {}
@@ -124,6 +127,7 @@ def test_repeated_clause_does_not_apply_a_choice_to_other_contexts(monkeypatch):
                 assert "这里缺少" in context
                 answers[name] = "的"
         return answers
+
     monkeypatch.setattr(pc, "request_jev_choices", ask)
     corrector = pc.ParticleCorrector(Identity(), timeout_s=1.5)
     assert corrector.finish(text) == text.replace("仔细的检查", "仔细地检查", 1)
@@ -131,12 +135,14 @@ def test_repeated_clause_does_not_apply_a_choice_to_other_contexts(monkeypatch):
 
 def test_adjacent_repetitions_across_sentences_do_not_share_a_choice(monkeypatch):
     text = "这里缺少，仔细的检查。仔细的检查，才能发现问题。"
+
     def ask(timeout, state, questions, **options):
         assert len(questions) == 1
         return {
             name: "的" if "这里缺少，仔细【的】检查。" in question["instructions"] else "地"
             for name, question in questions.items()
         }
+
     monkeypatch.setattr(pc, "request_jev_choices", ask)
     corrector = pc.ParticleCorrector(Identity(), timeout_s=1.5)
     assert corrector.finish(text) == text
@@ -243,10 +249,12 @@ def test_particle_only_oneshot_final_entry(monkeypatch):
     from recordian.postprocess_pipeline import _apply_final_semif
 
     calls = []
+
     def ask(timeout, state, questions, **options):
         calls.append(questions)
-        return dict.fromkeys(questions, '地')
-    monkeypatch.setattr(pc, 'request_jev_choices', ask)
-    args = SimpleNamespace(enable_particle_correction=True, enable_semif_correction=False, correction_provider='jev')
-    assert _apply_final_semif('认真仔细的检查。', args=args, hotwords=[], on_state=lambda _: None) == '认真仔细地检查。'
+        return dict.fromkeys(questions, "地")
+
+    monkeypatch.setattr(pc, "request_jev_choices", ask)
+    args = SimpleNamespace(enable_particle_correction=True, enable_semif_correction=False, correction_provider="jev")
+    assert _apply_final_semif("认真仔细的检查。", args=args, hotwords=[], on_state=lambda _: None) == "认真仔细地检查。"
     assert len(calls) == 1

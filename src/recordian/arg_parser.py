@@ -3,6 +3,7 @@
 Provides :func:`build_parser`, :func:`parse_args_with_config`,
 :func:`save_runtime_config`, and hotkey-spec parsing helpers.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -39,7 +40,9 @@ from .voice_wake import (
 # ---------------------------------------------------------------------------
 DEFAULT_CONFIG_PATH = "~/.config/recordian/hotkey.json"
 
-_DEFAULT_WAKE_MODEL_DIR = Path(__file__).parent.parent.parent / "models" / "sherpa-onnx-kws-zipformer-wenetspeech-3.3M-2024-01-01"
+_DEFAULT_WAKE_MODEL_DIR = (
+    Path(__file__).parent.parent.parent / "models" / "sherpa-onnx-kws-zipformer-wenetspeech-3.3M-2024-01-01"
+)
 _DEFAULT_WAKE_ENCODER = _DEFAULT_WAKE_MODEL_DIR / "encoder-epoch-12-avg-2-chunk-16-left-64.int8.onnx"
 _DEFAULT_WAKE_DECODER = _DEFAULT_WAKE_MODEL_DIR / "decoder-epoch-12-avg-2-chunk-16-left-64.int8.onnx"
 _DEFAULT_WAKE_JOINER = _DEFAULT_WAKE_MODEL_DIR / "joiner-epoch-12-avg-2-chunk-16-left-64.int8.onnx"
@@ -359,8 +362,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=1.6,
         help="Audio window length (seconds) used for owner voiceprint verification",
     )
-    parser.add_argument("--sound-on-path", default=str(_DEFAULT_SOUND_ON), help="Global cue sound when recording starts")
-    parser.add_argument("--sound-off-path", default=str(_DEFAULT_SOUND_OFF), help="Global cue sound when recording ends")
+    parser.add_argument(
+        "--sound-on-path", default=str(_DEFAULT_SOUND_ON), help="Global cue sound when recording starts"
+    )
+    parser.add_argument(
+        "--sound-off-path", default=str(_DEFAULT_SOUND_OFF), help="Global cue sound when recording ends"
+    )
     parser.add_argument("--wake-beep-path", default="", help="Deprecated legacy cue path, kept for compatibility")
     parser.add_argument("--wake-encoder", default=str(_DEFAULT_WAKE_ENCODER))
     parser.add_argument("--wake-decoder", default=str(_DEFAULT_WAKE_DECODER))

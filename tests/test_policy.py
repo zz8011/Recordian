@@ -60,10 +60,12 @@ def test_confidence_threshold_boundary() -> None:
 
 def test_multiple_conditions_combination() -> None:
     """测试多条件组合"""
-    policy = Pass2Policy(Pass2PolicyConfig(
-        confidence_threshold=0.9,
-        english_ratio_threshold=0.3,
-    ))
+    policy = Pass2Policy(
+        Pass2PolicyConfig(
+            confidence_threshold=0.9,
+            english_ratio_threshold=0.3,
+        )
+    )
 
     # 低置信度 + 高英文比例
     result = ASRResult(text="hello world", confidence=0.85, english_ratio=0.8)

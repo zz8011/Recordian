@@ -17,8 +17,12 @@ class AgentCandidate:
 
 
 AGENTS = (
-    ("hermes", "Hermes"), ("codex", "Codex"), ("claude", "Claude Code"),
-    ("gemini", "Gemini CLI"), ("opencode", "OpenCode"), ("aider", "Aider"),
+    ("hermes", "Hermes"),
+    ("codex", "Codex"),
+    ("claude", "Claude Code"),
+    ("gemini", "Gemini CLI"),
+    ("opencode", "OpenCode"),
+    ("aider", "Aider"),
 )
 
 
@@ -84,7 +88,9 @@ def language_choices(provider, current="auto"):
 def read_autostart():
     """Read only this unit's enablement; never starts or changes a unit."""
     try:
-        state = _query(["systemctl", "--user", "show", "recordian-desktop.service", "--property=UnitFileState", "--value"]).strip()
+        state = _query(
+            ["systemctl", "--user", "show", "recordian-desktop.service", "--property=UnitFileState", "--value"]
+        ).strip()
     except (OSError, ValueError, subprocess.SubprocessError):
         return None
     return True if state == "enabled" else False if state == "disabled" else None

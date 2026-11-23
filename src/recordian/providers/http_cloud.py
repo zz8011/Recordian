@@ -70,10 +70,7 @@ def _describe_transcribe_failure(
 ) -> str:
     """把 ASR 失败翻译成一句可读的中文（overlay 只显示前 72 个字符，重点放前面）。"""
     if status == 404:
-        return (
-            f"ASR 后端没有运行中的模型「{model_name}」（HTTP 404）；"
-            f"请在 GPUStack 启动该模型实例（{endpoint}）"
-        )
+        return f"ASR 后端没有运行中的模型「{model_name}」（HTTP 404）；请在 GPUStack 启动该模型实例（{endpoint}）"
     if status in {502, 503, 504}:
         return f"ASR 后端暂时不可用（HTTP {status}），模型实例可能正在重启（{endpoint}）"
     if status >= 500:
@@ -180,9 +177,7 @@ def _coerce_asr_text(value: object) -> str:
     text = str(value).strip()
     if not text:
         return ""
-    if (text.startswith("[") and text.endswith("]")) or (
-        text.startswith("(") and text.endswith(")")
-    ):
+    if (text.startswith("[") and text.endswith("]")) or (text.startswith("(") and text.endswith(")")):
         try:
             import ast
 
@@ -196,8 +191,6 @@ def _coerce_asr_text(value: object) -> str:
             return ""
         return str(parsed).strip()
     return text
-
-
 
 
 def _group_hotword_variants(hotwords: list[str]) -> list[tuple[str, list[str]]]:
@@ -327,9 +320,7 @@ class _HttpCloudRealtimeSession:
         except Exception as exc:
             # Never pretend a failed finish succeeded: the last partial is a
             # preview, not a confirmed transcript.
-            raise RuntimeError(
-                f"realtime ASR finish failed: {type(exc).__name__}: {exc}"
-            ) from exc
+            raise RuntimeError(f"realtime ASR finish failed: {type(exc).__name__}: {exc}") from exc
         finally:
             self._close_http_session()
         text = _coerce_asr_text(body.get("text", "")) or self._last_text
@@ -440,15 +431,10 @@ class HttpCloudProvider(ASRProvider):
             "请优先按原样输出以下专有名词/产品名，不要替换成同音词：\n"
             + "\n".join(f"- {term}" for term in canonical_terms)
         )
-        alias_lines = [
-            f"{', '.join(aliases)} -> {preferred}"
-            for preferred, aliases in grouped
-            if aliases
-        ]
+        alias_lines = [f"{', '.join(aliases)} -> {preferred}" for preferred, aliases in grouped if aliases]
         if alias_lines:
             sections.append(
-                "如果听到接近以下说法，也优先归一为这些标准写法：\n"
-                + "\n".join(f"- {line}" for line in alias_lines)
+                "如果听到接近以下说法，也优先归一为这些标准写法：\n" + "\n".join(f"- {line}" for line in alias_lines)
             )
         return "\n".join(section.strip() for section in sections if section.strip())
 
@@ -464,7 +450,7 @@ class HttpCloudProvider(ASRProvider):
         suffix = "/audio/transcriptions"
         if not parsed.path.lower().endswith(suffix):
             return None
-        models_path = parsed.path[:-len(suffix)] + "/models"
+        models_path = parsed.path[: -len(suffix)] + "/models"
         return urlunparse(parsed._replace(path=models_path, params="", query="", fragment=""))
 
     def _candidate_model_names(self) -> list[str]:
@@ -661,7 +647,9 @@ class HttpCloudProvider(ASRProvider):
             headers["Authorization"] = f"Bearer {self.api_key}"
         return headers
 
-    def _build_openai_form_data(self, requests_module, headers: dict[str, str], *, hotwords: list[str]) -> dict[str, str]:  # noqa: ANN001
+    def _build_openai_form_data(
+        self, requests_module, headers: dict[str, str], *, hotwords: list[str]
+    ) -> dict[str, str]:  # noqa: ANN001
         form_data: dict[str, str] = {
             "model": self._resolve_openai_model_name(requests_module, headers),
         }
@@ -755,7 +743,7 @@ class HttpCloudProvider(ASRProvider):
                         tag_depth -= 1
                     else:
                         raise RuntimeError("流式 ASR 响应包含不匹配的关闭标签")
-                    buffered = buffered[index + len(tag):]
+                    buffered = buffered[index + len(tag) :]
                     continue
                 # Keep a possible language header pending until its ASR tag
                 # or confirmed completion; the word alone does not reject text.
@@ -766,7 +754,12 @@ class HttpCloudProvider(ASRProvider):
                 # Markers may straddle any token/SSE boundary. Retain their
                 # possible prefixes, including an incomplete opening marker.
                 keep = max(
-                    (size for tag in (asr_tag, end_tag) for size in range(1, len(tag)) if buffered.endswith(tag[:size])),
+                    (
+                        size
+                        for tag in (asr_tag, end_tag)
+                        for size in range(1, len(tag))
+                        if buffered.endswith(tag[:size])
+                    ),
                     default=0,
                 )
                 safe = buffered[:-keep] if keep else buffered
@@ -781,9 +774,7 @@ class HttpCloudProvider(ASRProvider):
         if buffered:
             # A short plain transcript is valid, but an unfinished Qwen ASR
             # header/opening marker must never become transcript text.
-            if any(
-                buffered.endswith(tag[:size]) for tag in (asr_tag, end_tag) for size in range(2, len(tag))
-            ):
+            if any(buffered.endswith(tag[:size]) for tag in (asr_tag, end_tag) for size in range(2, len(tag))):
                 raise RuntimeError("流式 ASR 响应包含未完成的协议前缀")
             if not tagged:
                 yield buffered

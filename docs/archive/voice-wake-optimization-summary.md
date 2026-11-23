@@ -290,6 +290,7 @@ while not stop:
 ```python
 cache = TTLCache(ttl_seconds=3600)
 
+
 def expensive_operation(key):
     cached = cache.get(key)
     if cached:

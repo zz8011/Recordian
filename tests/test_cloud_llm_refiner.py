@@ -1,4 +1,5 @@
 """测试 CloudLLMRefiner 云端精炼器"""
+
 from __future__ import annotations
 
 import pytest
@@ -286,7 +287,7 @@ class TestCloudLLMRefinerInit:
                     'data: {"choices":[{"delta":{"reasoning_content":"先想一想"}}]}',
                     'data: {"choices":[{"delta":{"content":"整理"}}]}',
                     'data: {"choices":[{"delta":{"content":"完成"},"finish_reason":"stop"}]}',
-                    'data: [DONE]',
+                    "data: [DONE]",
                 ]
                 for line in lines:
                     yield line.encode("utf-8")

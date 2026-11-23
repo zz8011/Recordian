@@ -7,7 +7,9 @@ from recordian.postprocess_pipeline import PostprocessPipelineContext, run_postp
 from recordian.providers import ASRProviderCapabilities
 
 
-def _base_context(tmp_path: Path) -> tuple[Path, list[dict[str, object]], list[dict[str, object]], list[dict[str, object]]]:
+def _base_context(
+    tmp_path: Path,
+) -> tuple[Path, list[dict[str, object]], list[dict[str, object]], list[dict[str, object]]]:
     audio_path = tmp_path / "input.wav"
     audio_path.write_bytes(b"wav")
     state_events: list[dict[str, object]] = []
@@ -440,7 +442,9 @@ def test_run_postprocess_pipeline_reuses_prefetched_asr_text_and_commit(tmp_path
     assert payload["commit"]["detail"] == "realtime_chunks:3"
 
 
-def test_run_postprocess_pipeline_skips_local_refine_recommit_when_realtime_commit_exists(tmp_path: Path, monkeypatch) -> None:
+def test_run_postprocess_pipeline_skips_local_refine_recommit_when_realtime_commit_exists(
+    tmp_path: Path, monkeypatch
+) -> None:
     audio_path, state_events, result_events, error_events = _base_context(tmp_path)
 
     class _Provider:
@@ -773,7 +777,9 @@ def test_run_postprocess_pipeline_streams_asr_commit_with_normalized_growth(tmp_
     assert result_events[0]["result"]["text"] == "Docker"
 
 
-def test_run_postprocess_pipeline_streams_asr_commit_uses_streaming_committer_override(tmp_path: Path, monkeypatch) -> None:
+def test_run_postprocess_pipeline_streams_asr_commit_uses_streaming_committer_override(
+    tmp_path: Path, monkeypatch
+) -> None:
     audio_path, state_events, result_events, error_events = _base_context(tmp_path)
 
     class _Provider:
@@ -1078,7 +1084,9 @@ def test_run_postprocess_pipeline_records_remote_paste_result(tmp_path: Path, mo
     assert payload["commit"]["remote_paste"]["sent"] is True
 
 
-def test_run_postprocess_pipeline_routes_to_remote_only_when_deskflow_screen_matches(tmp_path: Path, monkeypatch) -> None:
+def test_run_postprocess_pipeline_routes_to_remote_only_when_deskflow_screen_matches(
+    tmp_path: Path, monkeypatch
+) -> None:
     audio_path, state_events, result_events, error_events = _base_context(tmp_path)
     state_path = tmp_path / "active_screen.json"
     state_path.write_text(
@@ -1212,8 +1220,7 @@ def test_run_postprocess_pipeline_applies_hotword_correction_before_commit(tmp_p
     payload = result_events[0]["result"]
     assert payload["text"] == "把 github 的 Codex 配置看一下"
     assert any(
-        event.get("event") == "log" and "hotword_corrected" in str(event.get("message"))
-        for event in state_events
+        event.get("event") == "log" and "hotword_corrected" in str(event.get("message")) for event in state_events
     )
 
 

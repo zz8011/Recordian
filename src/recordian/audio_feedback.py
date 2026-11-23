@@ -127,6 +127,7 @@ def play_sound(
         try:
             import numpy as np  # noqa: F401
             import sounddevice as sd  # noqa: F401
+
             return _play_wav_nonblocking(path)
         except Exception:
             pass

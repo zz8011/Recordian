@@ -62,26 +62,38 @@ def test_start_wake_session_monitor_exits_when_monitor_stream_ends() -> None:
 
 
 def test_should_extend_last_speech_timestamp_only_after_speech_started() -> None:
-    assert _should_extend_last_speech_timestamp(
-        speech_detected_raw=False,
-        speech_detected=False,
-        speech_started=False,
-    ) is False
-    assert _should_extend_last_speech_timestamp(
-        speech_detected_raw=True,
-        speech_detected=False,
-        speech_started=False,
-    ) is False
-    assert _should_extend_last_speech_timestamp(
-        speech_detected_raw=True,
-        speech_detected=True,
-        speech_started=False,
-    ) is True
-    assert _should_extend_last_speech_timestamp(
-        speech_detected_raw=True,
-        speech_detected=False,
-        speech_started=True,
-    ) is True
+    assert (
+        _should_extend_last_speech_timestamp(
+            speech_detected_raw=False,
+            speech_detected=False,
+            speech_started=False,
+        )
+        is False
+    )
+    assert (
+        _should_extend_last_speech_timestamp(
+            speech_detected_raw=True,
+            speech_detected=False,
+            speech_started=False,
+        )
+        is False
+    )
+    assert (
+        _should_extend_last_speech_timestamp(
+            speech_detected_raw=True,
+            speech_detected=True,
+            speech_started=False,
+        )
+        is True
+    )
+    assert (
+        _should_extend_last_speech_timestamp(
+            speech_detected_raw=True,
+            speech_detected=False,
+            speech_started=True,
+        )
+        is True
+    )
 
 
 def test_effective_wake_auto_stop_silence_honors_short_user_pause() -> None:
@@ -93,21 +105,24 @@ def test_effective_wake_auto_stop_silence_honors_short_user_pause() -> None:
 
 def test_persistent_soft_noise_cannot_keep_wake_recording_alive(monkeypatch) -> None:
     clock, stops = _run_soft_noise_session(monkeypatch)
-    assert len(stops) == 1 and stops[0]['reason'] == 'silence'
-    assert 1.0 <= clock['now'] - clock['last_vad'] <= 1.4
-    assert 1.0 <= stops[0]['since_last_speech_s'] <= 1.07
+    assert len(stops) == 1 and stops[0]["reason"] == "silence"
+    assert 1.0 <= clock["now"] - clock["last_vad"] <= 1.4
+    assert 1.0 <= stops[0]["since_last_speech_s"] <= 1.07
 
 
 def test_disabled_owner_filter_does_not_extend_silence_threshold(monkeypatch, tmp_path) -> None:
     # 配置要求声纹验证，但档案缺失 -> monitor 运行时已关闭过滤；静音阈值不应再被 extend 拉长。
     clock, stops = _run_soft_noise_session(
         monkeypatch,
-        args_extra={'wake_owner_verify': True, 'wake_owner_silence_extend_s': 2.0,
-                    'wake_owner_profile': str(tmp_path / 'missing-profile.json')},
-        state_extra={'voice_owner_filter_enabled': True},
+        args_extra={
+            "wake_owner_verify": True,
+            "wake_owner_silence_extend_s": 2.0,
+            "wake_owner_profile": str(tmp_path / "missing-profile.json"),
+        },
+        state_extra={"voice_owner_filter_enabled": True},
     )
-    assert len(stops) == 1 and stops[0]['reason'] == 'silence'
-    assert 1.0 <= clock['now'] - clock['last_vad'] <= 1.4
+    assert len(stops) == 1 and stops[0]["reason"] == "silence"
+    assert 1.0 <= clock["now"] - clock["last_vad"] <= 1.4
 
 
 def _run_soft_noise_session(monkeypatch, *, args_extra=None, state_extra=None):
@@ -118,40 +133,65 @@ def _run_soft_noise_session(monkeypatch, *, args_extra=None, state_extra=None):
 
     from recordian import wake_session_monitor as monitor
 
-    clock = {'now': 10.0, 'last_vad': 10.0}
+    clock = {"now": 10.0, "last_vad": 10.0}
+
     class Stream:
         def read(self, size):
-            clock['now'] += .064
-            return np.full(1024, .01, dtype=np.float32).tobytes() if clock['now'] < 16 else b''
+            clock["now"] += 0.064
+            return np.full(1024, 0.01, dtype=np.float32).tobytes() if clock["now"] < 16 else b""
+
     class Vad:
         def __init__(self, level):
             pass
+
         def is_speech(self, data, sample_rate):
-            if clock['now'] < 10.6:
-                clock['last_vad'] = clock['now']
+            if clock["now"] < 10.6:
+                clock["last_vad"] = clock["now"]
                 return True
             return False
-    monkeypatch.setitem(sys.modules, 'webrtcvad', SimpleNamespace(Vad=Vad))
-    monkeypatch.setattr(monitor.time, 'monotonic', lambda: clock['now'])
-    monkeypatch.setattr(monitor, '_is_soft_keepalive_speech_frame', lambda **kw: True)
-    state = {'voice_session_active': True, 'voice_started_ts': 10.0, 'voice_last_speech_ts': 10.0,
-             **(state_extra or {})}
+
+    monkeypatch.setitem(sys.modules, "webrtcvad", SimpleNamespace(Vad=Vad))
+    monkeypatch.setattr(monitor.time, "monotonic", lambda: clock["now"])
+    monkeypatch.setattr(monitor, "_is_soft_keepalive_speech_frame", lambda **kw: True)
+    state = {
+        "voice_session_active": True,
+        "voice_started_ts": 10.0,
+        "voice_last_speech_ts": 10.0,
+        **(state_extra or {}),
+    }
     events = []
     stopped = threading.Event()
     context = WakeSessionMonitorContext(
-        args=argparse.Namespace(**{
-            'input_device': 'default', 'debug_diagnostics': True, 'wake_use_webrtcvad': True,
-            'wake_auto_stop_silence_s': 1.0, 'wake_owner_silence_extend_s': 0.0, 'wake_owner_verify': False,
-            'wake_speech_confirm_s': .18, 'wake_min_speech_s': .5, 'wake_no_speech_timeout_s': 4.0,
-            **(args_extra or {}),
-        }),
-        record_handle=SimpleNamespace(monitor_stream=Stream(), monitor_sample_rate=16000,
-            monitor_channels=1, process=SimpleNamespace(poll=lambda: 0)),
-        provider=SimpleNamespace(), stop_event=threading.Event(), get_state=state.get,
-        set_state=state.__setitem__, resolve_hotwords=lambda: [], stop_recording=lambda: stopped.set(),
-        normalize_final_text=lambda text: text, on_state=events.append,
+        args=argparse.Namespace(
+            **{
+                "input_device": "default",
+                "debug_diagnostics": True,
+                "wake_use_webrtcvad": True,
+                "wake_auto_stop_silence_s": 1.0,
+                "wake_owner_silence_extend_s": 0.0,
+                "wake_owner_verify": False,
+                "wake_speech_confirm_s": 0.18,
+                "wake_min_speech_s": 0.5,
+                "wake_no_speech_timeout_s": 4.0,
+                **(args_extra or {}),
+            }
+        ),
+        record_handle=SimpleNamespace(
+            monitor_stream=Stream(),
+            monitor_sample_rate=16000,
+            monitor_channels=1,
+            process=SimpleNamespace(poll=lambda: 0),
+        ),
+        provider=SimpleNamespace(),
+        stop_event=threading.Event(),
+        get_state=state.get,
+        set_state=state.__setitem__,
+        resolve_hotwords=lambda: [],
+        stop_recording=lambda: stopped.set(),
+        normalize_final_text=lambda text: text,
+        on_state=events.append,
     )
     thread = start_wake_session_monitor(context)
     thread.join(timeout=2)
     assert not thread.is_alive() and stopped.wait(1)
-    return clock, [e for e in events if e['event'] == 'voice_wake_auto_stop']
+    return clock, [e for e in events if e["event"] == "voice_wake_auto_stop"]

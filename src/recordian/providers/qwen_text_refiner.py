@@ -61,12 +61,12 @@ class Qwen3TextRefiner(BaseTextRefiner):
         eos_ids = set(eos_token_id if isinstance(eos_token_id, (list, tuple)) else [eos_token_id]) - {None}
         generated = []
         for prompt, sequence in zip(inputs, sequences, strict=True):
-            if not isinstance(sequence, (list, tuple)) or list(sequence[:len(prompt)]) != list(prompt):
+            if not isinstance(sequence, (list, tuple)) or list(sequence[: len(prompt)]) != list(prompt):
                 raise _IncompleteRefinementError("Qwen 生成结果缺少输入序列；本次应保留 ASR 原文")
-            tokens = list(sequence[len(prompt):])
+            tokens = list(sequence[len(prompt) :])
             terminal = next((i for i, token in enumerate(tokens) if token in eos_ids), None)
             if terminal is not None:
-                complete = all(token == pad_token_id for token in tokens[terminal + 1:])
+                complete = all(token == pad_token_id for token in tokens[terminal + 1 :])
             else:
                 # With configured EOS, a streamer stop alone proves nothing.
                 # Without EOS, exhausting the generation budget is truncation.
@@ -87,9 +87,7 @@ class Qwen3TextRefiner(BaseTextRefiner):
             import torch
             from transformers import AutoModelForCausalLM, AutoTokenizer
         except ModuleNotFoundError as exc:
-            raise RuntimeError(
-                "transformers 未安装。请执行: pip install transformers torch"
-            ) from exc
+            raise RuntimeError("transformers 未安装。请执行: pip install transformers torch") from exc
 
         dtype_map = {
             "bfloat16": torch.bfloat16,
@@ -114,7 +112,8 @@ class Qwen3TextRefiner(BaseTextRefiner):
         # 优化：启用 torch.compile() 加速推理（PyTorch 2.0+）
         try:
             import torch
-            if hasattr(torch, 'compile'):
+
+            if hasattr(torch, "compile"):
                 self._model = torch.compile(
                     self._model,
                     mode="reduce-overhead",  # 优化模式
@@ -188,7 +187,8 @@ class Qwen3TextRefiner(BaseTextRefiner):
             )
 
         generated_ids = self._completed_tokens(
-            generated_ids, model_inputs.input_ids,
+            generated_ids,
+            model_inputs.input_ids,
             max_new_tokens=generate_kwargs["max_new_tokens"],
             eos_token_id=generate_kwargs["eos_token_id"],
             pad_token_id=generate_kwargs["pad_token_id"],
@@ -280,7 +280,8 @@ class Qwen3TextRefiner(BaseTextRefiner):
 
         yield from _filter_thinking(streamer)
         self._completed_tokens(
-            result.result(), model_inputs.input_ids,
+            result.result(),
+            model_inputs.input_ids,
             max_new_tokens=generate_kwargs["max_new_tokens"],
             eos_token_id=generate_kwargs["eos_token_id"],
             pad_token_id=generate_kwargs["pad_token_id"],

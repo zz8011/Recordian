@@ -2,6 +2,7 @@
 
 用于测试和监控 Recordian 的性能指标。
 """
+
 from __future__ import annotations
 
 import time
@@ -22,11 +23,7 @@ class PerformanceMetrics:
     cpu_percent: float
 
     def __str__(self) -> str:
-        return (
-            f"Duration: {self.duration_ms:.2f}ms, "
-            f"Memory: {self.memory_mb:.2f}MB, "
-            f"CPU: {self.cpu_percent:.1f}%"
-        )
+        return f"Duration: {self.duration_ms:.2f}ms, Memory: {self.memory_mb:.2f}MB, CPU: {self.cpu_percent:.1f}%"
 
 
 class PerformanceBenchmark:
@@ -113,8 +110,7 @@ class PerformanceBenchmark:
                 avg_duration = sum(m.duration_ms for m in metrics_list) / len(metrics_list)
                 avg_memory = sum(m.memory_mb for m in metrics_list) / len(metrics_list)
                 avg_cpu = sum(m.cpu_percent for m in metrics_list) / len(metrics_list)
-                print(f"  Average: Duration: {avg_duration:.2f}ms, "
-                      f"Memory: {avg_memory:.2f}MB, CPU: {avg_cpu:.1f}%")
+                print(f"  Average: Duration: {avg_duration:.2f}ms, Memory: {avg_memory:.2f}MB, CPU: {avg_cpu:.1f}%")
 
         print("=" * 60)
 
@@ -127,6 +123,7 @@ class ASRBenchmark:
 
     def test_transcribe_short_audio(self, provider: Any, audio_path: Path) -> None:
         """测试短音频转录（<10秒）"""
+
         def transcribe() -> None:
             provider.transcribe_file(audio_path, hotwords=[])
 
@@ -139,6 +136,7 @@ class ASRBenchmark:
 
     def test_transcribe_medium_audio(self, provider: Any, audio_path: Path) -> None:
         """测试中等音频转录（10-30秒）"""
+
         def transcribe() -> None:
             provider.transcribe_file(audio_path, hotwords=[])
 
@@ -151,6 +149,7 @@ class ASRBenchmark:
 
     def test_transcribe_long_audio(self, provider: Any, audio_path: Path) -> None:
         """测试长音频转录（>30秒）"""
+
         def transcribe() -> None:
             provider.transcribe_file(audio_path, hotwords=[])
 
@@ -170,6 +169,7 @@ class RefinerBenchmark:
 
     def test_refine_short_text(self, refiner: Any, text: str) -> None:
         """测试短文本精炼（<50字）"""
+
         def refine() -> None:
             refiner.refine(text)
 
@@ -182,6 +182,7 @@ class RefinerBenchmark:
 
     def test_refine_medium_text(self, refiner: Any, text: str) -> None:
         """测试中等文本精炼（50-200字）"""
+
         def refine() -> None:
             refiner.refine(text)
 
@@ -194,6 +195,7 @@ class RefinerBenchmark:
 
     def test_refine_long_text(self, refiner: Any, text: str) -> None:
         """测试长文本精炼（>200字）"""
+
         def refine() -> None:
             refiner.refine(text)
 
@@ -254,11 +256,7 @@ class EndToEndBenchmark:
         )
 
         # 计算总延迟
-        total_duration = (
-            metrics_record.duration_ms +
-            metrics_asr.duration_ms +
-            metrics_refine.duration_ms
-        )
+        total_duration = metrics_record.duration_ms + metrics_asr.duration_ms + metrics_refine.duration_ms
 
         print("\nEnd-to-End Pipeline:")
         print(f"  Recording: {metrics_record.duration_ms:.2f}ms")

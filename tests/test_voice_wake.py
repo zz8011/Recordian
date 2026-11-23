@@ -160,7 +160,10 @@ def test_ensure_keywords_file_runs_converter(monkeypatch, tmp_path: Path) -> Non
 
     fake_utils.text2token = _fake_text2token  # type: ignore[attr-defined]
     monkeypatch.setitem(__import__("sys").modules, "sherpa_onnx.utils", fake_utils)
-    monkeypatch.setattr("recordian.voice_wake.subprocess.run", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("should not call subprocess")))
+    monkeypatch.setattr(
+        "recordian.voice_wake.subprocess.run",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("should not call subprocess")),
+    )
 
     out = ensure_keywords_file(
         phrases=["嗨小二"],
@@ -195,7 +198,10 @@ def test_ensure_keywords_file_rebuilds_invalid_cached_output(monkeypatch, tmp_pa
 
     fake_utils.text2token = _fake_text2token  # type: ignore[attr-defined]
     monkeypatch.setitem(__import__("sys").modules, "sherpa_onnx.utils", fake_utils)
-    monkeypatch.setattr("recordian.voice_wake.subprocess.run", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("should not call subprocess")))
+    monkeypatch.setattr(
+        "recordian.voice_wake.subprocess.run",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("should not call subprocess")),
+    )
 
     out = ensure_keywords_file(
         phrases=["嗨小二"],

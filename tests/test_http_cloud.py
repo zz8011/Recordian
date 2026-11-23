@@ -129,6 +129,7 @@ def test_http_cloud_provider_falls_back_to_single_openai_model(tmp_path: Path) -
 
 def test_estimate_english_ratio_in_base() -> None:
     from recordian.providers.base import _estimate_english_ratio
+
     assert _estimate_english_ratio("hello world") == 1.0
     assert _estimate_english_ratio("你好世界") == 0.0
     assert _estimate_english_ratio("") == 0.0
@@ -150,7 +151,7 @@ def test_http_cloud_provider_transcribe_stream_parses_sse_chunks(tmp_path: Path)
             'data: {"choices":[{"delta":{"content":"好"}}]}',
             'data: {"choices":[{"delta":{"content":"</asr_text>"}}]}',
             'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}',
-            'data: [DONE]',
+            "data: [DONE]",
         ]
     )
     with (

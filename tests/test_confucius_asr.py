@@ -55,7 +55,10 @@ class TestResolveWsEndpoint:
         assert resolve_ws_endpoint("ws://127.0.0.1:8272/asr_stream_api_v1") == "ws://127.0.0.1:8272/asr_stream_api_v1"
 
     def test_http_translated_to_ws(self):
-        assert resolve_ws_endpoint("http://192.168.5.111:8272/asr_stream_api_v1") == "ws://192.168.5.111:8272/asr_stream_api_v1"
+        assert (
+            resolve_ws_endpoint("http://192.168.5.111:8272/asr_stream_api_v1")
+            == "ws://192.168.5.111:8272/asr_stream_api_v1"
+        )
 
     def test_https_translated_to_wss(self):
         assert resolve_ws_endpoint("https://example.com/asr") == "wss://example.com/asr"
@@ -68,10 +71,7 @@ class TestResolveWsEndpoint:
 
     def test_userinfo_and_query_stripped(self):
         # Credentials must never ride in the URL; query/fragment dropped too.
-        assert (
-            resolve_ws_endpoint("ws://user:p%40ss@127.0.0.1:8272/asr?token=abc#frag")
-            == "ws://127.0.0.1:8272/asr"
-        )
+        assert resolve_ws_endpoint("ws://user:p%40ss@127.0.0.1:8272/asr?token=abc#frag") == "ws://127.0.0.1:8272/asr"
 
     def test_empty_rejected(self):
         with pytest.raises(ValueError, match="asr_realtime_endpoint"):
@@ -209,9 +209,7 @@ class TestWavInput:
             stdout = b""
             stderr = b"bogus codec"
 
-        monkeypatch.setattr(
-            "recordian.providers.confucius_asr.subprocess.run", lambda cmd, **kwargs: _Proc()
-        )
+        monkeypatch.setattr("recordian.providers.confucius_asr.subprocess.run", lambda cmd, **kwargs: _Proc())
         with pytest.raises(RuntimeError, match="exit code 3"):
             wav_file_to_pcm16le(path)
 
@@ -418,9 +416,7 @@ class TestPeerCloseTransportTeardown:
         # The peer CLOSE cleared ``connected`` before finish() closed the
         # socket: close() was a no-op, so shutdown() must have freed it.
         assert first.connected is False
-        assert first.shutdown_calls >= 1, (
-            "ws.shutdown() must be called even when close() found connected=False"
-        )
+        assert first.shutdown_calls >= 1, "ws.shutdown() must be called even when close() found connected=False"
         assert first.transport_closed is True
 
         # Rapid next session: a leaked transport would hold the model lock and
@@ -530,10 +526,7 @@ class TestHandshake:
         assert "OSError" in msg  # only the sanitized type name survives
 
     def test_safe_url_strips_userinfo_and_query(self):
-        assert (
-            sanitize_ws_url("ws://user:pass@127.0.0.1:8272/asr?token=abc")
-            == "ws://127.0.0.1:8272/asr"
-        )
+        assert sanitize_ws_url("ws://user:pass@127.0.0.1:8272/asr?token=abc") == "ws://127.0.0.1:8272/asr"
 
 
 # ---------------------------------------------------------------------------
@@ -599,9 +592,7 @@ class TestCommittedPrefixNotReplayed:
         # A pre-set event still aborts before any connection attempt.
         dead = FakeWebSocket()
         dead_module = FakeWSModule(dead)
-        cancelled = ConfuciusASRProvider(
-            "ws://127.0.0.1:8272/asr_stream_api_v1", ws_module=dead_module
-        )
+        cancelled = ConfuciusASRProvider("ws://127.0.0.1:8272/asr_stream_api_v1", ws_module=dead_module)
         event = threading.Event()
         event.set()
         with pytest.raises(RuntimeError, match="cancelled before ready"):
@@ -1046,9 +1037,7 @@ class TestProvider:
             ws.feed_close(1000)
 
         ws = FakeWebSocket(greeting=_connected_greeting(), on_eos=_on_eos)
-        provider = ConfuciusASRProvider(
-            "ws://127.0.0.1:8272", api_key="k", ws_module=FakeWSModule(ws)
-        )
+        provider = ConfuciusASRProvider("ws://127.0.0.1:8272", api_key="k", ws_module=FakeWSModule(ws))
         result = provider.transcribe_file(wav_path, hotwords=["甲"])
         assert result.text == "整句"
         assert ws.sent_binary  # audio went over the wire as binary PCM16
@@ -1128,7 +1117,7 @@ class TestCliContract:
 # ---------------------------------------------------------------------------
 class TestOptionalDependencyIsolation:
     def test_import_and_convert_without_numpy_or_websocket(self):
-        code = r'''
+        code = r"""
 import struct
 import sys
 
@@ -1159,7 +1148,7 @@ except ImportError as exc:
 else:
     raise SystemExit("expected ImportError for missing websocket-client")
 print("ISOLATION-OK")
-'''
+"""
         import recordian
 
         src_parent = str(Path(recordian.__file__).resolve().parent.parent)
@@ -1227,20 +1216,29 @@ class _LoopbackServer:
         raw_header = await ws.recv()
         self.header = json.loads(raw_header)
         assert self.header.get("requestId"), "validate_header: requestId required"
-        await ws.send(json.dumps({
-            "status": "connected",
-            "requestId": self.header["requestId"],
-            "msg": "",
-            "active_connections": 1,
-        }))
+        await ws.send(
+            json.dumps(
+                {
+                    "status": "connected",
+                    "requestId": self.header["requestId"],
+                    "msg": "",
+                    "active_connections": 1,
+                }
+            )
+        )
         await self._scenario(self, ws)
 
     async def send_success(self, ws, text: str, *, reset: bool = False):
-        await ws.send(json.dumps({
-            "status": "success",
-            "requestId": self.header["requestId"],
-            "msg": {"text": text, "reset": reset},
-        }, ensure_ascii=False))
+        await ws.send(
+            json.dumps(
+                {
+                    "status": "success",
+                    "requestId": self.header["requestId"],
+                    "msg": {"text": text, "reset": reset},
+                },
+                ensure_ascii=False,
+            )
+        )
 
 
 def _provider_for(server: _LoopbackServer, **kwargs) -> ConfuciusASRProvider:
@@ -1383,11 +1381,15 @@ class TestLoopback:
                         return
                     continue
                 server.binary_frames += 1
-                await ws.send(json.dumps({
-                    "status": "error",
-                    "requestId": server.header["requestId"],
-                    "msg": "boom from server with transcript 用户内容",
-                }))
+                await ws.send(
+                    json.dumps(
+                        {
+                            "status": "error",
+                            "requestId": server.header["requestId"],
+                            "msg": "boom from server with transcript 用户内容",
+                        }
+                    )
+                )
 
         server = _LoopbackServer(_scenario).start()
         provider = _provider_for(server)

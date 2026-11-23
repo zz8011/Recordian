@@ -1,4 +1,5 @@
 """语音唤醒集成测试"""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -74,10 +75,10 @@ class TestVoiceWakeDetection:
 
         # 模拟噪音环境下的检测
         noisy_detections = [
-            "小智",      # 清晰
-            "小 智",     # 有间隔
-            "小智啊",    # 有后缀
-            "嗯小智",    # 有前缀
+            "小智",  # 清晰
+            "小 智",  # 有间隔
+            "小智啊",  # 有后缀
+            "嗯小智",  # 有前缀
         ]
 
         for detection in noisy_detections:

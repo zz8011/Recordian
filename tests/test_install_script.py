@@ -1,4 +1,5 @@
 """Tests for install.sh script logic."""
+
 from __future__ import annotations
 
 import os

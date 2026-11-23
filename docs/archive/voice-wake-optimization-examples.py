@@ -12,17 +12,19 @@ Date: 2026-03-03
 
 from __future__ import annotations
 
-import time
 import threading
-from collections import defaultdict, deque
+import time
+from collections import defaultdict
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Callable, TypeVar
+from typing import Any
+
 import numpy as np
 
 # ============================================================================
 # 1. LOOP LIMITING PATTERNS
 # ============================================================================
+
 
 def example_infinite_loop_fix():
     """Example: Fix the infinite loop in voice_wake.py"""
@@ -91,6 +93,7 @@ def example_infinite_loop_fix():
 # 2. TTL CACHE IMPLEMENTATION
 # ============================================================================
 
+
 class TTLCache:
     """Time-To-Live cache with automatic expiration"""
 
@@ -135,10 +138,7 @@ class TTLCache:
         """Remove expired entries, return number removed"""
         with self._lock:
             now = time.monotonic()
-            expired_keys = [
-                key for key, (_, timestamp) in self._cache.items()
-                if now - timestamp > self.ttl
-            ]
+            expired_keys = [key for key, (_, timestamp) in self._cache.items() if now - timestamp > self.ttl]
             for key in expired_keys:
                 del self._cache[key]
             return len(expired_keys)
@@ -182,6 +182,7 @@ def example_ttl_cache_usage():
 # ============================================================================
 # 3. LRU CACHE FOR STATIC DATA
 # ============================================================================
+
 
 @lru_cache(maxsize=8)
 def load_tone_variant_groups_cached(tokens_path_str: str) -> dict[str, list[str]]:
@@ -231,6 +232,7 @@ def normalize_tone(token: str) -> str:
 # 4. CPU USAGE MONITORING
 # ============================================================================
 
+
 class CPUMonitor:
     """Monitor CPU usage of current process"""
 
@@ -273,6 +275,7 @@ class CPUMonitor:
         """Background monitoring loop"""
         try:
             import psutil
+
             process = psutil.Process()
         except ImportError:
             print("WARNING: psutil not installed, CPU monitoring disabled")
@@ -298,7 +301,7 @@ def example_cpu_monitoring():
     time.sleep(60)
 
     stats = monitor.stop()
-    print(f"\nCPU Usage Statistics:")
+    print("\nCPU Usage Statistics:")
     print(f"  Average: {stats['avg']:.1f}%")
     print(f"  Maximum: {stats['max']:.1f}%")
     print(f"  P50 (median): {stats['p50']:.1f}%")
@@ -310,6 +313,7 @@ def example_cpu_monitoring():
 # 5. LATENCY PROFILING
 # ============================================================================
 
+
 class LatencyProfiler:
     """Profile latency of code blocks"""
 
@@ -319,6 +323,7 @@ class LatencyProfiler:
 
     def measure(self, name: str):
         """Context manager for measuring code blocks"""
+
         class Timer:
             def __init__(self, profiler: LatencyProfiler, name: str):
                 self.profiler = profiler
@@ -396,6 +401,7 @@ def example_latency_profiling():
 # 6. ONNX QUANTIZATION EXAMPLES
 # ============================================================================
 
+
 def quantize_model_dynamic(
     model_fp32_path: str,
     model_int8_path: str,
@@ -410,7 +416,7 @@ def quantize_model_dynamic(
         model_int8_path: Path to save INT8 model
     """
     try:
-        from onnxruntime.quantization import quantize_dynamic, QuantType
+        from onnxruntime.quantization import QuantType, quantize_dynamic
     except ImportError:
         print("ERROR: onnxruntime not installed")
         print("Install with: pip install onnxruntime")
@@ -433,7 +439,7 @@ def quantize_model_dynamic(
 
     print(f"FP32 size: {fp32_size:.2f} MB")
     print(f"INT8 size: {int8_size:.2f} MB")
-    print(f"Reduction: {(1 - int8_size/fp32_size)*100:.1f}%")
+    print(f"Reduction: {(1 - int8_size / fp32_size) * 100:.1f}%")
 
 
 def quantize_sherpa_onnx_models(model_dir: Path) -> None:
@@ -465,6 +471,7 @@ def quantize_sherpa_onnx_models(model_dir: Path) -> None:
 # 7. AUDIO BUFFER OPTIMIZATION
 # ============================================================================
 
+
 class RingBuffer:
     """
     Efficient ring buffer for audio samples.
@@ -488,7 +495,7 @@ class RingBuffer:
 
         if n >= self.max_samples:
             # If input is larger than buffer, just keep the last max_samples
-            self.buffer[:] = samples[-self.max_samples:]
+            self.buffer[:] = samples[-self.max_samples :]
             self.write_pos = 0
             self.available = self.max_samples
             return
@@ -498,11 +505,11 @@ class RingBuffer:
 
         if n <= space_to_end:
             # No wrap needed
-            self.buffer[self.write_pos:self.write_pos + n] = samples
+            self.buffer[self.write_pos : self.write_pos + n] = samples
             self.write_pos = (self.write_pos + n) % self.max_samples
         else:
             # Need to wrap around
-            self.buffer[self.write_pos:] = samples[:space_to_end]
+            self.buffer[self.write_pos :] = samples[:space_to_end]
             remaining = n - space_to_end
             self.buffer[:remaining] = samples[space_to_end:]
             self.write_pos = remaining
@@ -522,11 +529,11 @@ class RingBuffer:
 
         if start + n <= self.max_samples:
             # No wrap
-            return self.buffer[start:start + n].copy()
+            return self.buffer[start : start + n].copy()
         else:
             # Wrap around
             part1 = self.buffer[start:]
-            part2 = self.buffer[:n - len(part1)]
+            part2 = self.buffer[: n - len(part1)]
             return np.concatenate([part1, part2])
 
     def clear(self) -> None:
@@ -563,6 +570,7 @@ def example_ring_buffer_usage():
 # ============================================================================
 # 8. COMPLETE OPTIMIZED VOICE WAKE EXAMPLE
 # ============================================================================
+
 
 def optimized_voice_wake_loop_example():
     """
@@ -646,7 +654,7 @@ def optimized_voice_wake_loop_example():
         print("\n" + "=" * 70)
         print("PERFORMANCE RESULTS")
         print("=" * 70)
-        print(f"\nCPU Usage:")
+        print("\nCPU Usage:")
         print(f"  Average: {cpu_stats['avg']:.1f}%")
         print(f"  P95: {cpu_stats['p95']:.1f}%")
         print(f"  Maximum: {cpu_stats['max']:.1f}%")

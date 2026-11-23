@@ -1,4 +1,5 @@
 """静态守护：CI workflow 不得吞红，且 PR 必须取消过期运行。"""
+
 import re
 from pathlib import Path
 

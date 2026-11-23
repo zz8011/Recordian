@@ -4,6 +4,7 @@ Enabled for the desktop service with RECORDIAN_MUTE_OUTPUT=1. Microphone
 sources and volume levels are never changed. A process-held flock prevents a
 cleanup helper or another recording from restoring a live session's outputs.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -16,17 +17,21 @@ from pathlib import Path
 
 class OutputMute:
     def __init__(self, *, directory=None, run=None):
-        self.directory = Path(directory or (
-            Path(os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")) / "recordian-output"
-        ))
+        self.directory = Path(
+            directory or (Path(os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")) / "recordian-output")
+        )
         self.run = run or subprocess.run
         self.lock = None
         self.journal = self.directory / "muted.json"
 
     def _command(self, *args):
         return self.run(
-            ["pactl", *args], check=True, capture_output=True, text=True,
-            timeout=2, env={**os.environ, "LC_ALL": "C"},
+            ["pactl", *args],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=2,
+            env={**os.environ, "LC_ALL": "C"},
         ).stdout
 
     def _acquire(self):

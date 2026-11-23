@@ -235,6 +235,7 @@ def test_real_jev_cli_integration(tmp_path: Path) -> None:
     Skipped unless pytest is invoked with `-m integration`.
     """
     import shutil
+
     if not shutil.which("jev"):
         pytest.skip("jev CLI not found on PATH")
 
@@ -261,12 +262,12 @@ def test_real_jev_cli_integration(tmp_path: Path) -> None:
 def test_particle_gate_is_forwarded_without_weakening_alias_gate(tmp_path: Path) -> None:
     argv = _write_script(
         tmp_path,
-        '''
+        """
         import json,sys
         sys.stdin.buffer.read()
         print(json.dumps({'answers': {'p0': {'choice': 'di', 'probabilities': {'de': .12, 'di': .8, 'dei': .08}}}}))
-        ''',
+        """,
     )
-    questions = {'p0': {'criteria': {'de': '的', 'di': '地', 'dei': '得'}}}
-    assert request_jev_choices(.5, 'synthetic', questions, argv=argv) == {'p0': 'di'}
-    assert request_jev_choices(.5, 'synthetic', questions, argv=argv, min_top=.85, min_margin=.35) == {'p0': None}
+    questions = {"p0": {"criteria": {"de": "的", "di": "地", "dei": "得"}}}
+    assert request_jev_choices(0.5, "synthetic", questions, argv=argv) == {"p0": "di"}
+    assert request_jev_choices(0.5, "synthetic", questions, argv=argv, min_top=0.85, min_margin=0.35) == {"p0": None}

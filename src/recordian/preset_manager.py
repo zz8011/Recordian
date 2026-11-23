@@ -24,9 +24,7 @@ class PresetManager:
         """列出所有可用的预设名称"""
         if not self.presets_dir.exists():
             return []
-        return sorted([
-            p.stem for p in self.presets_dir.glob("*.md")
-        ])
+        return sorted([p.stem for p in self.presets_dir.glob("*.md")])
 
     def load_preset(self, name: str) -> str:
         """加载指定预设的 prompt 内容
@@ -48,9 +46,7 @@ class PresetManager:
         preset_path = self.presets_dir / f"{name}.md"
         if not preset_path.exists():
             available = ", ".join(self.list_presets())
-            raise FileNotFoundError(
-                f"预设 '{name}' 不存在。可用预设: {available}"
-            )
+            raise FileNotFoundError(f"预设 '{name}' 不存在。可用预设: {available}")
 
         content = preset_path.read_text(encoding="utf-8")
 

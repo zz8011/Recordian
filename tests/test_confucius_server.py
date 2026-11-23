@@ -45,6 +45,7 @@ def srv():
 # Pure unit tests
 # ---------------------------------------------------------------------------
 
+
 def test_module_imports_without_model_deps(srv):
     assert srv.active_model is None  # model handle stays lazy
 
@@ -63,11 +64,24 @@ def test_parser_defaults(srv):
 
 
 def test_parser_overrides(srv):
-    args = srv.build_parser().parse_args([
-        "--model-dir", "/models/x", "--port", "9000", "--host", "127.0.0.2",
-        "--gpu-memory-utilization", "0.7", "--max-model-len", "2048",
-        "--max-session-seconds", "10", "--token-file", "/tmp/tok",
-    ])
+    args = srv.build_parser().parse_args(
+        [
+            "--model-dir",
+            "/models/x",
+            "--port",
+            "9000",
+            "--host",
+            "127.0.0.2",
+            "--gpu-memory-utilization",
+            "0.7",
+            "--max-model-len",
+            "2048",
+            "--max-session-seconds",
+            "10",
+            "--token-file",
+            "/tmp/tok",
+        ]
+    )
     assert args.model_dir == "/models/x"
     assert args.port == 9000
     assert args.gpu_memory_utilization == 0.7
@@ -79,17 +93,20 @@ def test_validate_header_ok(srv):
     assert header["requestId"] == "r1"
 
 
-@pytest.mark.parametrize("header", [
-    "not-a-dict",
-    {},
-    {"requestId": ""},
-    {"requestId": 42},
-    {"requestId": "r", "channels": 2},
-    {"requestId": "r", "sample_rate": 8000},
-    {"requestId": "r", "language": 3},
-    {"requestId": "r", "system_prompt": 5},
-    {"requestId": "r", "system_prompt": "x" * 4001},
-])
+@pytest.mark.parametrize(
+    "header",
+    [
+        "not-a-dict",
+        {},
+        {"requestId": ""},
+        {"requestId": 42},
+        {"requestId": "r", "channels": 2},
+        {"requestId": "r", "sample_rate": 8000},
+        {"requestId": "r", "language": 3},
+        {"requestId": "r", "system_prompt": 5},
+        {"requestId": "r", "system_prompt": "x" * 4001},
+    ],
+)
 def test_validate_header_rejects(srv, header):
     with pytest.raises(srv.HeaderError):
         srv.validate_header(header)
@@ -150,6 +167,7 @@ def test_token_file_bad_mode_refused(srv, tmp_path):
 # ---------------------------------------------------------------------------
 # Fake model + real loopback
 # ---------------------------------------------------------------------------
+
 
 class FakeState:
     def __init__(self, kwargs):
@@ -253,9 +271,7 @@ try:
 except ImportError:
     _HAS_WEBSOCKETS = False
 
-pytestmark_loopback = pytest.mark.skipif(
-    not _HAS_WEBSOCKETS, reason="websockets not installed (loopback test skipped)"
-)
+pytestmark_loopback = pytest.mark.skipif(not _HAS_WEBSOCKETS, reason="websockets not installed (loopback test skipped)")
 
 TOKEN = "f" * 32
 
@@ -266,10 +282,17 @@ def _frame(ms: int = 160) -> bytes:
 
 def _args(srv, tmp_path, **over):
     defaults = {
-        "model_dir": "unused", "r2t2_source": "", "host": "127.0.0.1", "port": 0,
-        "gpu_memory_utilization": 0.8, "max_model_len": 4096,
-        "token_file": str(tmp_path / "tok"), "warmup_wav": "",
-        "max_session_seconds": 30.0, "max_queued_frames": 32, "idle_timeout_s": 10.0,
+        "model_dir": "unused",
+        "r2t2_source": "",
+        "host": "127.0.0.1",
+        "port": 0,
+        "gpu_memory_utilization": 0.8,
+        "max_model_len": 4096,
+        "token_file": str(tmp_path / "tok"),
+        "warmup_wav": "",
+        "max_session_seconds": 30.0,
+        "max_queued_frames": 32,
+        "idle_timeout_s": 10.0,
         "ready_file": "",
     }
     defaults.update(over)
@@ -299,7 +322,9 @@ class RunningServer:
                 busy_lock = asyncio.Lock()
                 async with serve(
                     lambda ws: self.srv._handle_connection(ws, self.model, TOKEN, self.args, busy_lock),
-                    self.args.host, 0, ping_interval=None,
+                    self.args.host,
+                    0,
+                    ping_interval=None,
                 ) as server:
                     self.port = server.sockets[0].getsockname()[1]
                     ready.set()
@@ -375,11 +400,18 @@ def test_loopback_hotwords_reach_model_and_full_eos(srv, tmp_path):
         import websocket
 
         ws = websocket.create_connection(f"ws://127.0.0.1:{server.port}/asr_stream_api_v1", timeout=10)
-        ws.send(json.dumps({
-            "requestId": "t1", "channels": 1, "sample_rate": 16000,
-            "language": "Chinese", "secret_key": TOKEN,
-            "system_prompt": "热词参考: 孔子、孟子",
-        }))
+        ws.send(
+            json.dumps(
+                {
+                    "requestId": "t1",
+                    "channels": 1,
+                    "sample_rate": 16000,
+                    "language": "Chinese",
+                    "secret_key": TOKEN,
+                    "system_prompt": "热词参考: 孔子、孟子",
+                }
+            )
+        )
         greeting = json.loads(ws.recv())
         assert greeting["status"] == "connected"
         # ~1 s of audio in 160 ms frames, then EOS
@@ -408,10 +440,13 @@ def test_loopback_hotwords_reach_model_and_full_eos(srv, tmp_path):
 @pytestmark_loopback
 def test_loopback_wrong_key_closed_4401(srv, tmp_path):
     with RunningServer(srv, _args(srv, tmp_path), FakeModel()) as server:
-        frames, close_code = _sync_client(server.port, [
-            ("send_header", {"requestId": "bad", "secret_key": "wrong"}),
-            ("recv",),
-        ])
+        frames, close_code = _sync_client(
+            server.port,
+            [
+                ("send_header", {"requestId": "bad", "secret_key": "wrong"}),
+                ("recv",),
+            ],
+        )
     assert close_code == 4401
     assert frames == []  # no error payload leaks on auth failure
 
@@ -419,11 +454,14 @@ def test_loopback_wrong_key_closed_4401(srv, tmp_path):
 @pytestmark_loopback
 def test_loopback_bad_header_1008(srv, tmp_path):
     with RunningServer(srv, _args(srv, tmp_path), FakeModel()) as server:
-        frames, close_code = _sync_client(server.port, [
-            ("send_header", {"channels": 1}),  # no requestId
-            ("recv",),
-            ("recv",),
-        ])
+        frames, close_code = _sync_client(
+            server.port,
+            [
+                ("send_header", {"channels": 1}),  # no requestId
+                ("recv",),
+                ("recv",),
+            ],
+        )
     assert close_code == 1008
     assert frames and frames[0]["status"] == "error"
 
@@ -431,13 +469,16 @@ def test_loopback_bad_header_1008(srv, tmp_path):
 @pytestmark_loopback
 def test_loopback_odd_bytes_pcm_rejected(srv, tmp_path):
     with RunningServer(srv, _args(srv, tmp_path), FakeModel()) as server:
-        frames, close_code = _sync_client(server.port, [
-            ("send_header", {"requestId": "r", "secret_key": TOKEN}),
-            ("recv",),
-            ("send_audio", b"\x00\x00\x00"),  # odd byte count
-            ("recv",),
-            ("recv",),
-        ])
+        frames, close_code = _sync_client(
+            server.port,
+            [
+                ("send_header", {"requestId": "r", "secret_key": TOKEN}),
+                ("recv",),
+                ("send_audio", b"\x00\x00\x00"),  # odd byte count
+                ("recv",),
+                ("recv",),
+            ],
+        )
     assert close_code == 1008
     assert any(f.get("status") == "error" for f in frames)
 
@@ -530,10 +571,13 @@ def test_loopback_single_concurrency_and_cleanup(srv, tmp_path):
         assert json.loads(ws1.recv())["status"] == "connected"
 
         # session 2 while busy -> 4429
-        _, close_code = _sync_client(server.port, [
-            ("send_header", {"requestId": "s2", "secret_key": TOKEN}),
-            ("recv",),
-        ])
+        _, close_code = _sync_client(
+            server.port,
+            [
+                ("send_header", {"requestId": "s2", "secret_key": TOKEN}),
+                ("recv",),
+            ],
+        )
         assert close_code == 4429
 
         # disconnect session 1 abruptly; server must clean up and accept again
@@ -541,10 +585,13 @@ def test_loopback_single_concurrency_and_cleanup(srv, tmp_path):
         deadline = time.time() + 5
         close_code2 = None
         while time.time() < deadline:
-            frames2, close_code2 = _sync_client(server.port, [
-                ("send_header", {"requestId": "s3", "secret_key": TOKEN}),
-                ("recv",),
-            ])
+            frames2, close_code2 = _sync_client(
+                server.port,
+                [
+                    ("send_header", {"requestId": "s3", "secret_key": TOKEN}),
+                    ("recv",),
+                ],
+            )
             if frames2 and frames2[0].get("status") == "connected":
                 break
             time.sleep(0.1)
@@ -556,17 +603,21 @@ def test_loopback_single_concurrency_and_cleanup(srv, tmp_path):
 # r2 regression tests (independent-review counterexamples)
 # ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize("argv", [
-    ["--max-queued-frames", "0"],
-    ["--max-queued-frames", "-1"],
-    ["--gpu-memory-utilization", "0"],
-    ["--gpu-memory-utilization", "1.5"],
-    ["--idle-timeout-s", "0"],
-    ["--idle-timeout-s", "-5"],
-    ["--max-session-seconds", "0"],
-    ["--max-model-len", "0"],
-    ["--port", "70000"],
-])
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["--max-queued-frames", "0"],
+        ["--max-queued-frames", "-1"],
+        ["--gpu-memory-utilization", "0"],
+        ["--gpu-memory-utilization", "1.5"],
+        ["--idle-timeout-s", "0"],
+        ["--idle-timeout-s", "-5"],
+        ["--max-session-seconds", "0"],
+        ["--max-model-len", "0"],
+        ["--port", "70000"],
+    ],
+)
 def test_parser_rejects_invalid_limits(srv, argv):
     with pytest.raises(SystemExit):
         srv.build_parser().parse_args(argv)
@@ -611,8 +662,15 @@ def test_serve_rejects_non_loopback_host(srv, tmp_path):
 
 
 def test_validate_config_preserves_valid_overrides(srv, tmp_path):
-    args = _args(srv, tmp_path, max_queued_frames=4, gpu_memory_utilization=0.7,
-                 max_session_seconds=5.0, idle_timeout_s=3.0, max_model_len=2048)
+    args = _args(
+        srv,
+        tmp_path,
+        max_queued_frames=4,
+        gpu_memory_utilization=0.7,
+        max_session_seconds=5.0,
+        idle_timeout_s=3.0,
+        max_model_len=2048,
+    )
     srv.validate_config(args)  # must not raise
     assert args.max_queued_frames == 4
     assert args.gpu_memory_utilization == 0.7
@@ -645,8 +703,7 @@ def test_warmup_uses_both_language_paths(srv, monkeypatch):
     import numpy as np
 
     fake_sf = types.ModuleType("soundfile")
-    fake_sf.read = lambda path, dtype="float32", always_2d=False: (
-        np.zeros(1600, dtype=np.float32), 16000)
+    fake_sf.read = lambda path, dtype="float32", always_2d=False: (np.zeros(1600, dtype=np.float32), 16000)
     monkeypatch.setitem(sys.modules, "soundfile", fake_sf)
     model2 = RecordingModel()
     srv._warmup(model2, "unused.wav")
@@ -663,10 +720,17 @@ def test_cancel_during_inference_keeps_model_ownership(srv, tmp_path):
         model = BlockingFakeModel()
         lock = aio.Lock()
         ws = FakeWS()
-        await ws.incoming.put(json.dumps({
-            "requestId": "c1", "channels": 1, "sample_rate": 16000,
-            "secret_key": TOKEN, "language": "Chinese",
-        }))
+        await ws.incoming.put(
+            json.dumps(
+                {
+                    "requestId": "c1",
+                    "channels": 1,
+                    "sample_rate": 16000,
+                    "secret_key": TOKEN,
+                    "language": "Chinese",
+                }
+            )
+        )
         args = _args(srv, tmp_path)
         task = aio.create_task(srv._handle_connection(ws, model, TOKEN, args, lock))
         # wait for greeting, then feed one first chunk (320 ms) -> model blocks
@@ -715,10 +779,17 @@ def test_queue_full_abort_cleanup_terminates(srv, tmp_path):
         model = BlockingFakeModel()
         lock = aio.Lock()
         ws = FakeWS()
-        await ws.incoming.put(json.dumps({
-            "requestId": "q1", "channels": 1, "sample_rate": 16000,
-            "secret_key": TOKEN, "language": "Chinese",
-        }))
+        await ws.incoming.put(
+            json.dumps(
+                {
+                    "requestId": "q1",
+                    "channels": 1,
+                    "sample_rate": 16000,
+                    "secret_key": TOKEN,
+                    "language": "Chinese",
+                }
+            )
+        )
         args = _args(srv, tmp_path, max_queued_frames=2)
         task = aio.create_task(srv._handle_connection(ws, model, TOKEN, args, lock))
         deadline = time.monotonic() + 5
@@ -767,8 +838,7 @@ def test_loopback_aborted_blocked_inference_then_reuse(srv, tmp_path):
         ws1.sock.close()  # abrupt TCP abort, no CLOSE frame
 
         # while the old inference is still blocked, new sessions are rejected
-        _, code = _sync_client(server.port, [
-            ("send_header", {"requestId": "a2", "secret_key": TOKEN}), ("recv",)])
+        _, code = _sync_client(server.port, [("send_header", {"requestId": "a2", "secret_key": TOKEN}), ("recv",)])
         assert code == 4429
         assert model.max_depth == 1
 
@@ -776,8 +846,9 @@ def test_loopback_aborted_blocked_inference_then_reuse(srv, tmp_path):
         deadline = time.time() + 10
         frames = []
         while time.time() < deadline:
-            frames, code = _sync_client(server.port, [
-                ("send_header", {"requestId": "a3", "secret_key": TOKEN}), ("recv",)])
+            frames, code = _sync_client(
+                server.port, [("send_header", {"requestId": "a3", "secret_key": TOKEN}), ("recv",)]
+            )
             if frames and frames[0].get("status") == "connected":
                 break
             time.sleep(0.1)
@@ -787,6 +858,7 @@ def test_loopback_aborted_blocked_inference_then_reuse(srv, tmp_path):
 # ---------------------------------------------------------------------------
 # r3 regression tests
 # ---------------------------------------------------------------------------
+
 
 def test_full_queue_with_eos_drops_no_audio(srv, tmp_path):
     """r3 blocker: queue at capacity containing accepted audio + EOS. The old
@@ -799,10 +871,17 @@ def test_full_queue_with_eos_drops_no_audio(srv, tmp_path):
         model = BlockingFakeModel()
         lock = aio.Lock()
         ws = FakeWS()
-        await ws.incoming.put(json.dumps({
-            "requestId": "e1", "channels": 1, "sample_rate": 16000,
-            "secret_key": TOKEN, "language": "Chinese",
-        }))
+        await ws.incoming.put(
+            json.dumps(
+                {
+                    "requestId": "e1",
+                    "channels": 1,
+                    "sample_rate": 16000,
+                    "secret_key": TOKEN,
+                    "language": "Chinese",
+                }
+            )
+        )
         args = _args(srv, tmp_path, max_queued_frames=2)
         task = aio.create_task(srv._handle_connection(ws, model, TOKEN, args, lock))
         deadline = time.monotonic() + 5
@@ -827,8 +906,7 @@ def test_full_queue_with_eos_drops_no_audio(srv, tmp_path):
     assert model.stream_calls == 2  # first chunk + drained tail, none lost
     assert model.finish_calls == 1
     assert ws.closed and ws.closed[0] == 1000
-    successes = [json.loads(s) for s in ws.sent
-                 if json.loads(s).get("status") == "success"]
+    successes = [json.loads(s) for s in ws.sent if json.loads(s).get("status") == "success"]
     assert successes[-1]["msg"]["reset"] is True
     text = "".join(f["msg"].get("text", "") for f in successes)
     assert text.endswith("。")  # finish flush ran on the full input
@@ -880,13 +958,20 @@ def test_serve_reports_real_bound_port(srv, tmp_path):
         assert body["port"] > 0, f"ready file must not say port 0: {body}"
         assert TOKEN not in open(ready).read()
 
-        frames, close_code = await aio.to_thread(_sync_client, body["port"], [
-            ("send_header", {"requestId": "p1", "secret_key": TOKEN}),
-            ("recv",),
-            ("send_audio", _frame(320)),
-            ("send_text", srv.EOS_MESSAGE),
-            ("recv",), ("recv",), ("recv",), ("recv",),
-        ])
+        frames, close_code = await aio.to_thread(
+            _sync_client,
+            body["port"],
+            [
+                ("send_header", {"requestId": "p1", "secret_key": TOKEN}),
+                ("recv",),
+                ("send_audio", _frame(320)),
+                ("send_text", srv.EOS_MESSAGE),
+                ("recv",),
+                ("recv",),
+                ("recv",),
+                ("recv",),
+            ],
+        )
         assert frames[0]["status"] == "connected"
         assert close_code == 1000
 
@@ -898,46 +983,67 @@ def test_serve_reports_real_bound_port(srv, tmp_path):
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize('backend', ['llama-native', 'llama-hybrid'])
+@pytest.mark.parametrize("backend", ["llama-native", "llama-hybrid"])
 def test_official_gguf_constructor_preserves_streaming_options(srv, monkeypatch, backend):
     from types import SimpleNamespace
+
     calls = []
-    monkeypatch.setattr(srv, '_configure_gguf_logging', lambda: None)
+    monkeypatch.setattr(srv, "_configure_gguf_logging", lambda: None)
+
     class Base:
         def finish_streaming_transcribe(self, *args):
             return None
+
     sentinel = object()
+
     def construct(**kwargs):
         calls.append(kwargs)
         return sentinel
-    monkeypatch.setitem(sys.modules, 'r2t2', SimpleNamespace(R2T2ASRModel=Base))
-    constructors = {'LlamaNative' if backend == 'llama-native' else 'LlamaHybrid': construct}
-    monkeypatch.setitem(sys.modules, 'r2t2_llama', SimpleNamespace(R2T2LlamaASRModel=SimpleNamespace(**constructors)))
-    args = srv.build_parser().parse_args(['--backend',backend,'--gguf-dir','/gguf','--model-dir','/processor'])
+
+    monkeypatch.setitem(sys.modules, "r2t2", SimpleNamespace(R2T2ASRModel=Base))
+    constructors = {"LlamaNative" if backend == "llama-native" else "LlamaHybrid": construct}
+    monkeypatch.setitem(sys.modules, "r2t2_llama", SimpleNamespace(R2T2LlamaASRModel=SimpleNamespace(**constructors)))
+    args = srv.build_parser().parse_args(["--backend", backend, "--gguf-dir", "/gguf", "--model-dir", "/processor"])
     assert srv.load_model(args) is sentinel
-    assert calls == [{'processor_path': '/processor', 'gguf_dir': '/gguf', 'model_gguf_name': 'Confucius4-R2T2-Q4_K_M.gguf', 'mmproj_gguf_name': 'mmproj-Confucius4-R2T2-Q8_0.gguf', 'n_ctx': 4096, 'n_batch': 1024, 'n_threads': 8, 'use_gpu': True, 'n_gpu_layers': -1, 'max_new_tokens': 4}]
+    assert calls == [
+        {
+            "processor_path": "/processor",
+            "gguf_dir": "/gguf",
+            "model_gguf_name": "Confucius4-R2T2-Q4_K_M.gguf",
+            "mmproj_gguf_name": "mmproj-Confucius4-R2T2-Q8_0.gguf",
+            "n_ctx": 4096,
+            "n_batch": 1024,
+            "n_threads": 8,
+            "use_gpu": True,
+            "n_gpu_layers": -1,
+            "max_new_tokens": 4,
+        }
+    ]
 
 
 def test_native_debug_prompts_are_not_logged(srv, monkeypatch, capsys):
     import atexit
     import ctypes
     from types import SimpleNamespace
+
     callbacks = []
     cleanup = []
-    monkeypatch.setattr(atexit, 'register', cleanup.append)
+    monkeypatch.setattr(atexit, "register", cleanup.append)
+
     class Setter:
         def __call__(self, callback, data):
             callbacks.append(callback)
-    monkeypatch.setattr(ctypes, 'CDLL', lambda path: SimpleNamespace(llama_log_set=Setter(), mtmd_log_set=Setter()))
+
+    monkeypatch.setattr(ctypes, "CDLL", lambda path: SimpleNamespace(llama_log_set=Setter(), mtmd_log_set=Setter()))
     srv._configure_gguf_logging()
     for callback in callbacks:
-        callback(1, b'private prompt', None)
-        callback(2, b'private transcript', None)
-        callback(5, b'private continuation', None)
-        callback(4, b'GPU error\n', None)
+        callback(1, b"private prompt", None)
+        callback(2, b"private transcript", None)
+        callback(5, b"private continuation", None)
+        callback(4, b"GPU error\n", None)
     captured = capsys.readouterr()
-    assert captured.out == ''
-    assert captured.err == 'GPU error\n' * 2
+    assert captured.out == ""
+    assert captured.err == "GPU error\n" * 2
     # Before Python clears module globals, neither native library may retain
     # a pointer to a Python closure. This also retains live setter handles.
     assert len(cleanup) == 1

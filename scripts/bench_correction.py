@@ -97,7 +97,9 @@ def evaluate(goldset: list[dict], provider: str, timeout_s: float) -> dict:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("goldset", type=Path, help="Path to goldset JSONL file")
-    parser.add_argument("--provider", choices=["jev", "semif"], default="jev", help="Correction provider (default: jev)")
+    parser.add_argument(
+        "--provider", choices=["jev", "semif"], default="jev", help="Correction provider (default: jev)"
+    )
     parser.add_argument("--timeout", type=float, default=2.0, help="Timeout per utterance in seconds (default: 2.0)")
     args = parser.parse_args()
 
@@ -113,11 +115,11 @@ def main() -> None:
     print(f"Running benchmark: {len(goldset)} cases, provider={args.provider}, timeout={args.timeout}s")
     results = evaluate(goldset, args.provider, args.timeout)
 
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"Precision: {results['precision']:.2%} ({results['tp']}/{results['tp'] + results['fp']})")
     print(f"Recall:    {results['recall']:.2%} ({results['tp']}/{results['tp'] + results['fn']})")
     print(f"F1 Score:  {results['f1']:.2%}")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
     print(f"TP: {results['tp']}  FP: {results['fp']}  FN: {results['fn']}  TN: {results['tn']}")
 
     if results["fp_cases"]:

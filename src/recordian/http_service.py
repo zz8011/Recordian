@@ -168,7 +168,9 @@ class _HTTPServer(ThreadedWSGIServer):
         try:
             if self.ssl_context is not None:
                 try:
-                    connection = self.ssl_context.wrap_socket(connection, server_side=True, do_handshake_on_connect=False)
+                    connection = self.ssl_context.wrap_socket(
+                        connection, server_side=True, do_handshake_on_connect=False
+                    )
                     connection.settimeout(self.handshake_timeout)
                     connection.do_handshake()
                 except (OSError, ValueError):

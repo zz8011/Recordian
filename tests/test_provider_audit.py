@@ -100,9 +100,7 @@ def test_cloud_stream_never_emits_unclosed_thinking(monkeypatch, fmt):
 @pytest.mark.parametrize("reason,done", [("length", True), (None, False)])
 def test_cloud_stream_rejects_incomplete_result(monkeypatch, fmt, reason, done):
     refiner = CloudLLMRefiner("http://example.invalid/v1", "", api_format=fmt)
-    monkeypatch.setattr(
-        "requests.post", lambda *a, **kw: cloud_response(fmt, ["仅有前半句"], reason=reason, done=done)
-    )
+    monkeypatch.setattr("requests.post", lambda *a, **kw: cloud_response(fmt, ["仅有前半句"], reason=reason, done=done))
     with pytest.raises(RuntimeError):
         list(refiner.refine_stream("完整原文"))
 
@@ -464,11 +462,16 @@ def test_qwen_truncation_keeps_complete_asr_in_pipeline(monkeypatch, stream):
     original = "嗯，完整原文，后半句也必须保留。"
     result, _ = _run_refinement(
         args=argparse.Namespace(
-            refine_max_len_llm=800, enable_streaming_refine=stream,
-            debug_diagnostics=False, config_path="",
+            refine_max_len_llm=800,
+            enable_streaming_refine=stream,
+            debug_diagnostics=False,
+            config_path="",
         ),
-        refiner=refiner, text=original, effective_hotwords=[],
-        refine_postprocess_rule="none", on_state=events.append,
+        refiner=refiner,
+        text=original,
+        effective_hotwords=[],
+        refine_postprocess_rule="none",
+        on_state=events.append,
     )
     assert result == original
     assert any("_IncompleteRefinementError" in event.get("message", "") for event in events)
@@ -481,7 +484,9 @@ def asr_stream(monkeypatch, tmp_path, chunks, *, reason="stop", done=True, emitt
     audio.write_bytes(b"mock audio")
     provider = HttpCloudProvider("http://example.invalid/v1/audio/transcriptions")
     monkeypatch.setattr("requests.get", lambda *a, **kw: Response(body={"data": [{"id": "mock"}]}))
-    monkeypatch.setattr("requests.post", lambda *a, **kw: Response(events=openai_events(chunks, reason=reason, done=done)))
+    monkeypatch.setattr(
+        "requests.post", lambda *a, **kw: Response(events=openai_events(chunks, reason=reason, done=done))
+    )
     pieces = emitted if emitted is not None else []
     for piece in provider.transcribe_file_stream(audio, hotwords=[]):
         pieces.append(piece)
@@ -498,23 +503,37 @@ def test_http_asr_preserves_untagged_transcript(monkeypatch, tmp_path, text):
     assert asr_stream(monkeypatch, tmp_path, list(text)) == text
 
 
-@pytest.mark.parametrize("text", [
-    "language models are useful for dictation.",
-    "language models are useful for dictation. They also help with punctuation and formatting.",
-])
+@pytest.mark.parametrize(
+    "text",
+    [
+        "language models are useful for dictation.",
+        "language models are useful for dictation. They also help with punctuation and formatting.",
+    ],
+)
 def test_http_asr_preserves_language_word_in_tagless_text_at_every_split(monkeypatch, tmp_path, text):
     for chunks in partitions(text):
         assert asr_stream(monkeypatch, tmp_path, chunks) == text
 
 
 @pytest.mark.parametrize("reason,done", [("length", True), (None, True), (None, False)])
-@pytest.mark.parametrize("text", ["language Chinese<asr_te", "正常短正文", "无标签正文" * 30, "<asr_text>正文</asr_text>", "language models are useful for dictation."])
+@pytest.mark.parametrize(
+    "text",
+    [
+        "language Chinese<asr_te",
+        "正常短正文",
+        "无标签正文" * 30,
+        "<asr_text>正文</asr_text>",
+        "language models are useful for dictation.",
+    ],
+)
 def test_http_asr_rejects_unconfirmed_completion(monkeypatch, tmp_path, reason, done, text):
     with pytest.raises(RuntimeError):
         asr_stream(monkeypatch, tmp_path, list(text), reason=reason, done=done)
 
 
-@pytest.mark.parametrize("text", ["language Chinese<asr_te", "<asr_te", "language " + "Chinese" * 12 + "<asr_te", "正文" * 40 + "<asr_te"])
+@pytest.mark.parametrize(
+    "text", ["language Chinese<asr_te", "<asr_te", "language " + "Chinese" * 12 + "<asr_te", "正文" * 40 + "<asr_te"]
+)
 def test_http_asr_never_flushes_incomplete_protocol_prefix(monkeypatch, tmp_path, text):
     emitted = []
     with pytest.raises(RuntimeError):
@@ -523,12 +542,15 @@ def test_http_asr_never_flushes_incomplete_protocol_prefix(monkeypatch, tmp_path
     assert "language " not in "".join(emitted)
 
 
-@pytest.mark.parametrize("text", [
-    "<asr_text>正文",
-    "<asr_text>正文</asr_te",
-    "<asr_text>第一段</asr_text><asr_text>最后一段",
-    "<asr_text>第一段</asr_text><asr_text>最后一段</asr_te",
-])
+@pytest.mark.parametrize(
+    "text",
+    [
+        "<asr_text>正文",
+        "<asr_text>正文</asr_te",
+        "<asr_text>第一段</asr_text><asr_text>最后一段",
+        "<asr_text>第一段</asr_text><asr_text>最后一段</asr_te",
+    ],
+)
 def test_http_asr_rejects_unclosed_tagged_result_at_every_split(monkeypatch, tmp_path, text):
     for chunks in partitions(text):
         with pytest.raises(RuntimeError):
@@ -576,9 +598,12 @@ def test_http_asr_unclosed_tag_cancels_bound_pipeline_session_without_replay(mon
 
     events = []
     context = SimpleNamespace(
-        provider=provider, audio_path=path, committer=Committer(),
+        provider=provider,
+        audio_path=path,
+        committer=Committer(),
         args=SimpleNamespace(enable_hotword_correction=False),
-        normalize_final_text=lambda text: text, on_state=events.append,
+        normalize_final_text=lambda text: text,
+        on_state=events.append,
     )
     text, _, info = _run_asr_streaming_commit(context=context, effective_hotwords=[], auto_hard_enter=False)
     assert text == "正文"  # Retain the preview for diagnostics, never commit it.
@@ -637,10 +662,24 @@ def write_real_ogg(tmp_path, *, seconds=0.12):
         pytest.skip("real ffmpeg is required for OGG integration")
     path = tmp_path / "recording.ogg"
     subprocess.run(
-        [ffmpeg, "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i",
-         f"sine=frequency=440:sample_rate=48000:duration={seconds}",
-         "-ac", "2", "-c:a", "libopus", str(path)],
-        check=True, capture_output=True, timeout=10,
+        [
+            ffmpeg,
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            f"sine=frequency=440:sample_rate=48000:duration={seconds}",
+            "-ac",
+            "2",
+            "-c:a",
+            "libopus",
+            str(path),
+        ],
+        check=True,
+        capture_output=True,
+        timeout=10,
     )
     assert path.read_bytes().startswith(b"OggS")
     return path
@@ -760,7 +799,9 @@ def test_auth_path_cli_saves_without_reading_file(monkeypatch, tmp_path, key):
     config = tmp_path / "hotkey.json"
     token = tmp_path / "does-not-exist.token"
     monkeypatch.setattr(
-        sys, "argv", ["recordian-hotkey-dictate", "--config-path", str(config), "--" + key.replace("_", "-"), str(token)]
+        sys,
+        "argv",
+        ["recordian-hotkey-dictate", "--config-path", str(config), "--" + key.replace("_", "-"), str(token)],
     )
     args = _parse_args_with_config(build_parser())
     _save_runtime_config(args)

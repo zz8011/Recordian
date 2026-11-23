@@ -106,7 +106,12 @@ def test_review_mixed_and_spaced_ip_forms() -> None:
 
 
 def test_review_spaced_url() -> None:
-    assert format_spoken_text("www 点 example 点 com", ) == "www.example.com"
+    assert (
+        format_spoken_text(
+            "www 点 example 点 com",
+        )
+        == "www.example.com"
+    )
 
 
 def test_review_zero_padded_cardinal() -> None:
@@ -193,10 +198,22 @@ def test_review_units_and_measures_still_format() -> None:
 
 def test_review_idempotent_over_repro_set() -> None:
     for sample in (
-        "三三两两", "三五成群", "二八年华", "五四运动", "七七事变",
-        "九九重阳", "九三学社", "三九严寒", "三番五次", "三三五五",
-        "编号三五", "密码三三两两", "房间号三三五五", "纪念五四。",
-        "零零一一", "端口八零八零",
+        "三三两两",
+        "三五成群",
+        "二八年华",
+        "五四运动",
+        "七七事变",
+        "九九重阳",
+        "九三学社",
+        "三九严寒",
+        "三番五次",
+        "三三五五",
+        "编号三五",
+        "密码三三两两",
+        "房间号三三五五",
+        "纪念五四。",
+        "零零一一",
+        "端口八零八零",
     ):
         once = format_spoken_text(sample)
         assert format_spoken_text(once) == once
@@ -271,10 +288,24 @@ def test_existing_ascii_and_formed_urls_untouched() -> None:
 
 def test_new_forms_are_idempotent() -> None:
     for sample in (
-        "长按位一二三四五六七八九", "一二三三四", "幺一幺服务器", "幺幺", "幺幺零",
-        "服务器幺幺幺", "端口幺二三四", "电话幺三八零零幺三八零零零",
-        "幺九二点幺六八点幺点幺", "百分之三点五", "百分之35", "第十二个",
-        "第二十名", "下午三点半", "一点钟", "十一", "数字三四", "号码幺幺零",
+        "长按位一二三四五六七八九",
+        "一二三三四",
+        "幺一幺服务器",
+        "幺幺",
+        "幺幺零",
+        "服务器幺幺幺",
+        "端口幺二三四",
+        "电话幺三八零零幺三八零零零",
+        "幺九二点幺六八点幺点幺",
+        "百分之三点五",
+        "百分之35",
+        "第十二个",
+        "第二十名",
+        "下午三点半",
+        "一点钟",
+        "十一",
+        "数字三四",
+        "号码幺幺零",
     ):
         once = format_spoken_text(sample)
         assert format_spoken_text(once) == once
@@ -293,9 +324,15 @@ def test_marker_captures_whole_cardinal_before_its_first_digit() -> None:
 
 def test_chinese_prose_quantities_stay_chinese() -> None:
     for text in (
-        "我有二十五个文件", "今天买了三个苹果", "等待十秒",
-        "需要一百零二份", "二十五个人", "买了二十五。",
-        "不是二十五而是三十五", "第十二个", "我有一个文件",
+        "我有二十五个文件",
+        "今天买了三个苹果",
+        "等待十秒",
+        "需要一百零二份",
+        "二十五个人",
+        "买了二十五。",
+        "不是二十五而是三十五",
+        "第十二个",
+        "我有一个文件",
     ):
         assert format_spoken_text(text) == text
     # Structured numerical forms remain ASCII for practical copying.
@@ -322,11 +359,21 @@ def test_arabic_asr_quantities_restore_chinese_prose() -> None:
 
 def test_existing_structured_arabic_numbers_stay_arabic() -> None:
     for text in (
-        "请联系13800138000吧", "编号0012", "端口8080",
-        "错误码404不存在", "验证码1234有效", "QQ号1234在线",
-        "要1-2个文件", "约3/4个", "温度-2度",
-        "IP地址192.168.1.1", "2026年9月24日", "下午3点15分",
-        "已经1.5了不要再改", "增长35%", "访问https://example.com/v2",
+        "请联系13800138000吧",
+        "编号0012",
+        "端口8080",
+        "错误码404不存在",
+        "验证码1234有效",
+        "QQ号1234在线",
+        "要1-2个文件",
+        "约3/4个",
+        "温度-2度",
+        "IP地址192.168.1.1",
+        "2026年9月24日",
+        "下午3点15分",
+        "已经1.5了不要再改",
+        "增长35%",
+        "访问https://example.com/v2",
     ):
         assert format_spoken_text(text) == text
 

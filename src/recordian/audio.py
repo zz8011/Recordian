@@ -59,9 +59,7 @@ def read_wav_mono_f32(path: Path, *, sample_rate: int = 16000) -> np.ndarray:
     return mono
 
 
-def chunk_samples(
-    samples: np.ndarray, *, sample_rate: int = 16000, chunk_ms: int = 480
-) -> list[np.ndarray]:
+def chunk_samples(samples: np.ndarray, *, sample_rate: int = 16000, chunk_ms: int = 480) -> list[np.ndarray]:
     """将音频样本分块"""
     stride = int(sample_rate * chunk_ms / 1000)
     if stride <= 0:
@@ -71,9 +69,7 @@ def chunk_samples(
     return [samples[i : i + stride] for i in range(0, len(samples), stride)]
 
 
-def write_wav_mono_f32(
-    path: Path, samples: np.ndarray, *, sample_rate: int = 16000
-) -> None:
+def write_wav_mono_f32(path: Path, samples: np.ndarray, *, sample_rate: int = 16000) -> None:
     """将 float32 numpy 数组写入 PCM16 WAV"""
     samples = np.clip(samples, -1.0, 1.0)
     pcm = (samples * 32767.0).astype(np.int16)

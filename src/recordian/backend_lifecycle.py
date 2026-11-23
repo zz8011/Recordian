@@ -3,6 +3,7 @@
 Executed by file path in a fresh interpreter: no Recordian imports or threads
 may run before the watchdog fork. The launcher then execs the backend in place.
 """
+
 from __future__ import annotations
 
 import os

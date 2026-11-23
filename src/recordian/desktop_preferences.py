@@ -41,11 +41,18 @@ class Autostart:
         try:
             result = self.runner(
                 ["systemctl", "--user", "show", UNIT, "--property=LoadState,UnitFileState"],
-                capture_output=True, text=True, timeout=3, check=True,
+                capture_output=True,
+                text=True,
+                timeout=3,
+                check=True,
             )
             state = dict(line.split("=", 1) for line in result.stdout.splitlines() if "=" in line)
             enabled = state.get("UnitFileState")
-            self.enabled = (enabled == "enabled") if state.get("LoadState") == "loaded" and enabled in {"enabled", "disabled"} else None
+            self.enabled = (
+                (enabled == "enabled")
+                if state.get("LoadState") == "loaded" and enabled in {"enabled", "disabled"}
+                else None
+            )
         except (OSError, subprocess.SubprocessError):
             self.enabled = None
         return self.enabled
@@ -57,8 +64,13 @@ class Autostart:
         if current == enabled:
             return
         try:
-            self.runner(["systemctl", "--user", "enable" if enabled else "disable", UNIT],
-                        capture_output=True, text=True, timeout=5, check=True)
+            self.runner(
+                ["systemctl", "--user", "enable" if enabled else "disable", UNIT],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=True,
+            )
         except (OSError, subprocess.SubprocessError) as exc:
             # A timed-out command may already have changed enablement.
             actual = self.read()
@@ -66,8 +78,13 @@ class Autostart:
                 raise ValueError("自启修改结果未知，请核对桌面服务状态。") from exc
             if actual != expected:
                 try:
-                    self.runner(["systemctl", "--user", "enable" if expected else "disable", UNIT],
-                                capture_output=True, text=True, timeout=5, check=True)
+                    self.runner(
+                        ["systemctl", "--user", "enable" if expected else "disable", UNIT],
+                        capture_output=True,
+                        text=True,
+                        timeout=5,
+                        check=True,
+                    )
                     if self.read() != expected:
                         raise ValueError("rollback state unconfirmed")
                 except (ValueError, OSError, subprocess.SubprocessError) as rollback:
@@ -89,6 +106,7 @@ class Receipt:
 
 class DesktopPreferencesStore:
     """Keep unrelated instances and unknown fields; refuse concurrent edits."""
+
     def __init__(self, agents_path, autostart=None):
         self.path = Path(agents_path)
         self.autostart = autostart or Autostart()
@@ -141,7 +159,11 @@ class DesktopPreferencesStore:
         }
 
     def profiles(self):
-        return [(str(p.get("id", "")), str(p.get("name") or p.get("id", ""))) for p in self.document.get("instances", []) if p.get("kind", "hermes") in {"hermes", "claude"}]
+        return [
+            (str(p.get("id", "")), str(p.get("name") or p.get("id", "")))
+            for p in self.document.get("instances", [])
+            if p.get("kind", "hermes") in {"hermes", "claude"}
+        ]
 
     def select_profile(self, ident):
         if ident == "new":
@@ -172,10 +194,15 @@ class DesktopPreferencesStore:
         if not any(values.get(k) != self.values.get(k) for k in DEFAULTS if k.startswith("agent_")):
             return None
         data = {
-            "id": values["agent_id"], "name": values["agent_name"], "kind": values["agent_client"],
-            "executable": values["agent_executable"], "workspace": values["agent_workspace"],
-            "home": values["agent_home"], "transport": values["agent_transport"],
-            "api_url": values["agent_api_url"], "timeout_s": values["agent_timeout_s"],
+            "id": values["agent_id"],
+            "name": values["agent_name"],
+            "kind": values["agent_client"],
+            "executable": values["agent_executable"],
+            "workspace": values["agent_workspace"],
+            "home": values["agent_home"],
+            "transport": values["agent_transport"],
+            "api_url": values["agent_api_url"],
+            "timeout_s": values["agent_timeout_s"],
         }
         # This is exactly the runtime's parser, not a guessed CLI contract.
         try:

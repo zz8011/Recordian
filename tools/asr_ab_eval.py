@@ -36,6 +36,7 @@ Confucius arms split clips over 24s into per-session chunks (production
 never feeds more than 24s per session) and run the scratch server with a
 120s session budget; scratch-server output is kept in server-<arm>.log.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -132,9 +133,7 @@ def score_clip(reference: str, hypothesis: str) -> dict:
     ref_n = norm(reference)
     hyp_n = norm(hypothesis)
     errors = edit_distance(ref_n, hyp_n)
-    term_misses = [
-        term for term in BUILTIN_TERMS if term in ref_n and term not in hyp_n
-    ]
+    term_misses = [term for term in BUILTIN_TERMS if term in ref_n and term not in hyp_n]
     latin_ref = re.findall(r"[a-z][a-z0-9.+-]{2,}", reference.lower())
     latin_hyp = hypothesis.lower()
     latin_survived = sum(1 for tok in latin_ref if tok in latin_hyp)
@@ -156,36 +155,54 @@ def load_context() -> str:
         return ""
 
 
-def run_confuius_arm(arm: str, clips: list[dict], context: str, *, server_log: Path | None = None,
-                      chunk_s: float | None = None, sink: list[dict] | None = None) -> list[dict]:
+def run_confuius_arm(
+    arm: str,
+    clips: list[dict],
+    context: str,
+    *,
+    server_log: Path | None = None,
+    chunk_s: float | None = None,
+    sink: list[dict] | None = None,
+) -> list[dict]:
     if arm == "A":
         gguf_dir, gguf_model, port = PROD_GGUF_DIR, "Confucius4-R2T2-Q4_K_M.gguf", 8331
     else:  # D
         gguf_dir, gguf_model, port = Q8_GGUF_DIR, "Confucius4-R2T2-Q8_0.gguf", 8332
         mmproj_link = gguf_dir / "mmproj-Confucius4-R2T2-Q8_0.gguf"
         if not mmproj_link.exists():
-            mmproj_link.symlink_to(
-                HOME / ".local/share/whisper/models/mmproj-Confucius4-R2T2-Q8_0.gguf"
-            )
+            mmproj_link.symlink_to(HOME / ".local/share/whisper/models/mmproj-Confucius4-R2T2-Q8_0.gguf")
     import tempfile
 
     ready_file = Path(tempfile.mkdtemp(prefix=f"asr-ab-{arm}-")) / "ready.json"
     cmd = [
         ASR_VENV_PYTHON,
         "server/confucius_streaming_server.py",
-        "--backend", "llama-native",
-        "--gguf-dir", str(gguf_dir),
-        "--gguf-model", gguf_model,
-        "--model-dir", str(MAIN_REPO / "models/Confucius4-R2T2"),
-        "--r2t2-source", str(MAIN_REPO / "runtime/Confucius4-R2T2-gguf"),
-        "--max-model-len", "4096",
-        "--host", "127.0.0.1",
-        "--port", str(port),
-        "--max-queued-frames", "512",
-        "--max-session-seconds", str(SCRATCH_MAX_SESSION_SECONDS),
-        "--token-file", str(TOKEN_FILE),
-        "--warmup-wav", str(MAIN_REPO / "runtime/Confucius4-R2T2/resources/test.wav"),
-        "--ready-file", str(ready_file),
+        "--backend",
+        "llama-native",
+        "--gguf-dir",
+        str(gguf_dir),
+        "--gguf-model",
+        gguf_model,
+        "--model-dir",
+        str(MAIN_REPO / "models/Confucius4-R2T2"),
+        "--r2t2-source",
+        str(MAIN_REPO / "runtime/Confucius4-R2T2-gguf"),
+        "--max-model-len",
+        "4096",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        str(port),
+        "--max-queued-frames",
+        "512",
+        "--max-session-seconds",
+        str(SCRATCH_MAX_SESSION_SECONDS),
+        "--token-file",
+        str(TOKEN_FILE),
+        "--warmup-wav",
+        str(MAIN_REPO / "runtime/Confucius4-R2T2/resources/test.wav"),
+        "--ready-file",
+        str(ready_file),
     ]
     env = dict(os.environ)
     env["PYTHONPATH"] = str(MAIN_REPO / "src")
@@ -277,8 +294,9 @@ def _transcribe_once(provider, wav_path: Path) -> str:
     return str(getattr(provider.transcribe_file(wav_path, hotwords=[]), "text", "") or "")
 
 
-def _transcribe_resilient(provider, wav_path: Path, split_s: float | None,
-                          tmpdir: Path, depth: int = 0) -> tuple[str, int]:
+def _transcribe_resilient(
+    provider, wav_path: Path, split_s: float | None, tmpdir: Path, depth: int = 0
+) -> tuple[str, int]:
     """Transcribe one file/chunk; returns (text, failed_chunks).
 
     Two fresh-session attempts, then (when a split size is given and this is
@@ -302,8 +320,9 @@ def _transcribe_resilient(provider, wav_path: Path, split_s: float | None,
     return "".join(texts), failed
 
 
-def transcribe_all(provider, clips: list[dict], *, chunk_s: float | None = None,
-                   sink: list[dict] | None = None) -> list[dict]:
+def transcribe_all(
+    provider, clips: list[dict], *, chunk_s: float | None = None, sink: list[dict] | None = None
+) -> list[dict]:
     """Transcribe every clip; long clips are split into <= chunk_s sessions.
 
     A whole long file in one Confucius session never finishes (see module
@@ -369,8 +388,9 @@ def aggregate(results: list[dict]) -> dict:
     }
 
 
-def build_payload(arm: str, dataset_dir: Path, clips: list[dict], results: list[dict],
-                  *, partial: bool = False, error: str = "") -> dict:
+def build_payload(
+    arm: str, dataset_dir: Path, clips: list[dict], results: list[dict], *, partial: bool = False, error: str = ""
+) -> dict:
     payload = {
         "arm": arm,
         "dataset": str(dataset_dir),
@@ -398,8 +418,12 @@ def cmd_run(args: argparse.Namespace) -> None:
         if args.arm in ("A", "D"):
             server_log = out.with_name(f"server-{args.arm}.log")
             results = run_confuius_arm(
-                args.arm, clips, context, server_log=server_log,
-                chunk_s=CONFUCIUS_CHUNK_S, sink=completed,
+                args.arm,
+                clips,
+                context,
+                server_log=server_log,
+                chunk_s=CONFUCIUS_CHUNK_S,
+                sink=completed,
             )
         elif args.arm == "B":
             results = run_qwen_arm(clips, context)
@@ -409,18 +433,16 @@ def cmd_run(args: argparse.Namespace) -> None:
         # Never lose completed clips to a mid-run crash again: persist the
         # partial arm output, then re-raise so the failure stays visible.
         if completed:
-            payload = build_payload(args.arm, dataset_dir, clips, completed,
-                                    partial=True, error=f"{type(exc).__name__}: {exc}")
+            payload = build_payload(
+                args.arm, dataset_dir, clips, completed, partial=True, error=f"{type(exc).__name__}: {exc}"
+            )
             out.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
             print(f"arm {args.arm} PARTIAL: {len(completed)}/{len(clips)} clips saved -> {out}")
         raise
     payload = build_payload(args.arm, dataset_dir, clips, results)
     out.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     agg = payload["aggregate"]
-    print(
-        f"arm {args.arm} done: micro CER={agg['micro_cer']:.4f} "
-        f"mean RTF={agg['mean_rtf']:.3f} -> {out}"
-    )
+    print(f"arm {args.arm} done: micro CER={agg['micro_cer']:.4f} mean RTF={agg['mean_rtf']:.3f} -> {out}")
 
 
 def cmd_report(args: argparse.Namespace) -> None:
@@ -431,20 +453,17 @@ def cmd_report(args: argparse.Namespace) -> None:
     lines = ["# ASR A/B eval report", ""]
     lines.append(f"Dataset: {next(iter(arms.values()))['dataset']}")
     gold = all(p["gold_references"] for p in arms.values())
-    lines.append(
-        "References: " + ("gold (human-written)" if gold else "captured final text — NOT gold")
-    )
-    lines += ["", "| arm | micro CER | mean RTF | mean latency/clip | term-miss clips | latin token survival |",
-              "|---|---|---|---|---|---|"]
+    lines.append("References: " + ("gold (human-written)" if gold else "captured final text — NOT gold"))
+    lines += [
+        "",
+        "| arm | micro CER | mean RTF | mean latency/clip | term-miss clips | latin token survival |",
+        "|---|---|---|---|---|---|",
+    ]
     for arm in ("A", "B", "D"):
         if arm not in arms:
             continue
         agg = arms[arm]["aggregate"]
-        survival = (
-            f"{agg['latin_survived']}/{agg['latin_ref_tokens']}"
-            if agg["latin_ref_tokens"]
-            else "n/a"
-        )
+        survival = f"{agg['latin_survived']}/{agg['latin_ref_tokens']}" if agg["latin_ref_tokens"] else "n/a"
         lines.append(
             f"| {arm} | {agg['micro_cer']:.4f} | {agg['mean_rtf']:.3f} | "
             f"{agg['mean_elapsed_s']:.2f}s | {agg['term_miss_clips']} | {survival} |"

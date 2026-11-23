@@ -26,24 +26,37 @@ def test_codex_compatibility_selected_before_fcitx_session(monkeypatch):
     assert desktop.select_desktop_committer(noop) is noop
 
 
-@pytest.mark.parametrize("cmdline", [
-    b"ChatGPT\0--enable-wayland-ime\0",
-    b"/usr/lib/chatgpt/ChatGPT --ozone-platform=wayland --enable-wayland-ime --wayland-text-input-version=3\0",
-])
+@pytest.mark.parametrize(
+    "cmdline",
+    [
+        b"ChatGPT\0--enable-wayland-ime\0",
+        b"/usr/lib/chatgpt/ChatGPT --ozone-platform=wayland --enable-wayland-ime --wayland-text-input-version=3\0",
+    ],
+)
 def test_codex_with_running_ime_keeps_streaming_and_correction(monkeypatch, cmdline):
     monkeypatch.setenv("HYPRLAND_INSTANCE_SIGNATURE", "test")
-    monkeypatch.setattr(desktop, "desktop_query", lambda _: {
-        "class": "chatgpt", "xwayland": False, "address": "target", "pid": 123,
-    })
+    monkeypatch.setattr(
+        desktop,
+        "desktop_query",
+        lambda _: {
+            "class": "chatgpt",
+            "xwayland": False,
+            "address": "target",
+            "pid": 123,
+        },
+    )
     monkeypatch.setattr(desktop.Path, "read_bytes", lambda _: cmdline)
     original = FcitxCommitter()
     assert desktop.select_desktop_committer(original) is original
 
 
-@pytest.mark.parametrize("cmdline", [
-    b"ChatGPT\0--ozone-platform=wayland\0",
-    b"ChatGPT\0--enable-wayland-ime-disabled\0",
-])
+@pytest.mark.parametrize(
+    "cmdline",
+    [
+        b"ChatGPT\0--ozone-platform=wayland\0",
+        b"ChatGPT\0--enable-wayland-ime-disabled\0",
+    ],
+)
 def test_saved_or_similar_flags_do_not_enable_native_route(monkeypatch, cmdline):
     monkeypatch.setattr(desktop.Path, "read_bytes", lambda _: cmdline)
     assert not desktop._wayland_ime_enabled(123)
@@ -52,6 +65,7 @@ def test_saved_or_similar_flags_do_not_enable_native_route(monkeypatch, cmdline)
 def test_exited_process_keeps_compatibility(monkeypatch):
     def missing(_):
         raise FileNotFoundError
+
     monkeypatch.setattr(desktop.Path, "read_bytes", missing)
     assert not desktop._wayland_ime_enabled(123)
 
@@ -113,8 +127,10 @@ def test_buffered_session_never_pastes_after_invalidation(monkeypatch, terminal)
     elif terminal == "focus":
         active["address"] = "other"
     else:
+
         def unavailable(_):
             raise OSError("compositor unavailable")
+
         monkeypatch.setattr(desktop, "desktop_query", unavailable)
     assert not session.update_preedit("暂存").committed
     active["address"] = "target"
@@ -149,11 +165,13 @@ def test_orb_uses_active_window_monitor_and_logical_scale(monkeypatch):
     }
     monkeypatch.setattr(desktop, "desktop_query", data.__getitem__)
     calls = []
+
     def run(cmd, **kw):
         calls.append(cmd)
         return subprocess.CompletedProcess(cmd, 0, "ok", "")
+
     monkeypatch.setattr(desktop.subprocess, "run", run)
     assert desktop.place_overlay_on_active_monitor()
     assert 'monitor="2"' in calls[0][-1]
-    assert 'x=2100,y=1888' in calls[0][-1]
+    assert "x=2100,y=1888" in calls[0][-1]
     assert 'mode="top"' in calls[0][-1]

@@ -255,6 +255,7 @@ def test_stop_record_process_ffmpeg_uses_sigint() -> None:
     from unittest.mock import MagicMock
 
     from recordian.linux_dictate import stop_record_process
+
     proc = MagicMock()
     proc.poll.return_value = None
     stop_record_process(proc, recorder_backend="ffmpeg-pulse")
@@ -266,6 +267,7 @@ def test_stop_record_process_arecord_uses_sigterm() -> None:
     from unittest.mock import MagicMock
 
     from recordian.linux_dictate import stop_record_process
+
     proc = MagicMock()
     proc.poll.return_value = None
     stop_record_process(proc, recorder_backend="arecord")

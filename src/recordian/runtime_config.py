@@ -120,6 +120,7 @@ def normalize_contextual_aliases(value: object) -> list[dict[str, str]]:
             break
     return normalized
 
+
 _PROJECT_ROOT = Path(__file__).parent.parent.parent
 _ASSETS_DIR = Path(__file__).parent.parent.parent / "assets"
 DEFAULT_SOUND_ON_PATH = str(_ASSETS_DIR / "wake-on.mp3")
@@ -157,8 +158,7 @@ def normalize_string_list(value: object, *, fallback: list[str]) -> list[str]:
 def format_contextual_aliases(value: object) -> str:
     """Render normalized aliases as editable text: ``heard→word::meaning`` per line."""
     return "\n".join(
-        f"{entry['heard']}→{entry['word']}::{entry['meaning']}"
-        for entry in normalize_contextual_aliases(value)
+        f"{entry['heard']}→{entry['word']}::{entry['meaning']}" for entry in normalize_contextual_aliases(value)
     )
 
 
@@ -214,9 +214,7 @@ def normalize_notify_backend(value: object, *, fallback: str = "auto") -> str:
     )
 
 
-def _normalize_path_string(
-    value: object, *, base_dir: Path | None = None, resolve_symlinks: bool = True
-) -> str:
+def _normalize_path_string(value: object, *, base_dir: Path | None = None, resolve_symlinks: bool = True) -> str:
     raw = str(value).strip()
     if not raw:
         return ""
@@ -254,7 +252,9 @@ def normalize_runtime_config(
     normalized["enable_semif_correction"] = bool(normalized.get("enable_semif_correction", False))
     normalized["correction_provider"] = normalize_correction_provider(normalized.get("correction_provider", "jev"))
     normalized["semif_endpoint"] = str(normalized.get("semif_endpoint") or "").strip()
-    normalized["semif_timeout_s"] = normalize_semif_timeout_s(normalized.get("semif_timeout_s", DEFAULT_SEMIF_TIMEOUT_S))
+    normalized["semif_timeout_s"] = normalize_semif_timeout_s(
+        normalized.get("semif_timeout_s", DEFAULT_SEMIF_TIMEOUT_S)
+    )
     normalized["jev_timeout_s"] = normalize_jev_timeout_s(normalized.get("jev_timeout_s", DEFAULT_JEV_TIMEOUT_S))
     normalized["contextual_aliases"] = normalize_contextual_aliases(normalized.get("contextual_aliases", []))
     normalized["wake_prefix"] = normalize_string_list(
@@ -271,7 +271,9 @@ def normalize_runtime_config(
         base_dir=config_base_dir,
     )
     owner_sample = str(normalized.get("wake_owner_sample", "")).strip()
-    normalized["wake_owner_sample"] = _normalize_path_string(owner_sample, base_dir=config_base_dir) if owner_sample else ""
+    normalized["wake_owner_sample"] = (
+        _normalize_path_string(owner_sample, base_dir=config_base_dir) if owner_sample else ""
+    )
     normalized["auto_lexicon_db"] = _normalize_path_string(
         str(normalized.get("auto_lexicon_db", DEFAULT_AUTO_LEXICON_DB)).strip() or DEFAULT_AUTO_LEXICON_DB,
         base_dir=config_base_dir,
@@ -314,9 +316,13 @@ def normalize_runtime_config(
         )
     else:
         if "sound_on_path" in normalized:
-            normalized["sound_on_path"] = _normalize_path_string(normalized.get("sound_on_path", ""), base_dir=_PROJECT_ROOT)
+            normalized["sound_on_path"] = _normalize_path_string(
+                normalized.get("sound_on_path", ""), base_dir=_PROJECT_ROOT
+            )
         if "sound_off_path" in normalized:
-            normalized["sound_off_path"] = _normalize_path_string(normalized.get("sound_off_path", ""), base_dir=_PROJECT_ROOT)
+            normalized["sound_off_path"] = _normalize_path_string(
+                normalized.get("sound_off_path", ""), base_dir=_PROJECT_ROOT
+            )
 
     for key in ("wake_encoder", "wake_decoder", "wake_joiner", "wake_tokens", "wake_keywords_file"):
         if key in normalized:

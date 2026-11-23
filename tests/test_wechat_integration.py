@@ -13,7 +13,7 @@ import subprocess
 import sys
 import time
 
-sys.path.insert(0, 'src')
+sys.path.insert(0, "src")
 
 from recordian.linux_commit import _is_electron_window, _is_terminal_window, resolve_committer
 
@@ -26,7 +26,7 @@ def get_wechat_window_id():
         text=True,
     )
     if result.returncode == 0 and result.stdout.strip():
-        return int(result.stdout.strip().split('\n')[0])
+        return int(result.stdout.strip().split("\n")[0])
     return None
 
 
@@ -62,7 +62,7 @@ def main():
     print("\n测试 auto-fallback 模式:")
     committer_fallback = resolve_committer("auto-fallback", target_window_id=wechat_wid)
     print(f"✅ Backend: {committer_fallback.backend_name}")
-    if hasattr(committer_fallback, 'committers'):
+    if hasattr(committer_fallback, "committers"):
         print(f"✅ 降级链长度: {len(committer_fallback.committers)}")
 
     # 5. 实际输入测试

@@ -28,8 +28,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--port", type=int, default=DEFAULT_REMOTE_PASTE_PORT)
     parser.add_argument("--host", default="127.0.0.1", help="Bind address; LAN binds require --token-file")
     parser.add_argument("--token-file", default="", help="Owner-only authentication token file (0600)")
-    parser.add_argument('--tls-cert-file', default='', help='TLS server certificate; required for direct LAN use')
-    parser.add_argument('--tls-key-file', default='', help='TLS certificate private key file')
+    parser.add_argument("--tls-cert-file", default="", help="TLS server certificate; required for direct LAN use")
+    parser.add_argument("--tls-key-file", default="", help="TLS certificate private key file")
     parser.add_argument("--hostname", default=socket.gethostname())
     parser.add_argument("--config", default="")
     parser.add_argument("--enable-notify", dest="enable_notify", action="store_true", default=True)
@@ -59,7 +59,7 @@ def parse_args() -> argparse.Namespace:
             payload = load_agent_config(path)
             allowed = {action.dest for action in parser._actions if action.dest != "help"}
             defaults = {k: v for k, v in payload.items() if k in allowed}
-            for key in ('token_file', 'tls_cert_file', 'tls_key_file'):
+            for key in ("token_file", "tls_cert_file", "tls_key_file"):
                 if defaults.get(key):
                     value = Path(str(defaults[key])).expanduser()
                     # Keep symlinks visible to the private token validator.
@@ -73,9 +73,15 @@ class RemotePasteTCPServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
     allow_reuse_address = True
     daemon_threads = True
 
-    def __init__(self, server_address: tuple[str, int], handler_class: type[socketserver.BaseRequestHandler], app: RemotePasteAgent) -> None:
-        self.tls = server_tls_context(str(getattr(app.args, 'tls_cert_file', '') or ''),
-                                      str(getattr(app.args, 'tls_key_file', '') or ''))
+    def __init__(
+        self,
+        server_address: tuple[str, int],
+        handler_class: type[socketserver.BaseRequestHandler],
+        app: RemotePasteAgent,
+    ) -> None:
+        self.tls = server_tls_context(
+            str(getattr(app.args, "tls_cert_file", "") or ""), str(getattr(app.args, "tls_key_file", "") or "")
+        )
         require_private_bind(server_address[0], app.token, encrypted=self.tls is not None)
         self.app = app
         self._slots = threading.BoundedSemaphore(8)
@@ -119,14 +125,14 @@ class RemotePasteRequestHandler(socketserver.StreamRequestHandler):
             while len(raw) <= MAX_MESSAGE_BYTES:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
-                    raise TimeoutError('request deadline exceeded')
+                    raise TimeoutError("request deadline exceeded")
                 self.request.settimeout(remaining)
                 chunk = self.request.recv(min(4096, MAX_MESSAGE_BYTES + 1 - len(raw)))
                 if not chunk:
                     break
                 raw.extend(chunk)
-                if b'\n' in raw:
-                    raw = raw.partition(b'\n')[0] + b'\n'
+                if b"\n" in raw:
+                    raw = raw.partition(b"\n")[0] + b"\n"
                     break
             if len(raw) > MAX_MESSAGE_BYTES:
                 response = self.server.app.error_response("message_too_large")  # type: ignore[attr-defined]
@@ -149,14 +155,16 @@ class RemotePasteAgent:
         self.started_at = time.monotonic()
         self.notifier = resolve_notifier("none" if not args.enable_notify else args.notify_backend)
         self._paste_lock = threading.Lock()
-        filename = str(getattr(args, 'token_file', '') or '').strip()
-        self.token = load_private_token(filename) if filename else ''
+        filename = str(getattr(args, "token_file", "") or "").strip()
+        self.token = load_private_token(filename) if filename else ""
 
     def handle_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
-        supplied = payload.get('token', '')
-        if self.token and (not isinstance(supplied, str) or not hmac.compare_digest(
-                supplied.encode('utf-8'), self.token.encode('utf-8'))):
-            return self.error_response('unauthorized')
+        supplied = payload.get("token", "")
+        if self.token and (
+            not isinstance(supplied, str)
+            or not hmac.compare_digest(supplied.encode("utf-8"), self.token.encode("utf-8"))
+        ):
+            return self.error_response("unauthorized")
         action = str(payload.get("action", "")).strip().lower()
         if action == "ping":
             return {"status": "pong", "hostname": self.args.hostname}
@@ -210,9 +218,9 @@ class RemotePasteAgent:
         try:
             clipboard_wait_s = float(payload.get("clipboard_wait_s", 0.0) or 0.0)
         except (ValueError, TypeError, OverflowError):
-            return self.error_response('invalid_clipboard_wait')
+            return self.error_response("invalid_clipboard_wait")
         if not math.isfinite(clipboard_wait_s) or not 0 <= clipboard_wait_s <= 3:
-            return self.error_response('invalid_clipboard_wait')
+            return self.error_response("invalid_clipboard_wait")
         with self._paste_lock:
             delay_ms = max(0, int(getattr(self.args, "paste_delay_ms", 100)))
             if delay_ms:
@@ -229,7 +237,7 @@ class RemotePasteAgent:
                         "Remote paste-only clipboard mismatch on %s (expected_chars=%s, actual_chars=%s)",
                         self.args.hostname,
                         len(expected_text),
-                        len(current_clipboard or ''),
+                        len(current_clipboard or ""),
                     )
                     return self.error_response("clipboard_not_synced")
 

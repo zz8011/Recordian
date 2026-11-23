@@ -1,4 +1,5 @@
 """Persistent GIO transport contracts; never touches the desktop bus."""
+
 from __future__ import annotations
 
 import ctypes
@@ -19,9 +20,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def bus_module():
-    assert importlib.util.find_spec("recordian.native_bus") is not None, (
-        "production native D-Bus adapter is missing"
-    )
+    assert importlib.util.find_spec("recordian.native_bus") is not None, "production native D-Bus adapter is missing"
     return importlib.import_module("recordian.native_bus")
 
 
@@ -45,8 +44,11 @@ def test_unavailable_native_uses_existing_busctl(monkeypatch):
 
     monkeypatch.setattr(module, "get_transport", lambda: None)
     monkeypatch.setattr(linux_commit, "which", lambda _: "/usr/bin/busctl")
-    monkeypatch.setattr(linux_commit.subprocess, "run", lambda *a, **k: SimpleNamespace(
-        returncode=0, stdout='s "committed fixture"', stderr=""))
+    monkeypatch.setattr(
+        linux_commit.subprocess,
+        "run",
+        lambda *a, **k: SimpleNamespace(returncode=0, stdout='s "committed fixture"', stderr=""),
+    )
     assert linux_commit._fcitx_busctl_call("CommitText", "s", ["hello"]) == "committed fixture"
 
 
@@ -54,8 +56,11 @@ def test_native_commit_does_not_require_busctl(monkeypatch):
     module = bus_module()
     from recordian import linux_commit
 
-    monkeypatch.setattr(module, "get_transport", lambda: SimpleNamespace(
-        call=lambda method, *a, **k: "ok" if method == "Ping" else "committed native"))
+    monkeypatch.setattr(
+        module,
+        "get_transport",
+        lambda: SimpleNamespace(call=lambda method, *a, **k: "ok" if method == "Ping" else "committed native"),
+    )
     monkeypatch.setattr(linux_commit, "which", lambda _: None)
     assert linux_commit.FcitxCommitter().commit("hello").committed
     assert linux_commit._fcitx_channel_available()
@@ -73,6 +78,7 @@ def test_python_selection_is_cached_before_any_native_call(monkeypatch):
 def test_required_loader_failure_never_selects_busctl(monkeypatch):
     module = bus_module()
     from recordian import linux_commit
+
     monkeypatch.setattr(module, "_selection", module._UNSET)
 
     def unavailable():
@@ -102,18 +108,25 @@ def ready(process, expected):
 
 @pytest.fixture
 def private_bus(tmp_path):
-    daemon = subprocess.Popen(["dbus-daemon", "--session", "--nofork", "--print-address=1",
-                               f"--address=unix:path={tmp_path}/bus"],
-                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    daemon = subprocess.Popen(
+        ["dbus-daemon", "--session", "--nofork", "--print-address=1", f"--address=unix:path={tmp_path}/bus"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
     assert select.select([daemon.stdout], [], [], 5)[0]
     address = daemon.stdout.readline().strip()
     services = []
 
     def start():
         log = tmp_path / f"calls-{len(services)}.jsonl"
-        process = subprocess.Popen(["/usr/bin/python3", str(ROOT / "tests/native/dbus_transport_fixture.py"),
-                                    address, str(log)], stdin=subprocess.PIPE,
-                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        process = subprocess.Popen(
+            ["/usr/bin/python3", str(ROOT / "tests/native/dbus_transport_fixture.py"), address, str(log)],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
         services.append(process)
         ready(process, "READY")
         return process, log
@@ -137,8 +150,11 @@ def private_bus(tmp_path):
 @pytest.fixture
 def transport(private_bus):
     module = bus_module()
-    path = Path(os.environ.get("RECORDIAN_NATIVE_LIBRARY", str(
-        ROOT / "native/recordian-core/target/release/librecordian_core.so")))
+    path = Path(
+        os.environ.get(
+            "RECORDIAN_NATIVE_LIBRARY", str(ROOT / "native/recordian-core/target/release/librecordian_core.so")
+        )
+    )
     if not path.is_file():
         pytest.skip("parent-built native library is not available yet")
     bus = module.NativeBus(ctypes.CDLL(str(path)), address=private_bus[0])
@@ -164,8 +180,13 @@ def test_unicode_and_signatures_use_one_connection(transport, private_bus):
     assert transport.call("CommitSegment", "sus", [token, "1", text]) == "segment 1 fixture"
     assert transport.call("CommitSession", "ss", [token, text]) == "committed fixture"
     observed = calls(private_bus[2])
-    assert [x["method"] for x in observed] == ["Ping", "BeginSession", "UpdatePreedit",
-                                                "CommitSegment", "CommitSession"]
+    assert [x["method"] for x in observed] == [
+        "Ping",
+        "BeginSession",
+        "UpdatePreedit",
+        "CommitSegment",
+        "CommitSession",
+    ]
     assert observed[2]["args"] == ["server-token", text]
     assert observed[3]["args"] == ["server-token", 1, text]
     assert len({x["sender"] for x in observed}) == 1
@@ -246,10 +267,15 @@ def test_token_memory_is_bounded_and_cancel_releases_capacity(transport, private
     assert len(calls(private_bus[2])) == 258
 
 
-@pytest.mark.parametrize("method,signature", [
-    ("UpdatePreedit", "ss"), ("CommitSegment", "sus"),
-    ("CommitSession", "ss"), ("CancelSession", "s"),
-])
+@pytest.mark.parametrize(
+    "method,signature",
+    [
+        ("UpdatePreedit", "ss"),
+        ("CommitSegment", "sus"),
+        ("CommitSession", "ss"),
+        ("CancelSession", "s"),
+    ],
+)
 def test_exact_stale_reply_releases_binding_beyond_capacity(transport, private_bus, method, signature):
     retired = []
     for _ in range(300):
@@ -295,10 +321,13 @@ def test_stale_lookalike_retains_binding_for_one_original_owner_cleanup(transpor
     assert calls(replacement_log) == []
 
 
-@pytest.mark.parametrize("operation,method", [("commit", "CommitSession"),
-                                               ("commit_segment", "CommitSegment")])
+@pytest.mark.parametrize("operation,method", [("commit", "CommitSession"), ("commit_segment", "CommitSegment")])
 def test_python_session_stale_lookalike_cleans_original_owner_beyond_capacity(
-    transport, private_bus, monkeypatch, operation, method,
+    transport,
+    private_bus,
+    monkeypatch,
+    operation,
+    method,
 ):
     from recordian import linux_commit
 
@@ -330,7 +359,9 @@ def test_python_session_stale_lookalike_cleans_original_owner_beyond_capacity(
 
 
 def test_python_session_structured_error_cannot_be_overridden_by_segmentsunsafe_message(
-    transport, private_bus, monkeypatch,
+    transport,
+    private_bus,
+    monkeypatch,
 ):
     from recordian import linux_commit
 
@@ -345,23 +376,39 @@ def test_python_session_structured_error_cannot_be_overridden_by_segmentsunsafe_
     assert [row["method"] for row in calls(private_bus[2])] == ["BeginSession", "CommitSegment", "CancelSession"]
 
 
-@pytest.mark.parametrize("operation,method", [("commit", "CommitSession"),
-                                               ("commit_segment", "CommitSegment")])
-@pytest.mark.parametrize("has_field,name,message,outcome", [
-    (False, None, "StaleSession mentioned in prose", "uncertain"),
-    (False, None, "(org.fcitx.Fcitx.Recordian.Error.StaleSession)", "stale"),
-    (False, None, "org.fcitx.Fcitx.Recordian.Error.StaleSessionExtra", "uncertain"),
-    (False, None, "org.fcitx.Fcitx.Recordian.Error.StaleSession.Extra", "uncertain"),
-    (True, "", "org.fcitx.Fcitx.Recordian.Error.StaleSession", "uncertain"),
-    (True, None, "org.fcitx.Fcitx.Recordian.Error.StaleSession", "uncertain"),
-    (True, "org.other.StaleSession", "org.fcitx.Fcitx.Recordian.Error.StaleSession", "uncertain"),
-    (True, "org.fcitx.Fcitx.Recordian.Error.StaleSessionExtra",
-     "org.fcitx.Fcitx.Recordian.Error.StaleSession", "uncertain"),
-    (True, "org.fcitx.Fcitx.Recordian.Error.StaleSession",
-     "org.fcitx.Fcitx.Recordian.Error.SegmentsUnsafe", "stale"),
-])
+@pytest.mark.parametrize("operation,method", [("commit", "CommitSession"), ("commit_segment", "CommitSegment")])
+@pytest.mark.parametrize(
+    "has_field,name,message,outcome",
+    [
+        (False, None, "StaleSession mentioned in prose", "uncertain"),
+        (False, None, "(org.fcitx.Fcitx.Recordian.Error.StaleSession)", "stale"),
+        (False, None, "org.fcitx.Fcitx.Recordian.Error.StaleSessionExtra", "uncertain"),
+        (False, None, "org.fcitx.Fcitx.Recordian.Error.StaleSession.Extra", "uncertain"),
+        (True, "", "org.fcitx.Fcitx.Recordian.Error.StaleSession", "uncertain"),
+        (True, None, "org.fcitx.Fcitx.Recordian.Error.StaleSession", "uncertain"),
+        (True, "org.other.StaleSession", "org.fcitx.Fcitx.Recordian.Error.StaleSession", "uncertain"),
+        (
+            True,
+            "org.fcitx.Fcitx.Recordian.Error.StaleSessionExtra",
+            "org.fcitx.Fcitx.Recordian.Error.StaleSession",
+            "uncertain",
+        ),
+        (
+            True,
+            "org.fcitx.Fcitx.Recordian.Error.StaleSession",
+            "org.fcitx.Fcitx.Recordian.Error.SegmentsUnsafe",
+            "stale",
+        ),
+    ],
+)
 def test_python_session_structured_and_legacy_error_classification(
-    monkeypatch, operation, method, has_field, name, message, outcome,
+    monkeypatch,
+    operation,
+    method,
+    has_field,
+    name,
+    message,
+    outcome,
 ):
     from recordian import linux_commit
 
@@ -379,7 +426,9 @@ def test_python_session_structured_and_legacy_error_classification(
 
     monkeypatch.setattr(linux_commit, "_fcitx_busctl_call", call)
     session = linux_commit.FcitxStreamingSession(
-        linux_commit.FcitxCommitter(), "bound-token", preedit_capable=True,
+        linux_commit.FcitxCommitter(),
+        "bound-token",
+        preedit_capable=True,
         supports_segments=True,
     )
     assert getattr(session, operation)("text").outcome == outcome
@@ -392,6 +441,7 @@ def test_python_session_structured_and_legacy_error_classification(
 
 def test_native_session_segmentsunsafe_and_uncertain_behavior(transport, private_bus, monkeypatch):
     from recordian import linux_commit
+
     monkeypatch.setattr(bus_module(), "get_transport", lambda: transport)
     monkeypatch.setattr(linux_commit.subprocess, "run", lambda *a, **k: pytest.fail("busctl replay"))
     session = linux_commit.FcitxCommitter().begin_composition()
@@ -403,8 +453,14 @@ def test_native_session_segmentsunsafe_and_uncertain_behavior(transport, private
     assert session.commit("retry").outcome == "stale"
     assert session.cancel().detail == "cancel_noop:closed"
     observed = calls(private_bus[2])
-    assert [x["method"] for x in observed] == ["BeginSession", "CommitSegment", "CommitSession",
-                                                "BeginSession", "CommitSession", "CancelSession"]
+    assert [x["method"] for x in observed] == [
+        "BeginSession",
+        "CommitSegment",
+        "CommitSession",
+        "BeginSession",
+        "CommitSession",
+        "CancelSession",
+    ]
     assert observed[-1]["args"] == ["server-token"]
 
 
@@ -415,15 +471,20 @@ def test_closed_connection_rejects_without_dispatch(transport, private_bus):
     assert calls(private_bus[2]) == []
 
 
-@pytest.mark.parametrize("method,signature,args", [
-    ("DeleteAll", "", []), ("CommitText", "u", ["1"]),
-    ("CommitText", "s", ["nul\0text"]), ("CommitText", "s", []),
-    ("CommitText", "s", ["\ud800"]),
-    ("CommitText", "s", ["x" * 1_048_577]),
-    ("CommitSegment", "sus", ["unknown", "-1", "text"]),
-    ("CommitSegment", "sus", ["unknown", "4294967296", "text"]),
-    ("CommitSession", "ss", ["unknown", "text"]),
-])
+@pytest.mark.parametrize(
+    "method,signature,args",
+    [
+        ("DeleteAll", "", []),
+        ("CommitText", "u", ["1"]),
+        ("CommitText", "s", ["nul\0text"]),
+        ("CommitText", "s", []),
+        ("CommitText", "s", ["\ud800"]),
+        ("CommitText", "s", ["x" * 1_048_577]),
+        ("CommitSegment", "sus", ["unknown", "-1", "text"]),
+        ("CommitSegment", "sus", ["unknown", "4294967296", "text"]),
+        ("CommitSession", "ss", ["unknown", "text"]),
+    ],
+)
 def test_invalid_calls_do_not_dispatch(transport, private_bus, method, signature, args):
     with pytest.raises(CommitError):
         transport.call(method, signature, args)

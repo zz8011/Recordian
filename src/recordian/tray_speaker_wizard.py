@@ -29,7 +29,10 @@ def open_speaker_enrollment_wizard(app: TrayApp) -> None:
             existing.present()
             return False
         from recordian.native_settings import apply_settings_style, styled
-        dialog = Gtk.Dialog(title="Recordian · 声纹注册", transient_for=getattr(app, "_gtk_settings_window", None), flags=0)
+
+        dialog = Gtk.Dialog(
+            title="Recordian · 声纹注册", transient_for=getattr(app, "_gtk_settings_window", None), flags=0
+        )
         app._gtk_speaker_window = dialog
         apply_settings_style(dialog)
         dialog.connect("destroy", lambda *_: setattr(app, "_gtk_speaker_window", None))
@@ -110,16 +113,14 @@ def open_speaker_enrollment_wizard(app: TrayApp) -> None:
                 "你好，我是这台电脑的主人。今天天气不错，我正在测试 Recordian 的声纹识别功能。\n"
                 "I use voice input every day for coding and writing. "
                 "希望系统能够准确识别我的声音，即使在有背景噪音的环境中。",
-
                 # Sample 2: Clear enunciation, technical content, numbers
                 "现在是第二段录音。请将识别结果发送到光标位置，保持自然的语速和停顿。\n"
                 "我的工作涉及编程、文档编写和邮件回复。常用的编程语言包括 Python、JavaScript 和 TypeScript。\n"
                 "今天的日期是 2025 年，版本号是 3.14.159。",
-
                 # Sample 3: Varied pitch and emotion, questions and statements
                 "这是最后一段测试录音。声纹识别技术真的很神奇！它能区分不同人的声音特征吗？\n"
                 "当然可以。通过分析音色、音调、语速和发音习惯，系统可以建立独特的声纹模型。\n"
-                "完成注册后，系统会使用声纹档案验证唤醒声音。"
+                "完成注册后，系统会使用声纹档案验证唤醒声音。",
             ]
 
             if step == 0:
@@ -137,9 +138,7 @@ def open_speaker_enrollment_wizard(app: TrayApp) -> None:
                 btn_next.set_sensitive(True)
             elif 1 <= step <= 3:
                 instruction_label.set_text(
-                    f"样本 {step}/3\n\n"
-                    "请按照下方参考文本朗读并录制。\n"
-                    "点击「开始录制」，朗读完成后点击「停止录制」。"
+                    f"样本 {step}/3\n\n请按照下方参考文本朗读并录制。\n点击「开始录制」，朗读完成后点击「停止录制」。"
                 )
                 # Show reference text
                 reference_text_view.get_buffer().set_text(reference_texts[step - 1])
@@ -153,11 +152,7 @@ def open_speaker_enrollment_wizard(app: TrayApp) -> None:
                 btn_next.set_label("下一步")
                 btn_next.set_sensitive(len(cast(list, samples)) >= step)
             elif step == 4:
-                instruction_label.set_text(
-                    "注册完成！\n\n"
-                    "已成功录制3个样本并创建声纹档案。\n"
-                    "声纹验证功能已自动启用。"
-                )
+                instruction_label.set_text("注册完成！\n\n已成功录制3个样本并创建声纹档案。\n声纹验证功能已自动启用。")
                 reference_frame.hide()
                 status_label.set_text("注册成功")
                 progress_label.set_text("进度: 3/3 样本 ✓")
@@ -167,6 +162,7 @@ def open_speaker_enrollment_wizard(app: TrayApp) -> None:
 
         def _start_recording(*_args: object) -> None:
             from recordian.recommended_profile import DICTATION_BUSY_STATUSES
+
             if str(getattr(app.state, "status", "")) in DICTATION_BUSY_STATUSES:
                 status_label.set_text("请先结束当前听写，再录制声纹样本。")
                 return
@@ -244,6 +240,7 @@ def open_speaker_enrollment_wizard(app: TrayApp) -> None:
 
             try:
                 import numpy as np
+
                 samples = np.concatenate(cast(list, chunks_obj)).astype(np.float32)
 
                 if samples.size < 16000:  # Less than 1 second at 16kHz
@@ -259,6 +256,7 @@ def open_speaker_enrollment_wizard(app: TrayApp) -> None:
                 # Quality check using speaker_verify
                 try:
                     from recordian.speaker_verify import _assess_sample_quality
+
                     config = ConfigManager.load(app.config_path)
                     sample_rate = int(config.get("wake_sample_rate", 16000))
                     quality_ok, reason = _assess_sample_quality(samples, sample_rate)
@@ -317,6 +315,7 @@ def open_speaker_enrollment_wizard(app: TrayApp) -> None:
 
         def _save_profile() -> bool:
             from recordian.recommended_profile import DICTATION_BUSY_STATUSES
+
             if str(getattr(app.state, "status", "")) in DICTATION_BUSY_STATUSES:
                 status_label.set_text("请先结束当前听写，再保存声纹。")
                 return False
@@ -327,7 +326,9 @@ def open_speaker_enrollment_wizard(app: TrayApp) -> None:
 
                 config = ConfigManager.load(app.config_path)
                 sample_rate = int(config.get("wake_sample_rate", 16000))
-                profile_path = Path(config.get("wake_owner_profile", "~/.config/recordian/owner_voice_profile.json")).expanduser()
+                profile_path = Path(
+                    config.get("wake_owner_profile", "~/.config/recordian/owner_voice_profile.json")
+                ).expanduser()
 
                 samples = wizard_state.get("samples", [])
                 if len(cast(list, samples)) < 3:
@@ -337,7 +338,7 @@ def open_speaker_enrollment_wizard(app: TrayApp) -> None:
                 # Save samples as WAV files
                 sample_paths = []
                 for i, sample in enumerate(cast(list, samples)):
-                    sample_path = profile_path.parent / f"owner_sample_{i+1}.wav"
+                    sample_path = profile_path.parent / f"owner_sample_{i + 1}.wav"
                     sample_path.parent.mkdir(parents=True, exist_ok=True)
 
                     pcm = (np.clip(sample, -1.0, 1.0) * 32767.0).astype("<i2")

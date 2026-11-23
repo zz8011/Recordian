@@ -4,6 +4,7 @@ Run with the ASR Python environment and RECORDIAN_CONFUCIUS_SOURCE plus
 RECORDIAN_CONFUCIUS_MODEL_DIR pointing to the installed upstream and tokenizer:
     python -m unittest discover -s tests -p test_confucius_upstream_tail.py
 """
+
 from __future__ import annotations
 
 import importlib.util
@@ -28,7 +29,8 @@ class UpstreamTailContract(unittest.TestCase):
         cls.model_class = R2T2ASRModel
         cls.tokenizer = AutoTokenizer.from_pretrained(model_dir, local_files_only=True, fix_mistral_regex=True)
         spec = importlib.util.spec_from_file_location(
-            "upstream_contract_server", Path(__file__).parents[1] / "server/confucius_streaming_server.py",
+            "upstream_contract_server",
+            Path(__file__).parents[1] / "server/confucius_streaming_server.py",
         )
         cls.srv = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(cls.srv)

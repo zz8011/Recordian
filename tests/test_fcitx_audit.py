@@ -13,7 +13,7 @@ BRIDGE = ROOT / "fcitx/recordian-commit/recordian-commit.cpp"
 
 # Only the bridge's private access label is exposed in the translation unit.
 # This lets the fixture advance its clock; all writes/events use real Fcitx APIs.
-HARNESS = r'''
+HARNESS = r"""
 #include <iostream>
 
 void require(bool condition, const char *message) {
@@ -239,7 +239,7 @@ int main(int argc, char **argv) {
         return 1;
     }
 }
-'''
+"""
 
 
 @pytest.fixture(scope="module")
@@ -247,7 +247,10 @@ def synthetic_bridge(tmp_path_factory):
     if not shutil.which("g++") or not shutil.which("pkg-config"):
         pytest.skip("C++ compiler and Fcitx development files required")
     flags = subprocess.run(
-        ["pkg-config", "--cflags", "--libs", "Fcitx5Core"], capture_output=True, text=True, check=False,
+        ["pkg-config", "--cflags", "--libs", "Fcitx5Core"],
+        capture_output=True,
+        text=True,
+        check=False,
     )
     if flags.returncode:
         pytest.skip("Fcitx development files required")
@@ -257,34 +260,78 @@ def synthetic_bridge(tmp_path_factory):
     source = source.replace(label, "\npublic:\n    void watch(", 1)
     executable = tmp_path_factory.mktemp("fcitx-audit-build") / "bridge-fixture"
     compile_result = subprocess.run(
-        ["g++", "-std=c++20", "-x", "c++", "-", "-I", str(BRIDGE.parent), "-o", str(executable),
-         *shlex.split(flags.stdout)],
-        input=source + HARNESS, capture_output=True, text=True, timeout=60, check=False,
+        [
+            "g++",
+            "-std=c++20",
+            "-x",
+            "c++",
+            "-",
+            "-I",
+            str(BRIDGE.parent),
+            "-o",
+            str(executable),
+            *shlex.split(flags.stdout),
+        ],
+        input=source + HARNESS,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
     )
     assert compile_result.returncode == 0, compile_result.stderr
     return executable
 
 
-@pytest.mark.parametrize("scenario", [
-    "expiry-owned", "expiry-foreign-client", "expiry-foreign-server", "expiry-focus-during-cleanup",
-    "steps", "coalesced", "unicode-selection", "partial-then-more", "empty-between", "old-after-coalesced",
-    "early-surround-event", "duplicate-provenance",
-    "manual-text", "manual-caret", "manual-selection", "invalid-surround", "manual-key", "focus", "reset",
-    "sensitive", "external-preedit", "pending-count-bound", "pending-byte-bound", "pending-release",
-])
+@pytest.mark.parametrize(
+    "scenario",
+    [
+        "expiry-owned",
+        "expiry-foreign-client",
+        "expiry-foreign-server",
+        "expiry-focus-during-cleanup",
+        "steps",
+        "coalesced",
+        "unicode-selection",
+        "partial-then-more",
+        "empty-between",
+        "old-after-coalesced",
+        "early-surround-event",
+        "duplicate-provenance",
+        "manual-text",
+        "manual-caret",
+        "manual-selection",
+        "invalid-surround",
+        "manual-key",
+        "focus",
+        "reset",
+        "sensitive",
+        "external-preedit",
+        "pending-count-bound",
+        "pending-byte-bound",
+        "pending-release",
+    ],
+)
 def test_synthetic_fcitx_session_guards(synthetic_bridge, tmp_path, scenario):
     environment = dict(os.environ)
     for key, directory in {
-        "HOME": "home", "XDG_CONFIG_HOME": "config", "XDG_DATA_HOME": "data",
-        "XDG_CACHE_HOME": "cache", "XDG_RUNTIME_DIR": "run",
+        "HOME": "home",
+        "XDG_CONFIG_HOME": "config",
+        "XDG_DATA_HOME": "data",
+        "XDG_CACHE_HOME": "cache",
+        "XDG_RUNTIME_DIR": "run",
     }.items():
         path = tmp_path / directory
         path.mkdir(mode=0o700)
         environment[key] = str(path)
     environment.update(DBUS_SESSION_BUS_ADDRESS="unix:path=/dev/null", DISPLAY="", WAYLAND_DISPLAY="")
     result = subprocess.run(
-        [str(synthetic_bridge), scenario], cwd=tmp_path, env=environment,
-        capture_output=True, text=True, timeout=10, check=False,
+        [str(synthetic_bridge), scenario],
+        cwd=tmp_path,
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=False,
     )
     assert result.returncode == 0, result.stdout + result.stderr
     assert result.stdout.strip() == f"PASS {scenario}"

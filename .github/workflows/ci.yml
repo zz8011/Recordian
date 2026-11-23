@@ -36,11 +36,15 @@ jobs:
     # apt（音频解码测试依赖 ffmpeg）与 pip 并行安装
     - name: Install dependencies
       run: |
+        export DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a
         APT_OPTS=(-o Acquire::Retries=3 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20)
-        (sudo apt-get "${APT_OPTS[@]}" update -qq && sudo apt-get "${APT_OPTS[@]}" install -y -qq --no-install-recommends ffmpeg) > "$RUNNER_TEMP/apt.log" 2>&1 &
+        (sudo -E apt-get "${APT_OPTS[@]}" update -qq && sudo -E apt-get "${APT_OPTS[@]}" install -y -qq --no-install-recommends ffmpeg) > "$RUNNER_TEMP/apt.log" 2>&1 &
         apt_pid=$!
+        tail -n +1 -F "$RUNNER_TEMP/apt.log" 2>/dev/null &
+        tail_pid=$!
         python -m pip install -e ".[dev]"
-        wait "$apt_pid" || { cat "$RUNNER_TEMP/apt.log"; exit 1; }
+        wait "$apt_pid" || { kill "$tail_pid"; exit 1; }
+        kill "$tail_pid"
 
     - name: Run tests with pytest
       run: |

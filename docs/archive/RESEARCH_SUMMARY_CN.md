@@ -106,10 +106,10 @@ model_dir = Path("models/sherpa-onnx-kws")
 for name in ["encoder", "decoder", "joiner"]:
     fp32 = model_dir / f"{name}.onnx"
     int8 = model_dir / f"{name}_int8.onnx"
-    
+
     if not fp32.exists():
         continue
-    
+
     print(f"量化 {name}...")
     quantize_dynamic(
         model_input=str(fp32),
@@ -118,10 +118,10 @@ for name in ["encoder", "decoder", "joiner"]:
         optimize_model=True,
         per_channel=True,
     )
-    
-    fp32_mb = fp32.stat().st_size / (1024*1024)
-    int8_mb = int8.stat().st_size / (1024*1024)
-    print(f"  {fp32_mb:.1f}MB -> {int8_mb:.1f}MB (减少 {(1-int8_mb/fp32_mb)*100:.0f}%)")
+
+    fp32_mb = fp32.stat().st_size / (1024 * 1024)
+    int8_mb = int8.stat().st_size / (1024 * 1024)
+    print(f"  {fp32_mb:.1f}MB -> {int8_mb:.1f}MB (减少 {(1 - int8_mb / fp32_mb) * 100:.0f}%)")
 ```
 
 3. **更新配置**:
@@ -339,11 +339,12 @@ while not stop:
 ```python
 cache = TTLCache(ttl_seconds=3600)
 
+
 def expensive_operation(key):
     cached = cache.get(key)
     if cached:
         return cached
-    
+
     result = do_expensive_work()
     cache.set(key, result)
     return result

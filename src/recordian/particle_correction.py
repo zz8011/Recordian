@@ -83,9 +83,7 @@ def particle_questions(text: str) -> tuple[dict[str, dict[str, Any]], dict[str, 
         questions[name] = {
             "type": "choice",
             "instructions": _INSTRUCTIONS + "\nContext:\n" + context,
-            "criteria": {
-                option: clause[:index] + option + clause[index + 1 :] for option in "的地得"
-            },
+            "criteria": {option: clause[:index] + option + clause[index + 1 :] for option in "的地得"},
         }
         positions[name] = indexes
     return questions, positions
@@ -126,11 +124,18 @@ class ParticleCorrector:
         for name, indexes in positions.items():
             indexes = [index for index in indexes if not any(start <= index < end for start, end in protected)]
             if indexes:
-                choices.append(Choice(name, questions[name], {
-                    option: () if option == "的" else tuple(
-                        CandidateEdit(index, index + 1, "的", option) for index in indexes
-                    ) for option in "的地得"
-                }))
+                choices.append(
+                    Choice(
+                        name,
+                        questions[name],
+                        {
+                            option: ()
+                            if option == "的"
+                            else tuple(CandidateEdit(index, index + 1, "的", option) for index in indexes)
+                            for option in "的地得"
+                        },
+                    )
+                )
         with self._lock:
             if self._closed or generation != self._generation:
                 return original
@@ -138,26 +143,33 @@ class ParticleCorrector:
         if choices and remaining >= 0.15:
             started = time.perf_counter()
             result = judge_choices(
-                original, _STATE, choices,
-                request=request_jev_choices, timeout_s=remaining,
+                original,
+                _STATE,
+                choices,
+                request=request_jev_choices,
+                timeout_s=remaining,
                 endpoint=self.endpoint,
                 min_top=MIN_TOP,
                 min_margin=MIN_MARGIN,
                 on_process=lambda proc: self._register(proc, generation),
             )
             emit_judge_event(
-                logger, site="particle_corrector",
+                logger,
+                site="particle_corrector",
                 outcome="corrected" if result != original else "no_change",
                 latency_ms=(time.perf_counter() - started) * 1000,
-                timeout_budget_ms=self.timeout_s * 1000, text_len=len(text),
+                timeout_budget_ms=self.timeout_s * 1000,
+                text_len=len(text),
                 correction_applied=result != original,
             )
         else:
             result = original
             emit_judge_event(
-                logger, site="particle_corrector",
+                logger,
+                site="particle_corrector",
                 outcome="skipped_budget" if choices else "skipped_no_questions",
-                timeout_budget_ms=self.timeout_s * 1000, text_len=len(text),
+                timeout_budget_ms=self.timeout_s * 1000,
+                text_len=len(text),
                 correction_applied=False,
             )
         with self._lock:

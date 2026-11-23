@@ -1,4 +1,5 @@
 """测试配置管理功能"""
+
 from __future__ import annotations
 
 import json
@@ -33,7 +34,7 @@ class TestConfigValidator:
                 "english_ratio_threshold": 0.15,
                 "pass2_timeout_ms_local": 900,
                 "pass2_timeout_ms_cloud": 1500,
-            }
+            },
         }
         errors = ConfigValidator.validate(config)
         assert errors == []
@@ -94,7 +95,7 @@ class TestConfigValidator:
             "policy": {
                 "confidence_threshold": 2.0,
                 "pass2_timeout_ms_local": -100,
-            }
+            },
         }
         errors = ConfigValidator.validate(config)
         assert len(errors) == 3
@@ -155,10 +156,7 @@ class TestConfigManagerLoad:
     def test_load_valid_config(self, tmp_path: Path) -> None:
         """测试加载有效配置"""
         config_path = tmp_path / "config.json"
-        config_data = {
-            "version": "1.0",
-            "policy": {"confidence_threshold": 0.9}
-        }
+        config_data = {"version": "1.0", "policy": {"confidence_threshold": 0.9}}
         config_path.write_text(json.dumps(config_data))
 
         config = ConfigManager.load(config_path)
@@ -193,10 +191,7 @@ class TestConfigManagerLoad:
     def test_load_validates_config(self, tmp_path: Path) -> None:
         """测试加载时验证配置"""
         config_path = tmp_path / "config.json"
-        invalid_config = {
-            "version": "1.0",
-            "policy": {"confidence_threshold": 2.0}
-        }
+        invalid_config = {"version": "1.0", "policy": {"confidence_threshold": 2.0}}
         config_path.write_text(json.dumps(invalid_config))
 
         with pytest.raises(ConfigError, match="配置验证失败"):
@@ -209,10 +204,7 @@ class TestConfigManagerSave:
     def test_save_valid_config(self, tmp_path: Path) -> None:
         """测试保存有效配置"""
         config_path = tmp_path / "config.json"
-        config = {
-            "version": "1.0",
-            "policy": {"confidence_threshold": 0.9}
-        }
+        config = {"version": "1.0", "policy": {"confidence_threshold": 0.9}}
 
         ConfigManager.save(config_path, config)
 

@@ -4,6 +4,7 @@ Provides the incremental commit accumulator and the worker thread that
 drives a streaming/realtime ASR session, feeding partial results to the
 accumulator and producing the final transcription.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -37,6 +38,7 @@ from .spoken_formatting import NUMBER_MARKERS
 # ---------------------------------------------------------------------------
 # Handle returned by the worker starter
 # ---------------------------------------------------------------------------
+
 
 @dataclass(slots=True)
 class _RealtimeASRWorkerHandle:
@@ -173,6 +175,7 @@ def _pcm_rms(raw: bytes) -> float:
 # Internal helper – commit text directly (used as fallback)
 # ---------------------------------------------------------------------------
 
+
 def _commit_text(
     committer: Any,
     text: str,
@@ -217,6 +220,7 @@ def _commit_text(
 # ---------------------------------------------------------------------------
 # Incremental commit accumulator
 # ---------------------------------------------------------------------------
+
 
 @dataclass(slots=True)
 class _RealtimeCommitAccumulator:
@@ -292,9 +296,7 @@ class _RealtimeCommitAccumulator:
         self.committed_text += token
         self.chunk_count += 1
         self.last_result = result
-        self.last_backend = str(
-            getattr(result, "backend", "") or getattr(self.committer, "backend_name", "unknown")
-        )
+        self.last_backend = str(getattr(result, "backend", "") or getattr(self.committer, "backend_name", "unknown"))
         if bool(getattr(result, "committed", False)):
             self.any_committed = True
 
@@ -324,7 +326,7 @@ class _RealtimeCommitAccumulator:
         if not current or current == self.committed_text:
             return
         if current.startswith(self.committed_text):
-            self.append_text(current[len(self.committed_text):])
+            self.append_text(current[len(self.committed_text) :])
             self._flush_pending()
             return
         prefix_len = 0
@@ -393,6 +395,7 @@ class _RealtimeCommitAccumulator:
 # Worker starter
 # ---------------------------------------------------------------------------
 
+
 def _start_realtime_asr_worker(
     *,
     args: argparse.Namespace,
@@ -438,9 +441,7 @@ def _start_realtime_asr_worker(
         return None
 
     chunk_size_sec = float(getattr(provider, "realtime_chunk_size_sec", 0.5) or 0.5)
-    sample_rate = int(
-        getattr(record_handle, "monitor_sample_rate", getattr(args, "sample_rate", 16000)) or 16000
-    )
+    sample_rate = int(getattr(record_handle, "monitor_sample_rate", getattr(args, "sample_rate", 16000)) or 16000)
     channels = max(1, int(getattr(record_handle, "monitor_channels", getattr(args, "channels", 1)) or 1))
     chunk_bytes = max(4, int(sample_rate * chunk_size_sec) * channels * 4)
 
@@ -538,11 +539,7 @@ def _start_realtime_asr_worker(
                         ),
                     }
                 )
-            if (
-                enable_local_commit
-                and session is None
-                and bool(getattr(args, "debug_diagnostics", False))
-            ):
+            if enable_local_commit and session is None and bool(getattr(args, "debug_diagnostics", False)):
                 on_state(
                     {
                         "event": "log",
@@ -590,16 +587,12 @@ def _start_realtime_asr_worker(
                 }
                 params: Mapping[str, inspect.Parameter]
                 try:
-                    params = inspect.signature(
-                        _streaming_correction.StreamingHotwordCorrector
-                    ).parameters
+                    params = inspect.signature(_streaming_correction.StreamingHotwordCorrector).parameters
                 except (TypeError, ValueError):
                     params = {}
                 if not params or "context" in params:
                     kwargs["context"] = bounded_context
-                if (not params or "contextual_aliases" in params) and hasattr(
-                    args, "contextual_aliases"
-                ):
+                if (not params or "contextual_aliases" in params) and hasattr(args, "contextual_aliases"):
                     kwargs["contextual_aliases"] = getattr(args, "contextual_aliases", None)
                 return _streaming_correction.StreamingHotwordCorrector(merged, **kwargs)
 
@@ -657,6 +650,7 @@ def _start_realtime_asr_worker(
             session_hotwords = resolve_hotwords()
             corrector = _build_streaming_corrector()
             asr_session = provider.start_realtime_session(hotwords=session_hotwords)
+
             def _cancel_current() -> None:
                 # Stop judgment as well as audio, including a cancel during
                 # the base corrector's final wait before the particle pass.
@@ -758,9 +752,9 @@ def _start_realtime_asr_worker(
                 worker.final_text = ""
                 if worker.commit_info is None:
                     worker.commit_info = {
-                        "backend": "fcitx" if session is not None else str(
-                            getattr(streaming_committer, "backend_name", "unknown")
-                        ),
+                        "backend": "fcitx"
+                        if session is not None
+                        else str(getattr(streaming_committer, "backend_name", "unknown")),
                         "committed": False,
                         "detail": reason,
                         "outcome": outcome,
@@ -858,13 +852,9 @@ def _start_realtime_asr_worker(
                     {
                         "event": "log",
                         "message": (
-                            "realtime_session_stale: focus lost or user typed — "
-                            "stopping stream, no fallback commit"
+                            "realtime_session_stale: focus lost or user typed — stopping stream, no fallback commit"
                             if stale_probe
-                            else (
-                                "realtime_probe_failed: "
-                                f"{getattr(probe, 'detail', '')} — no commit attempt"
-                            )
+                            else (f"realtime_probe_failed: {getattr(probe, 'detail', '')} — no commit attempt")
                         ),
                     }
                 )
@@ -886,9 +876,7 @@ def _start_realtime_asr_worker(
             commit_result = session.commit(final_text)
             committed = bool(getattr(commit_result, "committed", False))
             detail = str(getattr(commit_result, "detail", ""))
-            outcome = str(getattr(commit_result, "outcome", "")) or (
-                "committed" if committed else "uncertain"
-            )
+            outcome = str(getattr(commit_result, "outcome", "")) or ("committed" if committed else "uncertain")
             if not committed and outcome == "stale":
                 # Staleness only surfaced at commit time (e.g. deduped
                 # partials skipped the failing preedit update). The
@@ -942,9 +930,9 @@ def _start_realtime_asr_worker(
                 outcome = "uncertain" if worker.composition_started else "no_composition"
                 worker.outcome = outcome
                 worker.commit_info = {
-                    "backend": "fcitx" if session is not None else str(
-                        getattr(streaming_committer, "backend_name", "unknown")
-                    ),
+                    "backend": "fcitx"
+                    if session is not None
+                    else str(getattr(streaming_committer, "backend_name", "unknown")),
                     "committed": False,
                     "detail": f"realtime_failed:{worker.error}",
                     "outcome": outcome,

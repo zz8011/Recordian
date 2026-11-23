@@ -1,4 +1,5 @@
 """Hyprland desktop integration for native Wayland editors and overlays."""
+
 from __future__ import annotations
 
 import json
@@ -14,7 +15,11 @@ from .linux_commit import CommitResult, CompositionRefusedError, FcitxCommitter,
 
 def desktop_query(subject: str):
     result = subprocess.run(
-        ["hyprctl", subject, "-j"], capture_output=True, text=True, timeout=0.6, check=True,
+        ["hyprctl", subject, "-j"],
+        capture_output=True,
+        text=True,
+        timeout=0.6,
+        check=True,
     )
     return json.loads(result.stdout)
 
@@ -45,13 +50,18 @@ class WaylandClipboardCommitter(TextCommitter):
     def commit(self, text: str) -> CommitResult:
         self._check_focus()
         subprocess.run(
-            ["wl-copy", "--type", "text/plain;charset=utf-8"], input=text,
-            text=True, check=True, timeout=2,
+            ["wl-copy", "--type", "text/plain;charset=utf-8"],
+            input=text,
+            text=True,
+            check=True,
+            timeout=2,
         )
         time.sleep(0.12)
         self._check_focus()
         subprocess.run(
-            ["wtype", "-M", "ctrl", "-k", "v", "-m", "ctrl"], check=True, timeout=2,
+            ["wtype", "-M", "ctrl", "-k", "v", "-m", "ctrl"],
+            check=True,
+            timeout=2,
         )
         return CommitResult(backend=self.backend_name, committed=True, detail="paste:ctrl+v")
 
@@ -166,8 +176,8 @@ def place_overlay_on_active_monitor() -> bool:
         selector = json.dumps("address:" + orb["address"])
         monitor_id = json.dumps(str(monitor["id"]))
         lua = (
-            f'hl.dispatch(hl.dsp.window.move({{monitor={monitor_id},follow=false,window={selector}}}));'
-            f'hl.dispatch(hl.dsp.window.move({{x={x},y={y},relative=false,window={selector}}}));'
+            f"hl.dispatch(hl.dsp.window.move({{monitor={monitor_id},follow=false,window={selector}}}));"
+            f"hl.dispatch(hl.dsp.window.move({{x={x},y={y},relative=false,window={selector}}}));"
             f'return hl.dispatch(hl.dsp.window.alter_zorder({{mode="top",window={selector}}}))'
         )
         result = subprocess.run(["hyprctl", "eval", lua], capture_output=True, text=True, timeout=0.6)

@@ -15,7 +15,9 @@ from recordian.speaker_verify import (
 )
 
 
-def _make_voice(duration_s: float, sample_rate: int, tones: tuple[float, float, float], noise: float = 0.01) -> np.ndarray:
+def _make_voice(
+    duration_s: float, sample_rate: int, tones: tuple[float, float, float], noise: float = 0.01
+) -> np.ndarray:
     t = np.arange(int(duration_s * sample_rate), dtype=np.float32) / float(sample_rate)
     signal = (
         0.58 * np.sin(2 * np.pi * tones[0] * t)
@@ -173,6 +175,7 @@ def test_feature_version_in_profile() -> None:
 
         # Test backward compatibility: old profile without feature_version
         import json
+
         old_payload = {
             "version": 1,
             "sample_rate": 16000,
@@ -331,9 +334,7 @@ def test_backward_compatibility_single_sample(tmp_path: Path) -> None:
         wf.writeframes(pcm.tobytes())
 
     profile_path = tmp_path / "profile.json"
-    profile = enroll_speaker_profile_from_wav(
-        sample_path=sample_path, profile_path=profile_path, target_rate=16000
-    )
+    profile = enroll_speaker_profile_from_wav(sample_path=sample_path, profile_path=profile_path, target_rate=16000)
 
     # Single-sample profile should have embeddings list with 1 item
     assert profile.embeddings is not None
@@ -460,5 +461,3 @@ def test_noise_suppression_backward_compatibility() -> None:
     emb = extract_speaker_embedding(voice, sample_rate=16000, noise_suppression=0)
 
     assert len(emb) == 49
-
-

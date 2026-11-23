@@ -1,4 +1,5 @@
 """测试 WaveformRenderer 的关键路径和异常处理"""
+
 from __future__ import annotations
 
 import os
@@ -9,38 +10,44 @@ import time
 import pytest
 
 # Skip all tests if no DISPLAY is available (CI environment)
-pytestmark = pytest.mark.skipif(
-    not os.environ.get('DISPLAY'),
-    reason="Requires DISPLAY environment (GUI tests)"
-)
+pytestmark = pytest.mark.skipif(not os.environ.get("DISPLAY"), reason="Requires DISPLAY environment (GUI tests)")
 
 
 def test_desired_tick_interval_seconds_uses_idle_rate_when_hidden() -> None:
     from recordian.waveform_renderer import desired_tick_interval_seconds
 
-    assert desired_tick_interval_seconds(
-        state="idle",
-        hide_deadline=None,
-        active_tick_s=1.0 / 60.0,
-        idle_tick_s=1.0 / 12.0,
-    ) == 1.0 / 12.0
+    assert (
+        desired_tick_interval_seconds(
+            state="idle",
+            hide_deadline=None,
+            active_tick_s=1.0 / 60.0,
+            idle_tick_s=1.0 / 12.0,
+        )
+        == 1.0 / 12.0
+    )
 
 
 def test_desired_tick_interval_seconds_uses_active_rate_when_animating() -> None:
     from recordian.waveform_renderer import desired_tick_interval_seconds
 
-    assert desired_tick_interval_seconds(
-        state="recording",
-        hide_deadline=None,
-        active_tick_s=1.0 / 60.0,
-        idle_tick_s=1.0 / 12.0,
-    ) == 1.0 / 60.0
-    assert desired_tick_interval_seconds(
-        state="idle",
-        hide_deadline=time.time() + 1.0,
-        active_tick_s=1.0 / 60.0,
-        idle_tick_s=1.0 / 12.0,
-    ) == 1.0 / 60.0
+    assert (
+        desired_tick_interval_seconds(
+            state="recording",
+            hide_deadline=None,
+            active_tick_s=1.0 / 60.0,
+            idle_tick_s=1.0 / 12.0,
+        )
+        == 1.0 / 60.0
+    )
+    assert (
+        desired_tick_interval_seconds(
+            state="idle",
+            hide_deadline=time.time() + 1.0,
+            active_tick_s=1.0 / 60.0,
+            idle_tick_s=1.0 / 12.0,
+        )
+        == 1.0 / 60.0
+    )
 
 
 class TestWaveformRendererInit:
@@ -353,6 +360,7 @@ class TestWaveformRendererRecordingClick:
     def test_click_callback_exception_is_swallowed(self) -> None:
         root, renderer = self._make_renderer()
         try:
+
             def _boom():
                 raise RuntimeError("boom")
 
