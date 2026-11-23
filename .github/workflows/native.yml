@@ -165,7 +165,7 @@ jobs:
       - name: Required-native full regression (isolated bus, no desktop writes)
         env:
           RECORDIAN_NATIVE_CORE: required
-        run: python -m pytest tests/ -n 12 -ra
+        run: python -m pytest tests/ -n auto -ra
       - name: Optional isolated Rust GTK/Fcitx acceptance
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.rust-gui }}
         env:
