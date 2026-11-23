@@ -31,11 +31,13 @@ _RED_KEYWORDS = {"if", "while", "until", "for", "case", "select", "function", "c
 class _ShellAudit:
     """白名单式扫描一段 run 脚本，返回违规描述列表（含脚本内相对行号）。
 
-    放行：简单命令、前缀赋值、换行/``&&`` 分隔、``|``（仅 allow_pipe，即 bash 的 pipefail）、
-    重定向（``>`` ``>>`` ``<&`` ``>&`` ``>|`` fd 前缀）、heredoc（正文不当命令解析）、
+    放行：简单命令、前缀赋值、换行/``&&`` 分隔、``|``（仅显式 ``shell: bash`` 的 pipefail；
+    未声明 shell 是 ``bash -e`` 无 pipefail，管道判红）、重定向（``>`` ``>>`` ``<&`` ``>&`` ``>|``
+    fd 前缀）、heredoc（正文不当命令解析，除非喂给 bash/sh/eval/source）、
     ``$(...)``（内部递归套用同一套白名单）、引号/续行/注释。
     判红：``||``、``;``、``&``、分组/子 shell、``!``、复合关键字、``set +e``、``trap``、
-    ``exit 0``、``true``/``:``、反引号、未闭合结构。
+    ``exit 0``、``true``/``:``、反引号、未闭合结构、``eval``/``source``/``.``；
+    ``bash/sh -c '<脚本>'`` 的引号参数与喂 bash/sh 的 heredoc 正文递归套用本白名单。
     """
 
     def __init__(self, script: str, allow_pipe: bool, context: str = "") -> None:
@@ -64,7 +66,15 @@ class _ShellAudit:
                 self.line += 1
                 self.i += 1
                 if heredocs:
-                    self._skip_heredocs(heredocs)
+                    # 喂给 bash/sh/eval/source 的 heredoc 正文是内嵌 shell 代码，递归审计
+                    for delim, body in self._skip_heredocs(heredocs):
+                        vals = [w for w, _ in words]
+                        j = 0
+                        while j < len(vals) and _ASSIGN.match(vals[j]):
+                            j += 1
+                        if j < len(vals) and vals[j] in ("bash", "sh", "eval", "source", "."):
+                            sub = _ShellAudit(body, allow_pipe=False, context=f"heredoc {delim!r} 内")
+                            self.problems.extend(sub.run())
                     heredocs = []
                 if want_target:
                     self.error("重定向缺少目标")
@@ -126,12 +136,30 @@ class _ShellAudit:
             self.error(f"命令 {cmd!r} 恒成功", line)
         elif cmd in _RED_KEYWORDS:
             self.error(f"复合结构关键字 {cmd!r} 不在白名单", line)
-        elif cmd == "exit" and args == ["0"]:
-            self.error("exit 0 强行变绿", line)
+        elif cmd == "exit" and len(args) == 1:
+            try:
+                if int(args[0]) == 0:  # 覆盖 exit 0 / exit 00 / exit +0
+                    self.error("exit 0 强行变绿", line)
+            except ValueError:
+                pass  # 非数值（如 exit $rc）无法静态判定
         elif cmd == "trap":
             self.error("trap 可改写退出码", line)
-        elif cmd == "set" and ("+e" in args or ("+o" in args and "pipefail" in args)):
+        elif cmd in ("eval", "source", "."):
+            self.error(f"命令 {cmd!r} 可执行任意内嵌 shell 代码，不在白名单；如确需请登记例外", line)
+        elif cmd == "set" and (
+            any(re.match(r"^\+[A-Za-z]*e", a) for a in args)  # +e / +eu / +ef 组合标志
+            or ("+o" in args and "pipefail" in args)
+        ):
             self.error("set 关闭了 -e/pipefail", line)
+        # 逃生舱：bash/sh -c '<脚本>' 的引号参数是 shell 代码，必须递归审计（含 env/xargs 前缀）
+        vals = [w for w, _ in rest]
+        for k in range(len(vals) - 1):
+            if vals[k] in ("bash", "sh") and vals[k + 1] == "-c":
+                if k + 2 < len(vals):
+                    sub = _ShellAudit(vals[k + 2], allow_pipe=False, context="bash -c 内")
+                    self.problems.extend(sub.run())
+                else:
+                    self.error("bash -c 缺少脚本参数", line)
 
     def _operator(self) -> str:
         two = self.s[self.i : self.i + 2]
@@ -308,19 +336,24 @@ class _ShellAudit:
             self.error("heredoc 定界符为空")
         return delim, strip_tabs
 
-    def _skip_heredocs(self, delims: list[tuple[str, bool]]) -> None:
+    def _skip_heredocs(self, delims: list[tuple[str, bool]]) -> list[tuple[str, str]]:
+        """跳过 heredoc 正文，返回 (定界符, 完整正文) 供调用方按需递归审计。"""
+        out: list[tuple[str, str]] = []
         for delim, strip_tabs in delims:
-            found = False
+            lines: list[str] = []
             while self.i < len(self.s):
                 eol = self.s.find("\n", self.i)
                 body = self.s[self.i :] if eol < 0 else self.s[self.i : eol]
                 self.i = len(self.s) if eol < 0 else eol + 1
                 self.line += 1
                 if (body.lstrip("\t") if strip_tabs else body) == delim:
-                    found = True
+                    out.append((delim, "\n".join(lines)))
                     break
-            if not found:
+                lines.append(body)
+            else:
                 self.error(f"heredoc {delim!r} 未闭合")
+                out.append((delim, "\n".join(lines)))
+        return out
 
     def _skip_to_eol(self) -> None:
         while self.i < len(self.s) and self.s[self.i] != "\n":
@@ -332,7 +365,11 @@ def _step_label(step: dict) -> str:
 
 
 def _effective_shell(step: dict, job: dict | None, doc: dict) -> str:
-    """返回 'bash' / 'sh' / 其他原样字符串（未审计）。GitHub 默认 bash -eo pipefail。"""
+    """返回 'bash' / 'sh' / 'default-bash' / 其他原样字符串（未审计）。
+
+    GitHub 语义：未声明 shell 的 Linux 步骤用 ``bash -e {0}``（**无 pipefail**），
+    显式 ``shell: bash`` 才是 ``bash --noprofile --norc -eo pipefail {0}``。
+    """
     raw = step.get("shell")
     if not raw:
         for scope in (job, doc):
@@ -343,7 +380,7 @@ def _effective_shell(step: dict, job: dict | None, doc: dict) -> str:
                 break
     if not raw:
         runs_on = str((job or {}).get("runs-on") or "")
-        return "pwsh" if runs_on.startswith("windows") else "bash"
+        return "pwsh" if runs_on.startswith("windows") else "default-bash"
     raw = str(raw).strip()
     # 带参数的自定义串（如 "bash {0}"）丢掉了 -e/pipefail 语义，同样视为未审计
     return {"bash": "bash", "sh": "sh"}.get(raw, raw)
@@ -378,9 +415,9 @@ def workflow_violations(path: Path) -> list[tuple[str, str, str]]:
         if not isinstance(run, str) or not run.strip():
             continue
         shell = _effective_shell(step, job, doc)
-        if shell == "bash":
+        if shell == "bash":  # 显式 shell: bash 才有 -eo pipefail，管道安全
             msgs = _ShellAudit(run, allow_pipe=True).run()
-        elif shell == "sh":
+        elif shell in ("sh", "default-bash"):  # 无 pipefail：sh / 未声明的 bash -e
             msgs = _ShellAudit(run, allow_pipe=False).run()
         else:
             msgs = [f"shell {shell!r} 不在白名单（bash/sh 之外未审计），如确需使用请登记例外并给理由"]
@@ -467,6 +504,19 @@ RED_RUNS = [
     "make 2>&1 &",  # & 前有重定向
     "echo `ls`",
     "case x in x) true;; esac",
+    "make | tee build.log",  # 未声明 shell：bash -e 无 pipefail，管道吞红
+    'bash -c "make || true"',
+    "sh -c 'make || true'",
+    'eval "make || true"',
+    'env bash -c "make || true"',
+    'xargs -I{} bash -c "make || true"',
+    "source ./ci-env.sh",
+    ". ./ci-env.sh",
+    "set +eu\nmake",
+    "set +ef\nmake",
+    "exit 00",
+    "exit +0",
+    "bash <<'SH'\nmake || true\nSH",  # heredoc 喂 bash，正文是 shell 代码要审计
 ]
 
 
@@ -481,7 +531,6 @@ GREEN_RUNS = [
     "ruff check src/ tests/ && mypy src/recordian",
     'mkdir -p "$RUNNER_TEMP/bin"\nln -s x y\necho p >> $GITHUB_PATH',
     "sudo apt-get install -y \\\n  libglib2.0-dev pkg-config",
-    "cat foo | grep bar",  # bash 默认 -eo pipefail，管道安全
     "FOO=1 BAR=2 python -m build",
     "python -c 'import a; print(b)'",  # 引号内的 ; 不是分隔符
     'echo "a || b ; c & d"',
@@ -497,6 +546,11 @@ GREEN_RUNS = [
     "echo Done. \\; really",
     "cd dist\nsha256sum * > SHA256SUMS.txt\ncat SHA256SUMS.txt",
     "pytest -q tests/",
+    "bash scripts/build-native.sh",  # 跑仓库脚本文件（内容由 review 把关），非内嵌代码
+    "bash -c 'pip install -e .'",  # -c 内嵌干净脚本，递归审计后放行
+    "set +x\nmake",  # 不含 e 的标志
+    "which bash",
+    "exit 2",
 ]
 
 
@@ -510,10 +564,18 @@ def test_sh_shell_rejects_pipes_but_allows_rest(tmp_path: Path) -> None:
     assert not _violations_of_run(tmp_path, "make && ls -l", shell="sh")
 
 
+def test_pipes_follow_pipefail_semantics(tmp_path: Path) -> None:
+    # 仅显式 shell: bash（bash --noprofile --norc -eo pipefail）放行管道；
+    # 未声明 shell 的 Linux 步骤实际是 bash -e（无 pipefail），sh 同样没有
+    assert not _violations_of_run(tmp_path, "cat foo | grep bar", shell="bash")
+    assert _violations_of_run(tmp_path, "cat foo | grep bar")
+    assert _violations_of_run(tmp_path, "cat foo | grep bar", shell="sh")
+
+
 def test_unaudited_shell_is_red_until_whitelisted(tmp_path: Path) -> None:
     # python/pwsh/cmd/带参数自定义串不在审计范围，需显式例外
     assert _violations_of_run(tmp_path, "print('hi')", shell="python")
     assert _violations_of_run(tmp_path, "Write-Host hi", shell="pwsh")
     assert _violations_of_run(tmp_path, "make", shell="bash {0}")
     assert not _violations_of_run(tmp_path, "make", shell="bash")
-    assert not _violations_of_run(tmp_path, "make")  # 未声明 → GitHub 默认 bash -eo pipefail
+    assert not _violations_of_run(tmp_path, "make")  # 未声明 → bash -e，简单命令放行
