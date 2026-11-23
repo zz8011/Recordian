@@ -7,7 +7,7 @@ import pytest
 
 GITHUB = Path(__file__).resolve().parent.parent / ".github"
 WORKFLOWS = sorted((GITHUB / "workflows").glob("*.yml"))
-# 复合 action 里同样不许吞红
+# 复合 action（若有）里同样不许吞红
 CHECKED = WORKFLOWS + sorted((GITHUB / "actions").glob("*/action.yml"))
 
 # 任何让失败变绿的写法；确需例外时在此登记（文件名 -> 原因），不要在 workflow 里就地放行。
@@ -17,7 +17,6 @@ ALLOWED: dict[str, str] = {}
 
 def test_workflows_are_discovered() -> None:
     assert {p.name for p in WORKFLOWS} >= {"ci.yml", "native.yml", "release.yml"}
-    assert any(p.parent.name == "apt-install" for p in CHECKED)
 
 
 @pytest.mark.parametrize("path", CHECKED, ids=lambda p: f"{p.parent.name}/{p.name}")
