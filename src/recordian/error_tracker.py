@@ -43,9 +43,9 @@ class ErrorTracker:
                 environment=self.environment,
                 release=self.release,
                 traces_sample_rate=0.1,  # 降低采样率以减少开销
-                profiles_sample_rate=0.1,
+                profile_session_sample_rate=0.1,
                 integrations=[
-                    ThreadingIntegration(propagate_hub=True),
+                    ThreadingIntegration(propagate_scope=True),
                 ],
                 before_send=self._before_send,  # type: ignore[arg-type]
             )

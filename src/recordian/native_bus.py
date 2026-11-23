@@ -9,6 +9,12 @@ from collections.abc import Sequence
 from .exceptions import CommitError
 from .native_core import load_library
 
+
+class _NativeBusError(CommitError):
+    # Declared, not defaulted: linux_commit distinguishes "field present" from "legacy error".
+    dbus_error_name: str
+
+
 _MAX_STRING_BYTES = 1_048_576
 _SIGNATURES = {
     "Ping": "", "BeginSession": "s", "UpdatePreedit": "ss", "CommitSegment": "sus",
@@ -85,7 +91,7 @@ class NativeBus:
             raise CommitError("org.recordian.Native.Error.InvalidReply: invalid ABI UTF-8") from decoding_error
         reply, error_name, error_message = values
         if status:
-            error = CommitError(f"{error_name or 'org.recordian.Native.Error.Transport'}: {error_message}")
+            error = _NativeBusError(f"{error_name or 'org.recordian.Native.Error.Transport'}: {error_message}")
             error.dbus_error_name = error_name
             raise error
         return reply

@@ -429,8 +429,8 @@ class AgentHub:
         self.phase = 'idle'
         self.notice = ''
         self.closed = False
-        self.cancels = {}
-        self.threads = {}
+        self.cancels: dict[str, threading.Event] = {}
+        self.threads: dict[str, threading.Thread] = {}
         self.adapters = adapters or ADAPTERS
         self.on_task_event = on_task_event
         self.sessions = {}

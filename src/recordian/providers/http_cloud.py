@@ -266,7 +266,7 @@ class _HttpCloudRealtimeSession:
         return headers
 
     def start(self) -> dict[str, object]:
-        payload = {
+        payload: dict[str, Any] = {
             "model": self._model_name,
             "language": self._language or None,
             "context": self._context,

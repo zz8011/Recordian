@@ -6,6 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
+import numpy.typing as npt
 
 from ..models import ASRResult
 from .asr_context import ASRContextComposer
@@ -306,7 +307,7 @@ class _QwenRealtimeSession:
     def __init__(self, provider: QwenASRProvider, hotwords: list[str]) -> None:
         self._provider = provider
         self._hotwords = list(hotwords)
-        self._pcm = np.zeros((0,), dtype=np.float32)
+        self._pcm: npt.NDArray[np.float32] = np.zeros((0,), dtype=np.float32)
         self._last_text = ""
         self._last_infer_samples = 0
         self._started_at = time.perf_counter()

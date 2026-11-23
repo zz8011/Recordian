@@ -6,10 +6,19 @@ on:
   pull_request:
     branches: [ master, main, develop ]
 
+permissions:
+  contents: read
+
+# PR 新推送取消旧运行；push（含 main）按 sha 独占分组，永不被取消或被后一次 push 顶掉。
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   test:
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         python-version: ['3.10', '3.11', '3.12']
 
@@ -20,30 +29,26 @@ jobs:
       uses: actions/setup-python@v5
       with:
         python-version: ${{ matrix.python-version }}
+        cache: pip
+        cache-dependency-path: pyproject.toml
 
+    # apt（音频解码测试依赖 ffmpeg）与 pip 并行安装
     - name: Install dependencies
       run: |
-        python -m pip install --upgrade pip
-        pip install -e ".[dev]"
-
-    - name: Install audio decoding test dependency
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y ffmpeg
+        (sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends ffmpeg) > "$RUNNER_TEMP/apt.log" 2>&1 &
+        apt_pid=$!
+        python -m pip install -e ".[dev]"
+        wait "$apt_pid" || { cat "$RUNNER_TEMP/apt.log"; exit 1; }
 
     - name: Run tests with pytest
       run: |
-        pytest --cov=src/recordian --cov-report=xml --cov-report=term
+        pytest -n auto --cov=src/recordian --cov-report=xml --cov-report=term
 
-    - name: Upload coverage to Codecov
-      uses: codecov/codecov-action@v4
+    - name: Upload coverage report
+      uses: actions/upload-artifact@v4
       with:
-        file: ./coverage.xml
-        flags: unittests
-        name: codecov-umbrella
-        fail_ci_if_error: false
-      env:
-        CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+        name: coverage-${{ matrix.python-version }}
+        path: coverage.xml
 
   lint:
     runs-on: ubuntu-latest
@@ -55,11 +60,12 @@ jobs:
       uses: actions/setup-python@v5
       with:
         python-version: '3.10'
+        cache: pip
+        cache-dependency-path: pyproject.toml
 
     - name: Install dependencies
       run: |
-        python -m pip install --upgrade pip
-        pip install -e ".[dev]"
+        python -m pip install -e ".[dev]"
 
     - name: Check code style with ruff
       run: |
@@ -68,4 +74,3 @@ jobs:
     - name: Type check with mypy
       run: |
         mypy src/recordian --ignore-missing-imports --no-strict-optional
-      continue-on-error: true

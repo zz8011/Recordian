@@ -103,10 +103,10 @@ class AgentResponseOverlay:
         self.grip.bind('<ButtonPress-1>', self._begin_resize)
         self.grip.bind('<B1-Motion>', self._resize)
         self.grip.bind('<ButtonRelease-1>', self._end_interaction)
-        for widget in (self.window, frame, self.body, self.scroll):
-            widget.bind('<MouseWheel>', self._extend_hide, add='+')
-            widget.bind('<Button-4>', self._extend_hide, add='+')
-            widget.bind('<Button-5>', self._extend_hide, add='+')
+        for target in (self.window, frame, self.body, self.scroll):
+            target.bind('<MouseWheel>', self._extend_hide, add='+')
+            target.bind('<Button-4>', self._extend_hide, add='+')
+            target.bind('<Button-5>', self._extend_hide, add='+')
 
     def _place(self) -> None:
         monitor = active_monitor_geometry()

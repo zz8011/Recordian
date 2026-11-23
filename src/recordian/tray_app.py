@@ -195,6 +195,7 @@ class TrayApp:
         # 录音中点击 overlay -> 请求后端停止录音
         self.overlay.set_on_recording_click(self._on_overlay_recording_click)
         self._gtk_settings_window: Any = None
+        self._gtk_speaker_window: Any = None
         self._diagnostics_window: tk.Toplevel | None = None
         self._diagnostics_text: tk.Text | None = None
         self._diagnostics_status_var: tk.StringVar | None = None

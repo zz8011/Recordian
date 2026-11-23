@@ -12,6 +12,7 @@ import os
 import socket
 import stat
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 
@@ -27,7 +28,7 @@ class ControlServer:
         self.on_press, self.on_release = on_press, on_release
         self.trigger_keys, self.toggle_keys = sorted(trigger_keys), sorted(toggle_keys)
         self.on_exit = on_exit
-        self.get_status = get_status or (lambda: "idle")
+        self.get_status: Callable[[], str] = get_status or (lambda: "idle")
         self.on_agent_press = on_agent_press
         self.on_agent_release = on_agent_release
         self.server = None

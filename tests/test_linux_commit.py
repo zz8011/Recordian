@@ -1,4 +1,5 @@
 import subprocess
+import threading
 import time
 from unittest.mock import Mock
 
@@ -16,6 +17,22 @@ def _python_busctl_transport(monkeypatch):
     """
     monkeypatch.setenv("RECORDIAN_NATIVE_CORE", "python")
     monkeypatch.setattr(linux_commit.native_bus, "_selection", linux_commit.native_bus._UNSET)
+
+
+@pytest.fixture(autouse=True)
+def _cancel_leaked_clipboard_timers(monkeypatch):
+    """Real clear-timers outlive their test; firing after monkeypatch teardown hits real xclip/fake owners."""
+    timers: list[threading.Timer] = []
+    original = threading.Timer.__init__
+
+    def _track(self, *args, **kwargs):
+        original(self, *args, **kwargs)
+        timers.append(self)
+
+    monkeypatch.setattr(threading.Timer, "__init__", _track)
+    yield
+    for timer in timers:
+        timer.cancel()
 
 
 def test_set_clipboard_text_prefers_xclip(monkeypatch) -> None:
@@ -278,6 +295,8 @@ def test_xdotool_clipboard_timer_start_failure_cleans_up_owner(monkeypatch):
     monkeypatch.setattr("recordian.linux_commit.which", lambda x: "/usr/bin/" + x)
     monkeypatch.setattr("recordian.linux_commit._start_transient_clipboard_owner", lambda text: fake_owner)
     monkeypatch.setattr("recordian.linux_commit._stop_transient_clipboard_owner", lambda proc: stopped.append(proc))
+    # Hermetic: never reach the real xdotool (absent on CI, a live paste on a desktop).
+    monkeypatch.setattr("recordian.linux_commit.send_paste_shortcut", lambda *, target_window_id=None: None)
 
     def _fail_start(self):
         raise RuntimeError("thread limit reached")

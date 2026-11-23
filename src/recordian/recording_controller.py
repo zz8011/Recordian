@@ -773,7 +773,7 @@ def build_ptt_hotkey_handlers(
             realtime_asr_worker = state.get("realtime_asr_worker")
             duration_limit_timer = state.get("duration_limit_timer")
             agent_capture = state.get("agent_capture")
-            capture_args = state.get("capture_args", args)
+            capture_args = cast(argparse.Namespace, state.get("capture_args", args))
             if process is None or audio_path is None or temp_dir is None or started is None:
                 return False
             if expected_handle is not None and process is not expected_handle:
