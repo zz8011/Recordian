@@ -15,6 +15,7 @@
 | `src/recordian/providers/asr/` | ASR backend implementations | qwen, streaming, etc. |
 | `src/recordian/providers/refine/` | Text refinement LLMs | cloud LLM refine pipeline |
 | `server/` | Local ASR server processes | `confucius_streaming_server.py` (WebSocket v1, loopback), `qwen_streaming_server.py` (HTTP) |
+| `adapter/` | Standalone adapters | `confucius_openai_adapter.py` (Confucius WS → OpenAI-compatible `/v1/audio/transcriptions`, for Orca dictation; see `adapter/README.md`) |
 | `tests/` | Unit & integration tests | |
 | `native/recordian-core/` | Dependency-free Rust cdylib + rlib, C ABI1 | Audio conversion/RMS, bounded PCM FIFO, persistent GIO D-Bus transport |
 | `src/recordian/_native/` | Generated package-local shared library + SHA256 metadata | Gitignored; build before startup |

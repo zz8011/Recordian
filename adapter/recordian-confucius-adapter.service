@@ -1,0 +1,15 @@
+[Unit]
+Description=Confucius ASR -> OpenAI-compatible transcription adapter (127.0.0.1:8391)
+After=recordian-confucius-asr.service
+
+[Service]
+Type=simple
+# 路径按本机 Recordian 检出位置调整；.venv-asr 自带 websockets，系统 python3(>=3.10 + websockets>=11) 也行
+ExecStart=%h/Projects/recordian/.venv-asr/bin/python %h/Projects/recordian/adapter/confucius_openai_adapter.py
+Restart=on-failure
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+# 换端口：Environment=CONFUCIUS_ADAPTER_PORT=8392
+
+[Install]
+WantedBy=default.target
